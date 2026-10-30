@@ -1,0 +1,11 @@
+# Frontend build output is copied in by dev.sh at the repo root; it is not committed.
+#
+# Only placeholder.html is allowed through. Without it, go:embed fails go build with
+# "no matching files found", and that error does not hint "build the frontend first".
+#
+# The placeholder is deliberately not named index.html: that name belongs to the vite output and
+# gets overwritten by the build. Then "the committed placeholder" and "the output that must not be
+# committed" become the same path, and git always shows an output file waiting to be committed.
+*
+!.gitignore
+!placeholder.html

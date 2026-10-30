@@ -1,0 +1,584 @@
+@import "tailwindcss";
+@import "@heroui/styles";
+
+/* Import order matters: tailwindcss must come before @heroui/styles. */
+
+/*
+ * Theme: Nordic.
+ *
+ * A high-contrast, almost colorless light UI: the background is a cool white-gray, text is near
+ * pure black, and the accent is an ink blue close to black, so only primary buttons and selected
+ * states carry weight on the page.
+ *
+ * Only HeroUI's base tokens are overridden; HeroUI derives the other values itself with color-mix,
+ * so changing the skin never touches component code. It must come after @heroui/styles to win.
+ *
+ * Trap of high-contrast themes: muted must not be darkened along with body text, or "secondary
+ * info" and body text can no longer be told apart. Here muted is deliberately kept at mid gray,
+ * building hierarchy with lightness difference rather than color difference.
+ */
+@layer theme {
+  :root {
+    color-scheme: light;
+
+    /*
+     * Base radius.
+     *
+     * HeroUI's radius scale is all derived from this value (rounded-lg = 1x, xl = 1.5x, 2xl = 2x), so
+     * changing it changes the whole site. It is set to 0.5rem: cards 16px, clickable rows 12px, info
+     * bars 8px, the range of "has shape but does not look rounded".
+     * It used to be 1rem, which made 2xl 32px and small icon squares almost circles; do not increase it again.
+     * Which kind of element uses which step: see the r-* notes in @utility below.
+     */
+    --radius: 0.5rem;
+    --field-radius: calc(var(--radius) * 1.25);
+    --field-border-width: 1px;
+
+    --background: oklch(0.9832 0.0013 247.84);
+    --foreground: oklch(0.1721 0.0087 264.36);
+
+    --surface: oklch(1 0 0);
+    --surface-foreground: var(--foreground);
+    --surface-secondary: oklch(0.9654 0.0021 247.84);
+    --surface-secondary-foreground: var(--foreground);
+    --surface-tertiary: oklch(0.9432 0.0032 247.84);
+    --surface-tertiary-foreground: var(--foreground);
+
+    --overlay: oklch(1 0 0);
+    --overlay-foreground: var(--foreground);
+
+    --muted: oklch(0.5321 0.0121 264.36);
+
+    --default: oklch(0.9543 0.0021 247.84);
+    --default-foreground: var(--foreground);
+
+    /* Ink blue close to black: the page is almost colorless; only primary buttons and selected states carry weight */
+    --accent: oklch(0.2432 0.0298 264.36);
+    --accent-foreground: oklch(0.9911 0 0);
+
+    --field-background: oklch(1 0 0);
+    --field-foreground: var(--foreground);
+    --field-placeholder: var(--muted);
+    --field-border: oklch(0.8932 0.0043 247.84);
+
+    --success: oklch(0.5987 0.1298 156.24);
+    --success-foreground: oklch(0.9911 0 0);
+    --warning: oklch(0.7132 0.1432 74.32);
+    --warning-foreground: oklch(0.1721 0.0087 264.36);
+    --danger: oklch(0.5543 0.2021 24.32);
+    --danger-foreground: oklch(0.9911 0 0);
+
+    /*
+     * Chart palette.
+     *
+     * **It cannot be derived from accent.** This theme's accent is ink blue close to black (near white
+     * in dark mode), a **near-achromatic** color; a lightness ladder derived from it is a gray scale, so
+     * the Input / Output area series stacked together cannot be told apart at all, and the light and dark
+     * sets would invert as a whole. So it is defined here explicitly, with one set each for light and dark.
+     * Without a definition the value is empty and bars render as transparent (components/ui/Chart.tsx
+     * only references these, it does not define them).
+     *
+     * The colors come from the verified dataviz palette, and its validate_palette.js was run against
+     * **this repo's actual surfaces** (light #ffffff / dark #1a1c1e):
+     *
+     *   - chart-1/2 (blue + orange, categorical): all-pairs PASS in both modes,
+     *     worst CVD ΔE 24.7 (light) / 26.8 (dark), threshold 8.
+     *   - chart-ord-1..3 (three steps of blue, ordinal): --ordinal all PASS in both modes.
+     *
+     * Why P50/P90/average use a single-hue ladder instead of three hues: they are **different
+     * percentiles of the same quantity**, ordered. Three different hues would falsely report "ordered"
+     * as "three unrelated identities".
+     */
+    --chart-1: #2a78d6;
+    --chart-2: #eb6834;
+    --chart-ord-1: #86b6ef;
+    --chart-ord-2: #2a78d6;
+    --chart-ord-3: #104281;
+
+    --segment: oklch(1 0 0);
+    --segment-foreground: var(--foreground);
+
+    --border: oklch(0.9032 0.0032 247.84);
+    --separator: oklch(0.9276 0.0026 247.84);
+    --focus: var(--accent);
+    --link: var(--foreground);
+
+    --backdrop: oklch(0.1721 0.0087 264.36 / 0.46);
+
+    --surface-shadow:
+      0 1px 3px 0 oklch(0.1721 0.0087 264.36 / 0.05),
+      0 1px 2px 0 oklch(0.1721 0.0087 264.36 / 0.04);
+    --overlay-shadow:
+      0 6px 20px 0 oklch(0.1721 0.0087 264.36 / 0.09),
+      0 16px 40px 0 oklch(0.1721 0.0087 264.36 / 0.07);
+    --field-shadow: 0 0 0 0 transparent inset;
+  }
+
+  /*
+   * Nordic, dark.
+   *
+   * Triggered by <html class="dark"> (see src/prefs); following the system also resolves to this class.
+   *
+   * Dark is not just flipping the lightness of light mode; three places need separate handling:
+   *
+   * 1. accent must be inverted. In light mode it is ink blue close to black (near-achromatic high
+   *    contrast is this theme's direction); the same value on a dark background is invisible, so in dark
+   *    mode it becomes near white, keeping the design intent "accent is the foreground color" instead
+   *    of copying the color value.
+   * 2. Layering cannot rely on shadows. Shadows are nearly invisible on a dark background, so use a
+   *    lightness ladder of surfaces instead (background < surface < secondary < tertiary), and make
+   *    borders a bit lighter.
+   * 3. muted must be bright enough. In light mode muted is lighter than body text; in dark mode it must
+   *    be darker than body text but still a step above the background, or secondary text blends into it.
+   */
+  .dark {
+    color-scheme: dark;
+
+    --background: oklch(0.1798 0.0043 264.36);
+    --foreground: oklch(0.9576 0.0021 247.84);
+
+    /* Lightness ladder: +3~4% per step; card edges rely on it rather than shadows */
+    --surface: oklch(0.2243 0.0054 264.36);
+    --surface-foreground: var(--foreground);
+    --surface-secondary: oklch(0.2587 0.0061 264.36);
+    --surface-secondary-foreground: var(--foreground);
+    --surface-tertiary: oklch(0.2932 0.0068 264.36);
+    --surface-tertiary-foreground: var(--foreground);
+
+    --overlay: oklch(0.2465 0.0058 264.36);
+    --overlay-foreground: var(--foreground);
+
+    /* Darker than body text, a step brighter than the background; any darker and it blends into the background */
+    --muted: oklch(0.6821 0.0087 264.36);
+
+    --default: oklch(0.2698 0.0061 264.36);
+    --default-foreground: var(--foreground);
+
+    /* Inverted to near white: keeps the intent "accent = foreground color" */
+    --accent: oklch(0.9576 0.0021 247.84);
+    --accent-foreground: oklch(0.1798 0.0043 264.36);
+
+    --field-background: oklch(0.2098 0.0051 264.36);
+    --field-foreground: var(--foreground);
+    --field-placeholder: var(--muted);
+    --field-border: oklch(0.3187 0.0072 264.36);
+
+    /* Semantic colors brightened as a whole, so there is enough contrast on a dark background */
+    --success: oklch(0.7243 0.1487 156.24);
+    --success-foreground: oklch(0.1798 0.0043 264.36);
+    --warning: oklch(0.8021 0.1543 78.32);
+    --warning-foreground: oklch(0.1798 0.0043 264.36);
+    --danger: oklch(0.6876 0.1987 22.18);
+    --danger-foreground: oklch(0.9911 0 0);
+
+    /*
+     * Chart palette (dark).
+     *
+     * Same reasoning as the semantic colors: not flipping the lightness of the light set, but **steps
+     * re-chosen for a dark background** (OKLCH L in the 0.48–0.67 band, all passing 3:1 against
+     * #1a1c1e), then running the whole set through the validator again. ord-2 having the same value in
+     * light and dark is deliberate: it lands right in the middle step on both backgrounds.
+     */
+    --chart-1: #3987e5;
+    --chart-2: #d95926;
+    --chart-ord-1: #6da7ec;
+    --chart-ord-2: #2a78d6;
+    --chart-ord-3: #184f95;
+
+    --segment: oklch(0.2587 0.0061 264.36);
+    --segment-foreground: var(--foreground);
+
+    --border: oklch(0.3021 0.0068 264.36);
+    --separator: oklch(0.2721 0.0061 264.36);
+    --focus: var(--accent);
+    --link: var(--foreground);
+
+    --backdrop: oklch(0.1043 0.0032 264.36 / 0.72);
+
+    /* Shadows replaced with a very faint inner outline: shadows are invisible in dark mode, so edges can only rely on it */
+    --surface-shadow: 0 0 0 1px oklch(0.9576 0.0021 247.84 / 0.05) inset;
+    --overlay-shadow:
+      0 0 0 1px oklch(0.9576 0.0021 247.84 / 0.08) inset,
+      0 16px 40px 0 oklch(0.0821 0.0021 264.36 / 0.6);
+    --field-shadow: 0 0 0 0 transparent inset;
+  }
+}
+
+@layer base {
+  /*
+   * Mobile viewport and safe area tokens.
+   *
+   * # Why the four safe-area edges are wrapped in variables
+   *
+   * `env(safe-area-inset-*)` only has non-zero values when the viewport in index.html sets
+   * `viewport-fit=cover`; otherwise it is **always 0, with no error**. Wrapping it in variables has two
+   * benefits: callers write `var(--safe-top)`, easier than remembering that long name; and to turn off
+   * the safe area temporarily (while debugging), only this one place changes.
+   *
+   * The fallback goes in the second argument of `env()` (`env(x, 0px)`). Without a fallback,
+   * unsupported browsers make the whole declaration **invalid**: then `padding-top: var(--safe-top)`
+   * does not become 0, the whole padding declaration is dropped, which may expose underlying styles,
+   * with very strange symptoms.
+   *
+   * # --kb is the keyboard height, written by JS
+   *
+   * On iOS, the keyboard opening **does not change any vh unit (including dvh)**; only visualViewport
+   * can sense it, so this value is written at runtime by src/lib/useVisualViewport.ts. The default
+   * 0px = no keyboard, so "JS did not run" and "the browser does not support visualViewport" both
+   * naturally degrade to "no keyboard avoidance".
+   */
+  :root {
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+    --kb: 0px;
+  }
+
+  /*
+   * ⚠️ This is 100dvh rather than 100%; the difference is only visible on iOS Safari.
+   *
+   * `height: 100%` refers to the **layout viewport**, which on iOS Safari is the height "with the
+   * address bar expanded", and it **does not change** after the address bar collapses. So the shell is
+   * taller than the actual visible area, and the whole page can be dragged up and down: exactly the
+   * source of the rubber-band feel of "the whole page scrolling", while the app already has its own
+   * scroll areas inside.
+   *
+   * `100dvh` follows the dynamic viewport (it changes as the address bar collapses/expands), so the
+   * shell exactly equals the visible height, leaving no scrollable slack at page level, and scrolling
+   * only happens in the content area.
+   *
+   * **On desktop dvh always equals the viewport height, so nothing changes there**; this is not a
+   * "mobile-only change".
+   */
+  html,
+  body,
+  #root {
+    height: 100dvh;
+  }
+
+  /* The font stack hangs on --font-sans instead of being hard-coded on body, so it is easy to replace as a whole */
+  :root {
+    --font-sans:
+      -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+      "Microsoft YaHei", sans-serif;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-sans);
+  }
+
+  /* Numbers are always tabular, so values line up in lists and tables */
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  /*
+   * Radius levels.
+   *
+   * Radius must scale with element size: the same radius is "soft" on a 400px-wide card and close to a
+   * circle on a 32px icon square. So there are four steps by size; do not write rounded-xl /
+   * rounded-2xl directly anymore: those two follow --radius and easily get out of hand on small elements.
+   *
+   *   r-container  large containers: cards, modals, empty-state boxes (12px)
+   *   r-row        clickable rows: list items, nav items, thread bars (10px)
+   *   r-inset      inset info blocks: code blocks, notice bars, preview blocks (8px)
+   *   r-chip       small squares: icon backgrounds, badges (6px)
+   *
+   * Avatars and timeline dots still use rounded-full: those are deliberate circles, not part of this scale.
+   */
+  .r-container {
+    border-radius: 0.75rem;
+  }
+
+  .r-row {
+    border-radius: 0.625rem;
+  }
+
+  .r-inset {
+    border-radius: 0.5rem;
+  }
+
+  .r-chip {
+    border-radius: 0.375rem;
+  }
+}
+
+@layer components {
+  /*
+   * Component radius alignment.
+   *
+   * HeroUI gives these components large default radii, which look out of place next to the 12px cards above:
+   *   card / modal   min(32px, --radius-3xl) -> 24px at the 0.5rem base, twice the card
+   *   chip           rounded-2xl -> 16px, while the chip itself is only 20px tall: a full pill
+   *   button/toggle  24px, so a 32px-tall button is also close to a pill
+   *
+   * Pills are fine on their own, but square cards with fully rounded tags across the UI look like two
+   * different languages. Here everything is brought down to "radius ≈ 1/4 of element height".
+   * Only @layer components can override HeroUI's component layer (the utilities layer is actually weaker).
+   */
+  .card,
+  .modal__dialog {
+    border-radius: 0.75rem;
+  }
+
+  /* A 20px-tall small tag; 5px gives just enough shape without becoming a pill */
+  .chip {
+    border-radius: 0.3125rem;
+  }
+
+  /* Buttons and toggle buttons: usually 32–36px tall */
+  .button,
+  .toggle-button {
+    border-radius: 0.5rem;
+  }
+}
+
+@layer utilities {
+  /*
+   * Clamp to N lines.
+   *
+   * Tailwind's line-clamp-* is not used: HeroUI's base layer changes the display of <p>, and
+   * -webkit-line-clamp only works with display:-webkit-box; when it fails, the height grows with the
+   * content and the last line gets cut through the middle of the glyphs (looks like broken rendering).
+   * Here display is forced back explicitly.
+   *
+   * Note: clipping happens at the padding edge, so do not use it directly on an element with
+   * padding-bottom, or the extra line leaks into the bottom padding. Put the padding on an outer container.
+   */
+  .clamp-2,
+  .clamp-3 {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .clamp-2 {
+    -webkit-line-clamp: 2;
+  }
+
+  .clamp-3 {
+    -webkit-line-clamp: 3;
+  }
+}
+
+/*
+ * A few styles for local UI components (components/ui/*). Most styles are written as Tailwind
+ * classes; only what Tailwind classes cannot do goes here: animation keyframes, and overrides that
+ * must beat HeroUI's component layer.
+ */
+@layer components {
+  /* Segment: in a light track, the selected item floats up as a white block (dark gray in dark mode). */
+  .ama-segment .ama-segment__item {
+    background: transparent;
+    color: var(--muted);
+    box-shadow: none;
+  }
+
+  .ama-segment .ama-segment__item:hover {
+    color: var(--foreground);
+  }
+
+  .ama-segment .ama-segment__item[data-selected="true"] {
+    background: var(--segment);
+    color: var(--segment-foreground);
+    box-shadow: 0 1px 2px color-mix(in oklab, var(--foreground) 12%, transparent);
+  }
+
+  /* Timeline: the last item has no connector line and no bottom spacing. */
+  .ama-timeline__item:last-child .ama-timeline__connector {
+    visibility: hidden;
+  }
+}
+
+/* TextShimmer: a streak of light sweeps across the text from left to right. */
+.ama-shimmer {
+  background: linear-gradient(
+      90deg,
+      var(--muted) 0%,
+      var(--muted) 40%,
+      var(--foreground) 50%,
+      var(--muted) 60%,
+      var(--muted) 100%
+    )
+    0 0 / 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: ama-shimmer 2s linear infinite;
+}
+
+@keyframes ama-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+/* ChatLoader.Dots: three dots bounce up and down in turn. */
+.ama-dot {
+  animation: ama-dot 1.2s ease-in-out infinite;
+}
+
+@keyframes ama-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ama-shimmer,
+  .ama-dot {
+    animation: none;
+  }
+  .ama-shimmer {
+    color: var(--muted);
+    background: none;
+  }
+}
+
+/*
+ * Markdown typography for agent replies (components/MarkdownBody.tsx renders plain HTML elements).
+ *
+ * Scoped to `.md-message`, with all colors from theme tokens, so both light and dark follow `.dark`
+ * automatically. It lives in `@layer components`: utilities passed by callers, such as `text-xs`, can
+ * still override the font size.
+ */
+@layer components {
+  .md-message {
+    font-size: 0.875rem;
+    line-height: 1.6;
+    color: var(--foreground);
+    overflow-wrap: anywhere;
+  }
+
+  /* Paragraph spacing between block elements; no margin at the start and end, or it stacks on the
+     bubble padding and adds extra blank space. */
+  .md-message > * + * {
+    margin-top: 0.75em;
+  }
+
+  .md-message :where(h1, h2, h3, h4, h5, h6) {
+    font-weight: 600;
+    line-height: 1.35;
+    margin-top: 1.25em;
+  }
+
+  .md-message > :where(h1, h2, h3, h4, h5, h6):first-child {
+    margin-top: 0;
+  }
+
+  .md-message h1 {
+    font-size: 1.375em;
+  }
+  .md-message h2 {
+    font-size: 1.2em;
+  }
+  .md-message h3 {
+    font-size: 1.075em;
+  }
+  .md-message :where(h4, h5, h6) {
+    font-size: 1em;
+  }
+
+  .md-message :where(ul, ol) {
+    padding-left: 1.5em;
+  }
+  .md-message ul {
+    list-style: disc;
+  }
+  .md-message ol {
+    list-style: decimal;
+  }
+  .md-message li + li,
+  .md-message li > :where(ul, ol) {
+    margin-top: 0.25em;
+  }
+  /* GFM task lists: the checkbox is itself the marker; do not add a bullet on top. */
+  .md-message li:has(> input[type="checkbox"]) {
+    list-style: none;
+    margin-left: -1.25em;
+  }
+  .md-message li > input[type="checkbox"] {
+    margin-right: 0.4em;
+    vertical-align: -0.1em;
+  }
+
+  .md-message a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .md-message strong {
+    font-weight: 600;
+  }
+
+  .md-message blockquote {
+    border-left: 3px solid var(--border);
+    padding-left: 0.875em;
+    color: var(--muted);
+  }
+
+  .md-message hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+  }
+
+  /* Inline code: a semi-transparent background works for both light and dark. */
+  .md-message :not(pre) > code {
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 0.875em;
+    padding: 0.125em 0.375em;
+    border-radius: 0.3125rem;
+    background: color-mix(in oklab, var(--foreground) 8%, transparent);
+  }
+
+  .md-message pre {
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 0.8125rem;
+    line-height: 1.55;
+    padding: 0.75rem 0.875rem;
+    padding-right: 2.5rem;
+    border-radius: 0.5rem;
+    background: var(--surface-secondary);
+    border: 1px solid var(--border);
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  /* Tables scroll horizontally in narrow bubbles instead of breaking the chat column. */
+  .md-message .md-table-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .md-message table {
+    border-collapse: collapse;
+    font-size: 0.8125rem;
+  }
+  .md-message :where(th, td) {
+    border: 1px solid var(--border);
+    padding: 0.375rem 0.625rem;
+    text-align: left;
+  }
+  .md-message th {
+    font-weight: 600;
+    background: var(--surface-secondary);
+  }
+
+  .md-message img {
+    max-width: 100%;
+  }
+}

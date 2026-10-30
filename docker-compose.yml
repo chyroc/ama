@@ -1,0 +1,241 @@
+# PostgreSQL, Redis, object storage (RustFS, S3 compatible), and (optionally) amad itself plus the
+# session container image.
+#
+#   docker compose up -d postgres redis s3   # local dev: start only the dependencies, run amad with ./dev.sh
+#   docker compose up -d --build          # run everything in containers (amad listens on ${AMA_PORT:-9999})
+#   docker compose ps             # wait until all three are healthy before connecting
+#   docker compose down           # stop, keep the data
+#   docker compose down -v        # stop and delete the data volumes (required after changing the locale, see below)
+#
+# In production you can use any managed PostgreSQL (16/17 recommended, database with UTF8 + Collate C).
+# Connection settings are in server/config.example.yaml.
+#
+# Redis is only used for leader election of the Feishu long connection (one Feishu app allows only one
+# long connection; multiple instances connecting directly evict each other and randomly drop inbound
+# messages). No cache, no queue; all business data is in PG. See server/shared/infra/redis/.
+#
+# **File bytes (attachments, skill files, skill packages, personal files) live in object storage; PG
+# only stores metadata.** In production you can use any S3 compatible service, see the s3 section of
+# server/config.example.yaml.
+
+services:
+  postgres:
+    # Pinned to 17: development and tests both run on 17.
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ama
+      POSTGRES_USER: ama
+      # A throwaway password for the local dev database, not a credential, so it is written here in
+      # plain text and also in config.example.yaml. In production the password comes from the
+      # AMA_PG_PASSWORD environment variable; never write it into any file.
+      # The password must be set in .env (./scripts/init-env.sh generates a random one); if it is
+      # missing, compose fails and does not start.
+      # ⚠️ Only takes effect when the data volume is first created; changing it later does not change
+      # the password in the database. Either ALTER USER, or rebuild with down -v.
+      POSTGRES_PASSWORD: ${AMA_PG_PASSWORD:?缺 AMA_PG_PASSWORD，先跑 ./scripts/init-env.sh}
+      # Database uses utf8 / Collate C / CType C.
+      #
+      # Choosing C over zh_CN.utf8 is on purpose: C compares bytes, so both sorting and
+      # LIKE 'prefix%' can use a B-tree index directly. When you need Chinese-aware sorting, add
+      # COLLATE "zh_CN.utf8" per column or per query; no flexibility is lost. The other way round,
+      # a database-level collation cannot be changed after creation; only dump/restore can rebuild it.
+      #
+      # **Pitfall**: these two only take effect at initdb (first volume creation). Running `up -d`
+      # after changing them does nothing: the data volume already exists, initdb never runs again,
+      # and you will think you changed it when you did not. You must `down -v`.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      # 15432 instead of 5432: another PostgreSQL or proxy often holds 5432 on the host, and when
+      # they clash the error does not point at a port conflict, which wastes a lot of debugging time.
+      # Bound to 127.0.0.1 only: PG is only for dev.sh / debugging on this machine; amad uses the
+      # compose internal network and needs no external access.
+      - "127.0.0.1:${AMA_PG_PORT:-15432}:5432"
+    volumes:
+      - ama-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Container up != connectable: initdb takes a few seconds, and connecting during that time
+      # gives connection refused. Use pg_isready to check real availability, so that "healthy" in
+      # `docker compose ps` means something.
+      # Note: pass -U/-d, otherwise it probes with the default user and gives a false result while
+      # the database is not created yet.
+      test: ["CMD-SHELL", "pg_isready -U ama -d ama"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    # Pinned to 7: SET NX PX and Lua scripts have existed for a long time, no newer version needed;
+    # pinning keeps local setups from drifting across minor versions.
+    #
+    # In production you can use any Redis; set the address with AMA_REDIS_ADDR / AMA_REDIS_PASSWORD.
+    image: redis:7-alpine
+    ports:
+      # 16379 instead of 6379: same reason as PG using 15432 above: another Redis or proxy often
+      # holds the default port on the host, and when they clash the error does not point at a port
+      # conflict.
+      # Bound to 127.0.0.1 only, same reason as PG.
+      - "127.0.0.1:${AMA_REDIS_PORT:-16379}:6379"
+    # The leader election lock **does not need persistence**: the lease has a TTL anyway, and after
+    # a restart everyone just competes again. Persisting to disk would instead leave a lock nobody
+    # holds after a restart, and we would wait for it to expire for nothing. So RDB snapshots are
+    # explicitly turned off.
+    environment:
+      REDIS_PASSWORD: ${AMA_REDIS_PASSWORD:?缺 AMA_REDIS_PASSWORD，先跑 ./scripts/init-env.sh}
+    # $$ is an escape for compose: the variable is expanded by the shell inside the container, so the
+    # password does not show up in the command of `compose config`.
+    command: ["sh", "-c", "exec redis-server --save '' --appendonly no --requirepass \"$$REDIS_PASSWORD\""]
+    healthcheck:
+      # Same as PG: container up != connectable.
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Object storage: RustFS (Apache-2.0, S3 compatible). MinIO no longer publishes Docker images, so we
+  # use this one; amad uses a generic S3 client, so switching vendors only changes config.
+  s3:
+    # Pinned version: the on-disk format of object storage changes across major versions; do not let
+    # latest upgrade silently on your machine.
+    image: rustfs/rustfs:1.0.4
+    environment:
+      # Throwaway local dev password, not a credential (same as PG's ama/ama above). amad connects
+      # with the same variables. In production use your own object storage and real credentials;
+      # do not reuse these.
+      RUSTFS_ACCESS_KEY: ${AMA_S3_ACCESS_KEY:?缺 AMA_S3_ACCESS_KEY，先跑 ./scripts/init-env.sh}
+      RUSTFS_SECRET_KEY: ${AMA_S3_SECRET_KEY:?缺 AMA_S3_SECRET_KEY，先跑 ./scripts/init-env.sh}
+      # Empty = log to stdout (the image writes to /logs inside the container by default, which
+      # docker compose logs cannot see).
+      RUSTFS_OBS_LOG_DIRECTORY: ""
+    ports:
+      # 19000 instead of 9000: same reason as PG's 15432. **Browsers download personal files from
+      # this port** (presigned links are signed for AMA_S3_PUBLIC_ENDPOINT), so change both together.
+      - "${AMA_S3_PORT:-19000}:9000"
+    volumes:
+      - ama-s3data:/data
+    healthcheck:
+      # Container up != readable/writable: /health/ready returns 200 only after storage and IAM are
+      # both ready.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health/ready >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks:
+      default:
+      # Session containers are on ama-net and fetch skill packages by the name ama-s3
+      # (s3.sandboxEndpoint). We use a prefixed alias instead of s3: ama-net is a shared network
+      # with a fixed name, and a bare s3 easily clashes with other projects.
+      ama-net:
+        aliases: [ama-s3]
+
+  # Image for session containers (the agent's tools run inside it). This service **only builds**:
+  # `docker compose build sandbox-image` or `up --build` produces ama-sandbox:latest, and it exits
+  # right after starting. The real session containers are created on demand by amad through the
+  # Docker API; compose does not manage them.
+  sandbox-image:
+    image: ama-sandbox:latest
+    build:
+      context: .
+      dockerfile: sandbox-image/Dockerfile
+    command: ["true"]
+    restart: "no"
+
+  amad:
+    image: ama:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3:
+        condition: service_healthy
+      sandbox-image:
+        condition: service_completed_successfully
+    ports:
+      - "${AMA_PORT:-9999}:9999"
+    environment:
+      AMA_PG_HOST: postgres
+      AMA_PG_PASSWORD: ${AMA_PG_PASSWORD:?缺 AMA_PG_PASSWORD，先跑 ./scripts/init-env.sh}
+      # Listen on all interfaces: if it only listens on 127.0.0.1 inside the container, the port
+      # mapping cannot reach it.
+      AMA_ADDR: 0.0.0.0:9999
+      AMA_REDIS_ADDR: redis:6379
+      AMA_REDIS_PASSWORD: ${AMA_REDIS_PASSWORD:?缺 AMA_REDIS_PASSWORD，先跑 ./scripts/init-env.sh}
+      # Object storage. Both amad and session containers reach it as ama-s3 (the alias on ama-net),
+      # see deploy/config.yaml.
+      #
+      # ⚠️ AMA_S3_PUBLIC_ENDPOINT is the address a **browser** can open: presigned links have the
+      # Host signed in, so the same link cannot serve both the browser and the container. When the
+      # browser is not on this machine, change it to http://<host IP or domain>:19000.
+      AMA_S3_ACCESS_KEY: ${AMA_S3_ACCESS_KEY:?缺 AMA_S3_ACCESS_KEY，先跑 ./scripts/init-env.sh}
+      AMA_S3_SECRET_KEY: ${AMA_S3_SECRET_KEY:?缺 AMA_S3_SECRET_KEY，先跑 ./scripts/init-env.sh}
+      AMA_S3_BUCKET: ${AMA_S3_BUCKET:-ama}
+      AMA_S3_PUBLIC_ENDPOINT: ${AMA_S3_PUBLIC_ENDPOINT:-http://localhost:${AMA_S3_PORT:-19000}}
+      # Public address: used by browsers, and also injected as AMA_BASE_URL for the ama CLI inside
+      # session containers.
+      AMA_PUBLIC_URL: ${AMA_PUBLIC_URL:-http://localhost:9999}
+      AMA_TERMINAL_WS_ORIGINS: ${AMA_TERMINAL_WS_ORIGINS:-http://localhost:9999,http://127.0.0.1:9999}
+      # Master key that encrypts users' Ark credentials; generate with: openssl rand -base64 32.
+      # **If you change it, existing ciphertext can no longer be decrypted.**
+      ARK_SECRET_KEY: ${ARK_SECRET_KEY:?缺 ARK_SECRET_KEY，先跑 ./scripts/init-env.sh}
+      AMA_AUTH_MANAGED_KEY_SECRET: ${AMA_AUTH_MANAGED_KEY_SECRET:?缺 AMA_AUTH_MANAGED_KEY_SECRET，先跑 ./scripts/init-env.sh}
+      AMA_AUTH_LOCAL_ENABLED: ${AMA_AUTH_LOCAL_ENABLED:-true}
+      # Empty values below do not override the config file (see .env.example and
+      # server/config.example.yaml for meanings).
+      AMA_AUTH_LOCAL_ALLOW_SIGNUP: ${AMA_AUTH_LOCAL_ALLOW_SIGNUP:-}
+      AMA_AUTH_OIDC_ISSUER: ${AMA_AUTH_OIDC_ISSUER:-}
+      AMA_AUTH_OIDC_CLIENT_ID: ${AMA_AUTH_OIDC_CLIENT_ID:-}
+      AMA_AUTH_OIDC_CLIENT_SECRET: ${AMA_AUTH_OIDC_CLIENT_SECRET:-}
+      AMA_AUTH_OIDC_DISPLAY_NAME: ${AMA_AUTH_OIDC_DISPLAY_NAME:-}
+      AMA_AUTH_ADMINS: ${AMA_AUTH_ADMINS:-}
+      AMA_AUTH_GITHUB_ENABLED: ${AMA_AUTH_GITHUB_ENABLED:-}
+      AMA_AUTH_GITHUB_CLIENT_ID: ${AMA_AUTH_GITHUB_CLIENT_ID:-}
+      AMA_AUTH_GITHUB_SCOPES: ${AMA_AUTH_GITHUB_SCOPES:-}
+      AMA_AUTH_GITHUB_DISPLAY_NAME: ${AMA_AUTH_GITHUB_DISPLAY_NAME:-}
+      # Proxy used only for outbound GitHub traffic. Inside the container 127.0.0.1 is the container
+      # itself; for a proxy on the host, use the docker bridge address.
+      AMA_AUTH_GITHUB_PROXY: ${AMA_AUTH_GITHUB_PROXY:-}
+      AMA_AUTH_GITHUB_ALLOWED_USERS: ${AMA_AUTH_GITHUB_ALLOWED_USERS:-}
+      AMA_AUTH_GITHUB_ALLOWED_EMAIL_DOMAINS: ${AMA_AUTH_GITHUB_ALLOWED_EMAIL_DOMAINS:-}
+      AMA_AUTH_GITHUB_ALLOWED_ORGS: ${AMA_AUTH_GITHUB_ALLOWED_ORGS:-}
+      # Docker executor: one container per Ark session, running on the host's daemon (through the
+      # socket mounted below).
+      AMA_DOCKER_IMAGE: ${AMA_DOCKER_IMAGE:-ama-sandbox:latest}
+      # Session containers join ama-net so they can reach amad by service name (the ama CLI in the
+      # container only works when AMA_PUBLIC_URL is http://amad:9999; the browser side then needs
+      # its own port mapping / reverse proxy).
+      AMA_DOCKER_NETWORK: ${AMA_DOCKER_NETWORK:-ama-net}
+      AMA_DOCKER_IDLE_ACTION: ${AMA_DOCKER_IDLE_ACTION:-pause}
+      AMA_DOCKER_MEMORY: ${AMA_DOCKER_MEMORY:-}
+      AMA_DOCKER_CPUS: ${AMA_DOCKER_CPUS:-}
+    volumes:
+      # ⚠️⚠️ **Mounting docker.sock hands host root privileges to amad.**
+      #
+      # A process that can reach this socket can start privileged containers, mount the host root
+      # directory and read/write any file; this is no different from having root on the host. So:
+      #   - amad itself must be trusted; do not expose it (especially the _debug routes and the fixed
+      #     API key) to untrusted people;
+      #   - the agent's commands run in session containers, and **session containers never get this
+      #     socket** (amad does not mount it for them), but they share the host kernel; container
+      #     isolation is not VM isolation;
+      #   - for stronger isolation: configure rootless / userns-remap on the daemon, or use a runtime
+      #     like gVisor (runsc), or point amad at a remote daemon dedicated to session containers
+      #     (AMA_DOCKER_HOST).
+      # See docs/guides/docker-executor.md.
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - default
+      - ama-net
+    restart: unless-stopped
+
+networks:
+  # Network that session containers join. Fixed name (no compose project prefix); amad attaches
+  # containers to it by name.
+  ama-net:
+    name: ama-net
+
+volumes:
+  ama-pgdata:
+  ama-s3data:

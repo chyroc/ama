@@ -1,0 +1,25 @@
+{
+  "name": "@chyroc/ama",
+  "version": "0.4.0",
+  "description": "AMA 平台 CLI —— 操作空间 / Agent / 技能 / 运行历史 / 问题，或用 daemon 模式把本机注册成宿主机执行端。容器里的 agent 与个人机都用它。",
+  "bin": {
+    "ama": "bin/ama.js"
+  },
+  "files": [
+    "bin/",
+    "README.md"
+  ],
+  "os": [
+    "linux",
+    "darwin"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "license": "MIT",
+  "private": true
+}

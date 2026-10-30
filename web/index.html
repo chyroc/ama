@@ -1,0 +1,95 @@
+<!doctype html>
+<!-- Theme classes are attached by src/themes at startup (including light/dark); do not hard-code a class here -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      viewport. Each of the four attributes has a reason it cannot be dropped. Removing any one
+      silently breaks some mobile capability:
+
+      **`viewport-fit=cover` is the precondition for all safe-area work.** Without it,
+      `env(safe-area-inset-*)` **always returns 0** (no error, just a quiet 0), so not a single
+      line of CSS for the Dynamic Island padding or the bottom Home Indicator padding takes
+      effect. Debugging from the symptom makes you think the CSS is wrong.
+
+      **`interactive-widget=resizes-content` has no effect on iOS, but we still write it.** It
+      says "shrink the layout viewport when the keyboard opens". Android Chrome supports it,
+      **iOS Safari still does not** (the title of MDN browser-compat-data PR #29064 is
+      "Safari iOS does not support interactive-widget viewport feature"; WebKit Bugzilla 259770
+      is still called "Implement the interactive-widget property", i.e. not implemented yet,
+      not fixed). Writing it is free progressive enhancement: Android benefits now, Safari
+      benefits automatically once it lands. **Keyboard avoidance on iOS uses a separate path**:
+      visualViewport writes the keyboard height into --kb, see src/lib/useVisualViewport.ts.
+
+      **We deliberately do not write `maximum-scale=1` / `user-scalable=no`.** Those two are
+      often used as a "quick fix" for "the page zooms in when an input gets focus", but what
+      they disable is pinch zoom, which is a real accessibility regression. The real cause of
+      the auto zoom is an input font size below 16px; raise the font size in CSS instead of
+      disabling zoom.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+
+    <!--
+      Brand icons. The files live in web/public/, and Vite **maps that directory as-is to the
+      root path** (no hash, not under assets/), so we write /favicon.svg here, not a relative
+      path. Writing ./favicon.svg would resolve to /w/xxx/favicon.svg on deep links such as
+      /w/xxx/chat and 404. The files are produced by scripts/brand-icons/generate.py.
+
+      The two favicons are **a fallback pair, not a choice of one**: browsers take the SVG (one
+      vector covers every size); old browsers that do not understand SVG, and crawlers and
+      aggregators that only fetch /favicon.ico from the root, fall back to the ico (it holds
+      16/32/48 sizes). sizes="any" makes browsers that support SVG prefer it, instead of
+      picking the ico because the ico declares a concrete size.
+    -->
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!--
+      PWA manifest. **The extension is deliberately .json, not the usual .webmanifest**: in
+      production the frontend is served out of the binary by Go's http.FileServer
+      (server/httpd/static.go), and `mime.TypeByExtension(".webmanifest")` returns **an empty
+      string** in Go. Content-Type is then decided by content sniffing, and browsers usually
+      treat it as text/plain and silently ignore the whole manifest. .json gets the correct
+      application/json, so both paths (vite dev / Go embed) are right.
+
+      The manifest has `display: standalone`: when launched from the home screen there is
+      **no address bar and no toolbar**, like a native app. This overturns what this comment
+      used to say ("not meant to be an installable PWA, just to make the icon look right"):
+      on mobile we want the app feel, and the address bar + toolbar eat nearly a hundred
+      pixels on a 402x681 screen.
+
+      **The cost of standalone is losing Safari's back gesture**, so every page in the site
+      must be able to go back one level through its own UI. Detail pages already had their own
+      back entry before this was added, but this is an **ongoing constraint**: a new page that
+      can only be left with the browser's back button is a dead end in standalone mode.
+    -->
+    <link rel="manifest" href="/manifest.json" />
+    <!--
+      Two Apple-specific tags. They live alongside the manifest's display, not instead of it:
+      iOS support for manifest `display` came late and is incomplete, so writing both is safe.
+
+      `black-translucent` lets page content **extend under the status bar**. That is what lets
+      our own top bar background fill the Dynamic Island area (otherwise it is a solid strip
+      that ignores the theme). The cost is that the top bar must absorb
+      `env(safe-area-inset-top)` itself, or the text gets covered by the Dynamic Island; see
+      the top bar in AppShell.
+    -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+    <!--
+      theme-color uses the dark purple of the logo; mobile browsers tint the address bar with it.
+      We deliberately do not give separate values for light and dark themes: this is the
+      **brand color** and does not follow the UI theme.
+    -->
+    <meta name="theme-color" content="#3C043C" />
+    <title>AMA · Agent 平台</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,46 @@
+# MCP server config: may contain personal tokens in plain text; do not commit
+.mcp.json
+
+# Local credentials (Ark API Key etc.), plain text; do not commit
+.env
+.env.*
+!.env.example
+
+# Local config of amad: may contain the database password; do not commit. Template is server/config.example.yaml
+server/config.yaml
+
+# Go build outputs: `go build ./cmd/xxx` (without -o) puts the binary in the current directory
+# with the same name as the source under cmd/, so it is easy to commit by accident. List exact paths; do not use a wildcard like `server/*`.
+server/amad
+server/ama-cli
+server/gen-openapi
+server/gen-authz-capabilities
+server/gen-doc-outline
+server/selfhosted-bootstrap
+# Name one-off probes probe-* or tmp-*; outputs of both kinds are ignored (except the source directories).
+server/probe-*
+!server/probe-*/
+server/tmp-*
+!server/tmp-*/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Frontend
+node_modules/
+web/dist/
+# Private build output directory for e2e
+web/dist-e2e-*/
+web/playwright-report/
+web/test-results/
+*.tsbuildinfo
+
+# Runtime outputs of dev.sh: single binary, pid, logs
+.run/
+
+# Cross-compiled CLI outputs (made by ./cli/build.sh, for publishing to npm; do not commit)
+cli/bin/ama-*

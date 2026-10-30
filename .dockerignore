@@ -1,0 +1,19 @@
+# The docker build context only needs server/, web/, sandbox-image/, deploy/
+.git
+.run/
+output/
+output_resource/
+.build-node/
+.env
+.env.*
+**/node_modules
+web/dist
+web/dist-e2e-*
+web/playwright-report
+web/test-results
+**/*.tsbuildinfo
+server/config.yaml
+server/amad
+server/ama-cli
+docs/
+cli/bin/ama-*

@@ -1,0 +1,26 @@
+# Default config for amad in the container: only required items; everything else is overridden by env vars (priority: env vars > this file).
+# See server/config.example.yaml for what each item means.
+pg:
+  host: postgres
+  port: 5432
+  database: ama
+  user: ama
+  sslmode: disable
+
+# Object storage: the s3 service in compose (RustFS). Credentials come from AMA_S3_ACCESS_KEY / AMA_S3_SECRET_KEY;
+# the address used by the browser comes from AMA_S3_PUBLIC_ENDPOINT (see docker-compose.yml).
+s3:
+  endpoint: http://ama-s3:9000
+  bucket: ama
+
+# All login methods are set through env vars (AMA_AUTH_LOCAL_* / AMA_AUTH_OIDC_* / AMA_AUTH_GITHUB_*, see .env.example).
+# You can also write them here; a non-empty env var still wins. Example, GitHub device flow login:
+#
+# auth:
+#   github:
+#     enabled: true
+#     clientId: ""                    # empty = GitHub CLI's public client id; better to use your own
+#     proxy: ""                       # proxy used only for github.com / api.github.com
+#     allowedUsers: ["<GitHub username>"]  # if all three allowed* are empty, nobody can log in
+#     allowedEmailDomains: []
+#     allowedOrgs: []

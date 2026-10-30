@@ -1,0 +1,508 @@
+# Config template for amad. Copy it to config.yaml and edit as needed; config.yaml is gitignored.
+#
+#   cp config.example.yaml config.yaml
+#
+# The values in this file match "PG / Redis / RustFS started by local docker-compose", and work out
+# of the box:
+#
+#   docker compose up -d                  # run at the repo root
+#
+# # Where config comes from
+#
+# There is only one source: this YAML file (path given by AMA_CONFIG, default config.yaml),
+# with environment variable overrides on top. See shared/infra/config/README.md.
+#
+# # Environment variables have the highest priority
+#
+# Any field can be overridden by the matching environment variable (mapping in the Env* constants
+# of shared/infra/config/config.go).
+# This is deliberate: in an incident, change one environment variable and restart to recover; secrets
+# can also live only in environment variables.
+# The cost is "changed the config but it does not take effect", so the startup log line "the following
+# fields were overridden by environment variables" lists them
+# one by one; when you see it, you know which environment variable to clear.
+
+pg:
+  # Hostname or IP.
+  #
+  # Local: 127.0.0.1 (docker-compose maps the container's 5432 to the host's 15432).
+  #
+  # Production: your PostgreSQL address (self-hosted or a cloud-managed instance both work).
+  #
+  # ⚠️ For IPv6 **do not add square brackets**. Brackets only apply to the URI form of DSN
+  #    (postgres://user:pass@[::1]:5432/db). We build libpq's key=value form,
+  #    where brackets are taken as part of the hostname, giving `lookup [fdbd:...]: no such host`.
+  #    It still works if you add them (the code strips them), but do not make it a habit.
+  host: 127.0.0.1
+
+  # Port. Empty means 5432. Locally it is 15432 (to avoid a 5432 that may already be taken on the
+  # host).
+  port: 15432
+
+  # Database name. When creating the database, utf8 / Collate C / CType C are recommended;
+  # docker-compose sets exactly these three via POSTGRES_INITDB_ARGS.
+  database: ama
+
+  # Login user name.
+  #
+  # It need not be a superuser, but this user must be able to create tables in the database (the
+  # easiest way is to make it the database Owner:
+  # `CREATE DATABASE ama OWNER ama;`). amad creates tables automatically on startup.
+  user: ama
+
+  # Login password. **Do not write it here**: use the environment variable AMA_PG_PASSWORD, which has
+  # higher priority.
+  # ./scripts/init-env.sh generates it into .env, and both docker compose and dev.sh read that file.
+  password: ""
+
+  # Maps to libpq's sslmode. Empty means disable.
+  #
+  # disable is fine on the same machine or a trusted private network. **Over the public internet it
+  # must be require or stronger**,
+  # otherwise the password crosses the network in plain text.
+  sslmode: disable
+
+  # Timeout for a single connection attempt. Empty means not passed down, leaving it to the system
+  # TCP timeout (tens of seconds).
+  #
+  # Recommended: when the address is unreachable (typically an allowlist not opened: ICMP works but
+  # all TCP times out)
+  # the default hangs a long time before erroring; setting it fails fast.
+  connectTimeout: 5s
+
+  # Connection pool. Empty uses the defaults in shared/infra/pg: 25 / 5 / 5m / 30m.
+  #
+  # PostgreSQL's default max_connections is 100; with 25 per instance, keep the total under it with
+  # multiple instances,
+  # and leave headroom for ops tools.
+  # maxOpenConns: 25
+  # maxIdleConns: 5
+  # connMaxIdleTime: 5m
+  # connMaxLifetime: 30m
+
+  # Server-side limit per SQL statement / limit on waiting for row locks. Empty uses 10s / 2s.
+  #
+  # ⚠️ This is the fallback for "a stuck query holds a connection forever and does not return even on
+  # ctx cancel";
+  # for normal workloads do not raise it or turn it off. Table migrations use an exempt connection
+  # automatically and are not limited by it.
+  # statementTimeout: 10s
+  # lockTimeout: 2s
+
+# ---------------------------------------------------------------------------
+# Redis
+# ---------------------------------------------------------------------------
+#
+# **Only used for leader election of the Feishu long-lived connection**: no cache, no queue; all
+# business data is in PG above.
+#
+# Why it is needed: Feishu **allows only one long-lived connection per app**. When several amad
+# instances each connect to the same app directly,
+# Feishu kicks out the earlier one, and instances evict each other, with no error, showing up as
+# **inbound messages randomly lost**
+# (this one goes to A, the next to B, and the kicked-out stretch is received by nobody). So take the
+# lock before connecting,
+# and **never connect without the lock**. See server/shared/infra/redis/README.md.
+#
+# **The whole section may be left empty**: then the long-lived connection is not enabled, the
+# service starts as usual, it just receives no Feishu messages; the startup log
+# says so plainly.
+#
+redis:
+  # host:port. Can be overridden by the environment variable AMA_REDIS_ADDR.
+  #
+  # Locally it is 127.0.0.1:16379 (docker-compose maps the container's 6379 to the host's 16379,
+  # avoiding a 6379 that may already be taken on this machine; a collision gives an error not
+  # pointing at the port conflict, wasting a long debug).
+  addr: 127.0.0.1:16379
+
+  # Password. The local docker-compose one has no password; leave it empty.
+  #
+  # In production **do not write it here**: use the environment variable, which has higher priority
+  # and overrides this field:
+  #   export AMA_REDIS_PASSWORD='...'
+  password: ""
+
+  # Database index; empty means 0.
+  # db: 0
+
+  # Connect timeout; empty means 5s. Same reason as pg.connectTimeout: when the address is
+  # unreachable the default hangs a long time before erroring.
+  # dialTimeout: 5s
+
+  # Read/write timeout per command; empty means 1s.
+  # opTimeout: 1s
+
+# ---------------------------------------------------------------------------
+# Object storage (S3-compatible): **all file bytes live here; PG only stores metadata**
+# ---------------------------------------------------------------------------
+#
+# The bytes of attachments (issues / suggestions), skill files, skill archives and personal files
+# are all in object storage,
+# and PostgreSQL only has metadata like bucket + object_key. **With PG this section must be
+# configured**;
+# without it amad refuses to start (it does not fall back to writing bytes into PG).
+#
+# Local: `docker compose up -d s3` starts a RustFS (S3-compatible, host port 19000).
+# Production: any S3-compatible service (AWS S3 / MinIO / Ceph RGW / a cloud vendor's object
+# storage); only this section changes.
+#
+# ⚠️⚠️ **Presigned links sign the Host in**, so a link can only be used with the address it was signed
+# for; another Host gives
+# 403 SignatureDoesNotMatch. And the three parties reach different addresses, so there are three:
+#
+#   endpoint         used by amad itself for reading and writing
+#   publicEndpoint   signed for **browsers** (personal file downloads) and **users' own machines**
+#                    (the ama daemon fetching skill packages)
+#   sandboxEndpoint  signed for **Docker session containers** (fetching skill packages)
+#
+# The last two fall back to endpoint when empty. Symptoms of signing wrong: browser downloads 403 /
+# cannot connect; in session containers skills only have
+# SKILL.md with all attachments missing (download failures fall back silently, with one Warn in the
+# log).
+s3:
+  # Address amad uses to read and write objects. Local dev.sh runs on the host, so use the mapped
+  # port.
+  # Empty uses the official AWS address (by region). Environment variable AMA_S3_ENDPOINT.
+  endpoint: http://127.0.0.1:19000
+  # Address browsers can open. Locally the same as endpoint, may be empty. AMA_S3_PUBLIC_ENDPOINT.
+  publicEndpoint: ""
+  # Address session containers can reach. Session containers join ama-net (see docker.network
+  # below),
+  # where the compose s3 service's alias is ama-s3. AMA_S3_SANDBOX_ENDPOINT.
+  # ⚠️ Do not write 127.0.0.1: inside a container that points at the container itself.
+  sandboxEndpoint: http://ama-s3:9000
+  # Empty means us-east-1. AMA_S3_REGION.
+  region: ""
+  # Bucket name. **Empty = no object storage configured** (PG mode refuses to start). AMA_S3_BUCKET.
+  bucket: ama
+  # **Do not write credentials here**; use AMA_S3_ACCESS_KEY / AMA_S3_SECRET_KEY
+  # (./scripts/init-env.sh
+  # generates them into .env, and dev.sh reads it).
+  accessKey: ""
+  secretKey: ""
+  # path-style (http://host/bucket/key). Empty means true; RustFS / MinIO require true.
+  # Set false to use virtual-hosted style with AWS S3. AMA_S3_USE_PATH_STYLE.
+  usePathStyle: true
+  # Create the bucket on startup if it does not exist (several instances creating at once tolerate
+  # "already exists"). Empty means true.
+  # Set false when the production bucket is created by ops and the credentials cannot create
+  # buckets. AMA_S3_CREATE_BUCKET.
+  createBucket: true
+  # Per-call limit; empty means 2m.
+  # timeout: 2m
+
+# ===========================================================================
+# The sections below used to be environment variables scattered in cmd/amad; now they are in the
+# config.
+#
+# **All of them may be left empty**: empty uses the defaults written in the comments, working out of
+# the box locally.
+# In production put secret values in environment variables; see
+# server/shared/infra/config/README.md.
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# The process itself
+# ---------------------------------------------------------------------------
+server:
+  # Listen address; empty means 0.0.0.0:9999 (all interfaces). The root dev.sh locally uses
+  # 0.0.0.0:5273.
+  # For local-only access use 127.0.0.1:9999.
+  # Can also be set with the environment variable AMA_ADDR (highest priority).
+  addr: ""
+
+  # Public address. **Only used to decide whether cookies carry Secure** (only when it starts with
+  # https://).
+  #
+  # Empty locally means no Secure: locally it is http://, and with Secure the browser would not store
+  # the cookie at all,
+  # showing up as "login succeeds but a refresh asks to log in again", with no error at all.
+  publicURL: ""
+
+  # Allowed cross-origin source, like http://localhost:5273. Empty means no CORS headers are sent.
+  #
+  # With the root dev.sh, frontend and backend are same-origin (the frontend build is go:embed'd into
+  # the binary), so it is not needed;
+  # only needed when running vite separately (web/scripts/dev.sh, with HMR).
+  # **It cannot be `*`**: cookies are sent, and browsers reject the two together outright; loading
+  # the config reports an error.
+  allowedOrigin: ""
+
+  # Allowlist (multi-value) of page origins allowed to open the **terminal WebSocket**.
+  #
+  # # A different thing from allowedOrigin above; do not mix them
+  #
+  # allowedOrigin controls CORS for ordinary /api/ requests; this one controls "who can open a
+  # terminal WS".
+  # The terminal WS may connect to **another domain** (e.g. ama-ws.example.com: when the main
+  # entry's gateway uses
+  # HTTP/2 and WS cannot upgrade, a separate entry is needed), and then the Origin differs from the
+  # page, so same-origin cannot be required.
+  # Merging them into one field would make "open up CORS" also open up "who can open a terminal",
+  # and the latter can run any command in containers.
+  #
+  # # ⚠️ Empty = the terminal silently falls back to SSE+POST, with no error
+  #
+  # When empty, CheckOrigin rejects every connection carrying an Origin (fail-closed, on purpose:
+  # "allow all when not configured" would open the terminal to the whole internet). So the browser
+  # cannot connect via WS and falls back to the old path;
+  # **that path works, but echo may be out of order when typing fast, with one round trip per
+  # character**, i.e. the two
+  # bugs originally reported come right back. The check is whether the terminal status bar shows the
+  # "compatibility mode" badge.
+  # The startup log also Warns about it.
+  #
+  # # What to set locally
+  #
+  # With the root dev.sh, the frontend and WS are same-origin (both on that port); set it to itself:
+  #
+  #   terminalWSOrigins: ["http://127.0.0.1:5273"]
+  #
+  # The port follows dev.sh's PORT.
+  # If editing the file is a hassle, use the environment variable, comma-separated, highest priority:
+  #
+  #   AMA_TERMINAL_WS_ORIGINS=http://127.0.0.1:5326 PORT=5326 ./dev.sh
+  #
+  # The frontend side also needs VITE_TERMINAL_WS_BASE pointing at the same address; only with both
+  # set does it use WS.
+  #
+  # In production set the page's public address, like ["https://ama.example.com"]. **`*` is not
+  # supported**, same as allowedOrigin.
+  terminalWSOrigins: []
+
+  # Enables /api/_debug/reset|clear, for preparing e2e data.
+  #
+  # ⚠️ **Never enable it in production**: one request can wipe the whole database.
+  # The environment variable form only accepts AMA_DEV_ROUTES=1 ("true" / "yes" do not count; a
+  # switch of this magnitude
+  # should not have several spellings).
+  devRoutes: false
+
+  # pg (default) or mem.
+  #
+  # mem depends on no external service, easier than changing config when the database is not up
+  # yet; but **data is gone on process restart**,
+  # and with multiple instances each recognizes its own sessions, randomly dropping logins. So it
+  # only suits a single local process.
+  # A typo ("memory" / "PG") reports an error directly rather than silently using pg.
+  store: pg
+
+# ---------------------------------------------------------------------------
+# Login
+# ---------------------------------------------------------------------------
+# Two methods, which can be enabled together: local accounts (email + password) and generic OIDC
+# (Authorization Code + PKCE).
+# The unique user ID is the **lowercase email**: getting the same email by either method means the
+# same person.
+#
+# ⚠️ With neither enabled **nobody can log into the web UI** (only API Keys can call the API); the
+# startup log says so with an ERROR.
+auth:
+  local:
+    enabled: true
+    # Open self sign-up. When closed (false) signing up the **first** account is still allowed: when
+    # the database has no users yet,
+    # that person becomes the platform admin automatically; after that only platform admins can
+    # create accounts via POST /api/admin/users.
+    allowSignup: false
+    # Password login rate limit: reject after N failures within the window (counted per email,
+    # stored in PG, shared by instances).
+    maxFailures: 10
+    failureWindowSeconds: 900
+
+  # OIDC: enabled only when both issuer and clientId are set (setting only one is a config error).
+  # The redirect_uri to register on the IdP is `<server.publicURL>/api/auth/oidc/callback`,
+  # so enabling OIDC requires server.publicURL.
+  oidc:
+    issuer: ""
+    clientId: ""
+    # Secret; in production use the environment variable AMA_AUTH_OIDC_CLIENT_SECRET. Public clients
+    # may leave it empty (relying only on PKCE).
+    clientSecret: ""
+    # Empty means openid email profile (openid is always added).
+    scopes: []
+    # The name on the login button: "Sign in with <displayName>".
+    displayName: "SSO"
+    # ⚠️ By default the ID token must have email_verified=true. The email is the Actor; an IdP that
+    # does not verify emails
+    # lets anyone enter any email, which means impersonating any member. Only turn it on when you are
+    # sure emails are maintained by admins.
+    allowUnverifiedEmail: false
+
+  # GitHub login (OAuth device flow): the browser gets a short code, and the user enters it at
+  # github.com/login/device.
+  # **Only a client id is needed, no client secret, and no callback URL**.
+  github:
+    enabled: false
+    # Empty defaults to the public client id of GitHub CLI (178c6fc778ccc68e1d6a), working out of
+    # the box.
+    # ⚠️ The cost: users see "GitHub CLI" requesting permissions on GitHub's authorization page, and
+    # its owner may revoke it any time.
+    # **For a real deployment use your own**: GitHub → Settings → Developer settings → OAuth Apps →
+    # New OAuth App, check "Enable Device Flow" (Homepage / Callback URL can be this site's
+    # address),
+    # and put the client id here.
+    clientId: ""
+    # Empty means read:user user:email. With allowedOrgs configured, read:org is added automatically.
+    scopes: []
+    # The name on the login button: "Sign in with <displayName>"; empty means GitHub.
+    displayName: ""
+    # HTTP proxy only for reaching github.com / api.github.com, like http://127.0.0.1:8080.
+    # Does not affect other outbound traffic such as Ark; empty uses the process's HTTPS_PROXY and
+    # similar environment variables.
+    proxy: ""
+    # ⚠️ Admission allowlist: matching any one item lets through; **with all three empty no GitHub
+    # account can log in**
+    # (anyone can register a GitHub account, so no admission rule means open to the whole world). The
+    # email used is the GitHub
+    # primary and verified one; lowercased it is the Actor (the same email as a local account / OIDC
+    # means the same person).
+    allowedUsers: []          # GitHub user names, case-insensitive
+    allowedEmailDomains: []   # primary email domains, like example.com (subdomains not included)
+    allowedOrgs: []           # full members of GitHub organizations (if the organization restricts third-party apps, an admin must approve this OAuth App)
+
+  # Platform admin emails: can create local accounts when self sign-up is closed. People logging in
+  # via OIDC can only become admins by being listed here.
+  admins: []
+
+  # Derivation secret for platform-managed API Keys (used by the ama command in containers); see
+  # server/auth/managedkey.go.
+  # Empty means the feature is unavailable. Generate: openssl rand -base64 32. In production use
+  # AMA_AUTH_MANAGED_KEY_SECRET.
+  managedKeySecret: ""
+
+# ---------------------------------------------------------------------------
+# Fixed API Key channel
+# ---------------------------------------------------------------------------
+# A bypass for e2e / CI / scripts / probes: they have no browser and cannot go through the login
+# page.
+# **Enabled only when both key and email are non-empty**; when enabled the startup log prints a warn
+# saying so.
+#
+# ⚠️ It is a standing key that bypasses login; configured in the wrong place it is a backdoor. Do not
+# configure it in production.
+# **Local frontend development still uses real login**: this bypass is only for callers that "are not
+# people".
+apiKey:
+  key: ""
+  email: ""
+  name: ""
+
+# ---------------------------------------------------------------------------
+# Problem feedback: who counts as "the dev team"
+# ---------------------------------------------------------------------------
+# Only affects **reading**: `GET /api/feedback`. Reporting (`POST /api/feedback`) can be done by any
+# logged-in user,
+# unaffected by this.
+#
+# ⚠️ **Empty means nobody can read** (including yourself); this is a deliberate fail-closed. With a
+# fallback of allowing,
+# "forgot to configure" would mean this door does not exist at all, with zero errors; with a fallback
+# of denying, it is found on the first click.
+# When the list is empty the startup log prints a warn saying so.
+#
+# Why an email allowlist rather than an admin flag on API Keys: keys strictly inherit their creator's
+# permissions
+# (that invariant is written in auth/apikey.go and authz/matrix.go); once keys could carry an admin
+# flag,
+# a viewer could make themselves an admin key. The allowlist is independent of the key mechanism: the
+# identity a key resolves to is
+# the creator's email, so dev team members using their own keys can naturally read.
+#
+# This is a list, not a credential, so it can be written here directly; when debugging "why can't
+# they read it" you can just look.
+#
+# Environment variable overrides are comma-separated: AMA_FEEDBACK_READERS=a@example.com,b@example.com
+# (it replaces the whole list, not merged with this file: in an incident you must be able to remove
+# someone).
+feedback:
+  readers: []
+    # - alice@example.com
+    # - bob@example.com
+
+# ---------------------------------------------------------------------------
+# Ark Managed Agents
+# ---------------------------------------------------------------------------
+# ⚠️ **The conversation path does not read the apiKey here**: each workspace configures its own Ark
+# credentials, and those are used.
+# apiKey and environmentID are for probes and the old self-built Worker path.
+ark:
+  apiKey: ""
+  environmentID: ""
+  # secretKey is the master key that **encrypts users' Ark credentials**, 32 bytes base64
+  # (AES-256-GCM).
+  #
+  # ⚠️ It is not the apiKey above: that one is our own Ark key, while this one encrypts **the keys
+  # users configure**
+  # before storing them. Mixing them up gives no error, it just silently makes encryption not
+  # happen.
+  #
+  # Empty means stored in plain text (the behavior before this field was added); the service starts
+  # as usual, and the startup log warns about the consequence.
+  # Generate one: openssl rand -base64 32
+  #
+  # ⚠️ Changing this value is not "rotating the key"; it makes all encrypted rows undecryptable, with
+  # the symptom that everyone's
+  # Ark credentials stop working at once. Rotation must go through the version-prefix approach
+  # described in shared/infra/cryptobox.
+  secretKey: ""
+
+# ---------------------------------------------------------------------------
+# Docker executor (the default carrier for tools): one container per Ark session
+# ---------------------------------------------------------------------------
+#
+# The whole section can be omitted; all defaults work. When the daemon is unreachable the service
+# starts as usual, but the agent errors as soon as it calls a tool,
+# and the startup log says so plainly.
+#
+# ⚠️ **amad having access to docker.sock equals owning root on the host** (it can start privileged
+# containers and mount the host's
+# root directory). Do not expose amad to untrusted people; see docs/guides/docker-executor.md.
+docker:
+  # Empty means enabled by default. Set false when you only want "bring your own machine" (the host
+  # executor).
+  enabled: true
+  # Daemon address. Empty uses DOCKER_HOST, and if that is empty too, unix:///var/run/docker.sock.
+  # TLS is not supported.
+  host: ""
+  # Image for session containers. Default ama-sandbox:latest, built from the repo's sandbox-image/:
+  #   docker build -t ama-sandbox:latest -f sandbox-image/Dockerfile .
+  # Another image must have bash, coreutils (including timeout), GNU find and grep.
+  image: ""
+  # Working directory in the container, where the workspace volume is mounted. Empty means
+  # /workspace.
+  workdir: ""
+  # Prefix for container names / volume names / labels. Empty means ama.
+  # ⚠️ Two unrelated AMA setups on the same daemon must each set their own, otherwise the reclaim
+  # sweep deletes the other's containers.
+  prefix: ""
+  # Resource limits per container; 0 / empty means no limit.
+  cpus: 0
+  memory: ""        # e.g. 2g
+  pidsLimit: 0
+  # Container network: bridge / none / a custom network name. Empty uses the daemon default
+  # (bridge).
+  # Locally set ama-net: `docker compose up -d s3` creates this network, and session containers must
+  # join it to
+  # reach object storage as ama-s3 to fetch skill packages (see s3.sandboxEndpoint above).
+  network: ama-net
+  # What to do with the container after a turn goes idle: pause (default, frozen, memory kept) / stop
+  # (stopped, memory released) / none.
+  idleAction: ""
+  # Reclaim sweep: how long a container may sit idle before deletion (the workspace volume is kept);
+  # empty means 24h, 0s means never delete.
+  containerTTL: 24h
+  # How long a workspace volume may sit idle before deletion (this really wipes the workspace);
+  # empty means 168h, 0s means never delete.
+  workspaceTTL: 168h
+
+# ---------------------------------------------------------------------------
+# self_hosted worker
+# ---------------------------------------------------------------------------
+worker:
+  # How many works each Ark environment handles at once; empty means 20. Setting 1 falls back to
+  # serial
+  # (a second person in the same workspace sending a message must wait for the first to be idle for
+  # a full 60 seconds).
+  concurrency: 20

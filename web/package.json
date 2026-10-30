@@ -1,0 +1,44 @@
+{
+  "name": "ama-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "./scripts/dev.sh",
+    "build": "node scripts/check-icons.mjs && node scripts/check-models.mjs && tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit",
+    "check-icons": "node scripts/check-icons.mjs",
+    "gen-icon-data": "node scripts/gen-icon-data.mjs",
+    "check-models": "node scripts/check-models.mjs",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@heroui/react": "3.2.4",
+    "@heroui/styles": "3.2.4",
+    "@iconify-json/gravity-ui": "1.2.13",
+    "@iconify/react": "6.0.2",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "pinyin-pro": "^3.29.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-markdown": "10.1.0",
+    "react-router-dom": "7.18.2",
+    "recharts": "^3.10.1",
+    "remark-gfm": "4.0.1",
+    "tailwind-variants": "3.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "26.3.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "@vitejs/plugin-react": "5.1.2",
+    "playwright": "^1.62.1",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vite": "7.3.3"
+  }
+}
