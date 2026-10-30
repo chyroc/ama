@@ -41,6 +41,7 @@ import (
 	"github.com/chyroc/ama/server/feishu"
 	"github.com/chyroc/ama/server/openapi"
 	"github.com/chyroc/ama/server/orchestrator"
+	"github.com/chyroc/ama/server/weixin"
 
 	"github.com/chyroc/ama/server/shared/gopkg/requestid"
 )
@@ -72,6 +73,9 @@ type Config struct {
 
 	// FeishuService is the Feishu integration module. Required.
 	FeishuService *feishu.Service
+	// WeixinService is the WeChat channel (server/weixin). Optional: when nil its routes still exist
+	// (every route declared in authz/matrix.go must be registered) and answer 503.
+	WeixinService *weixin.Service
 
 	// CoreHandler is the set of routes of the core business module (workspaces / members / agents
 	// / skills / Ark credentials / run history).
@@ -248,6 +252,7 @@ func New(cfg Config) (*Server, error) {
 	authorized := cfg.Authz.Wrap(guarded)
 
 	feishu.NewHandler(cfg.FeishuService, log).Register(authorized)
+	weixin.NewHandler(cfg.WeixinService, log).Register(authorized)
 	// The three API Key routes: account-level resources, but through the full authentication +
 	// authorization chain.
 	//

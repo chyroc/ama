@@ -192,6 +192,7 @@ var schemaOrder = []string{
 	"Run", "RunEvent", "RunThread", "TokenUsage", "UsageSummary", "UsageBucket",
 	"Schedule", "ScheduleDraft", "ScheduleSpec", "DeliveryTarget",
 	"FeishuApp", "FeishuRegistration",
+	"WeixinAccount", "WeixinLogin",
 }
 
 // agentProps are the fields of Agent and AgentDraft.
@@ -684,7 +685,7 @@ var entitySchemas = map[string]any{
 					"把它当成「等人确认」会让 agent 卡在那里等一个永远不会来的输入。",
 				"running", "idle", "requires_action", "rescheduling", "terminated"),
 			"trigger": enumField("触发来源。对话是 `manual`。",
-				"manual", "feishu", "api", "schedule", "webhook"),
+				"manual", "feishu", "weixin", "api", "schedule", "webhook"),
 			"triggerDetail": stringField("如飞书群名、调用方标识。"),
 			"startedAt":     stringField("开始时刻。"),
 			"lastActivityAt": stringField("最后一条事件的时刻。\n\n" +
@@ -855,5 +856,31 @@ var entitySchemas = map[string]any{
 			"status":          stringField("进度。"),
 			"verificationUrl": stringField("授权页地址，给用户点。"),
 			"reason":          stringField("失败原因，中文句子。"),
+		}),
+	"WeixinAccount": objectSchema("一个接入到空间的微信机器人。token 与同步游标永远不出服务端。",
+		requiredFields("id", "workspaceId", "botId", "ownerUserId", "agentId", "status", "lastError",
+			"lastInboundAt", "createdBy", "createdAt", "updatedAt"), map[string]any{
+			"id":            stringField("AMA 这边的 id，`wxa_` 开头。"),
+			"workspaceId":   stringField("所属空间。"),
+			"botId":         stringField("微信那边的机器人 id（ilink_bot_id）。"),
+			"ownerUserId":   stringField("扫码的那个微信用户，机器人和这个人对话。"),
+			"agentId":       stringField("绑定的 agent；空串表示还没绑，此时机器人只回一句提示。"),
+			"status":        enumField("`expired` 表示微信那边拒绝了 token（被解绑或在别处登录），要重新扫码。", "active", "expired"),
+			"lastError":     stringField("最近一个值得展示的问题，没有则为空串。"),
+			"lastInboundAt": stringField("最近一次收到消息的时刻，没有则为空串。"),
+			"createdBy":     stringField("谁扫码接入的（邮箱）。"),
+			"createdAt":     stringField("接入时刻。"),
+			"updatedAt":     stringField("最后修改时刻。"),
+		}),
+	"WeixinLogin": objectSchema("一次进行中的微信扫码登录。",
+		requiredFields("id", "status", "qrcodeDataUrl", "qrcodeContent", "message", "accountId", "expiresAt"), map[string]any{
+			"id": stringField("登录 id，`wxl_` 开头，轮询用。"),
+			"status": enumField("进度。`confirmed` / `already_connected` / `expired` / `failed` 是终态。",
+				"waiting", "scanned", "need_verify_code", "confirmed", "already_connected", "expired", "failed"),
+			"qrcodeDataUrl": stringField("二维码 PNG 的 data URL，直接放进 `<img>`；终态时为空串。"),
+			"qrcodeContent": stringField("二维码里的内容（一个链接）；终态时为空串。"),
+			"message":       stringField("当前状态的一句话说明。"),
+			"accountId":     stringField("`confirmed` 时接入的微信机器人 id。"),
+			"expiresAt":     stringField("登录失效时刻。"),
 		}),
 }

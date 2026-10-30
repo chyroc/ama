@@ -69,6 +69,10 @@
       "description": "飞书应用接入"
     },
     {
+      "name": "微信",
+      "description": "微信机器人接入（扫码登录、绑定 agent）"
+    },
+    {
       "name": "文件",
       "description": "个人文件：账号级的文件存储，按登录用户隔离（字节在对象存储）。小文件一次上传，大文件分片上传；下载返回限时签名 URL"
     },
@@ -10299,6 +10303,374 @@
         }
       }
     },
+    "/api/workspaces/{workspaceId}/weixin/accounts": {
+      "parameters": [
+        {
+          "name": "workspaceId",
+          "in": "path",
+          "required": true,
+          "description": "空间 id，形如 `ws_example`。\n\n⚠️ **不是 `key`**：空间有两个标识——`id`（`ws_` 开头，接口里用）与 `key`（短名，出现在前端 URL 里）。拿到 key 要先用 `GET /api/workspace-by-key` 换 id。",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "WeixinAccounts_list",
+        "summary": "列出微信机器人",
+        "tags": [
+          "微信"
+        ],
+        "description": "列出空间里已接入的微信机器人（不含 token）。\n\n**权限**：`read`——要求是该空间成员，最低角色 `viewer`。",
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WeixinAccount"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未登录：没带凭据、凭据不认识、或会话过期。`code=unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "没权限。`code=access_denied`。两种情况文案不同：**不是这个空间的成员**（去找管理员邀请你），或**角色不够**（本接口要求 `viewer`，去找管理员提权）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workspaces/{workspaceId}/weixin/accounts/{accountId}": {
+      "parameters": [
+        {
+          "name": "workspaceId",
+          "in": "path",
+          "required": true,
+          "description": "空间 id，形如 `ws_example`。\n\n⚠️ **不是 `key`**：空间有两个标识——`id`（`ws_` 开头，接口里用）与 `key`（短名，出现在前端 URL 里）。拿到 key 要先用 `GET /api/workspace-by-key` 换 id。",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "accountId",
+          "in": "path",
+          "required": true,
+          "description": "微信机器人的 id（`wxa_` 开头），取值来自 `GET .../weixin/accounts`。\n\n⚠️ 不是火山账号 id，也不是微信那边的 `botId`。",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "WeixinAccounts_remove",
+        "summary": "断开微信机器人",
+        "tags": [
+          "微信"
+        ],
+        "description": "断开微信机器人，一分钟内停止收消息。\n\n**权限**：`manage`——要求是该空间成员，最低角色 `admin`（owner 同级）。",
+        "responses": {
+          "204": {
+            "description": "删除成功。"
+          },
+          "401": {
+            "description": "未登录：没带凭据、凭据不认识、或会话过期。`code=unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "没权限。`code=access_denied`。两种情况文案不同：**不是这个空间的成员**（去找管理员邀请你），或**角色不够**（本接口要求 `admin`，去找管理员提权）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "WeixinAccounts_update",
+        "summary": "绑定微信机器人的 agent",
+        "tags": [
+          "微信"
+        ],
+        "description": "给微信机器人绑定 agent，`agentId` 传空串即解绑。\n\n绑定从下一条消息起生效，且会开始新的对话（会话按 agent 区分）。\n\n**权限**：`manage`——要求是该空间成员，最低角色 `admin`（owner 同级）。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "改绑定的 agent。",
+                "required": [
+                  "agentId"
+                ],
+                "properties": {
+                  "agentId": {
+                    "type": "string",
+                    "description": "同一空间里的 agent id；传空串表示解绑。"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeixinAccount"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未登录：没带凭据、凭据不认识、或会话过期。`code=unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "没权限。`code=access_denied`。两种情况文案不同：**不是这个空间的成员**（去找管理员邀请你），或**角色不够**（本接口要求 `admin`，去找管理员提权）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workspaces/{workspaceId}/weixin/logins": {
+      "parameters": [
+        {
+          "name": "workspaceId",
+          "in": "path",
+          "required": true,
+          "description": "空间 id，形如 `ws_example`。\n\n⚠️ **不是 `key`**：空间有两个标识——`id`（`ws_` 开头，接口里用）与 `key`（短名，出现在前端 URL 里）。拿到 key 要先用 `GET /api/workspace-by-key` 换 id。",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "Logins_create",
+        "summary": "发起微信扫码登录",
+        "tags": [
+          "微信"
+        ],
+        "description": "发起一次微信扫码登录，返回二维码（PNG data URL）。\n\n**权限**：`manage`——要求是该空间成员，最低角色 `admin`（owner 同级）。",
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeixinLogin"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未登录：没带凭据、凭据不认识、或会话过期。`code=unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "没权限。`code=access_denied`。两种情况文案不同：**不是这个空间的成员**（去找管理员邀请你），或**角色不够**（本接口要求 `admin`，去找管理员提权）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workspaces/{workspaceId}/weixin/logins/{loginId}": {
+      "parameters": [
+        {
+          "name": "workspaceId",
+          "in": "path",
+          "required": true,
+          "description": "空间 id，形如 `ws_example`。\n\n⚠️ **不是 `key`**：空间有两个标识——`id`（`ws_` 开头，接口里用）与 `key`（短名，出现在前端 URL 里）。拿到 key 要先用 `GET /api/workspace-by-key` 换 id。",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "loginId",
+          "in": "path",
+          "required": true,
+          "description": "微信扫码登录的 id（`wxl_` 开头），由 `POST .../weixin/logins` 返回。",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "Logins_retrieve",
+        "summary": "轮询微信扫码登录",
+        "tags": [
+          "微信"
+        ],
+        "description": "推进一次扫码登录并返回当前状态。\n\n一次请求最多等 20 秒（微信那边是长轮询），返回后接着再调即可，直到 `status` 是终态。只有发起登录的那个人能轮询。\n\n**权限**：`manage`——要求是该空间成员，最低角色 `admin`（owner 同级）。",
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeixinLogin"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未登录：没带凭据、凭据不认识、或会话过期。`code=unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "没权限。`code=access_denied`。两种情况文案不同：**不是这个空间的成员**（去找管理员邀请你），或**角色不够**（本接口要求 `admin`，去找管理员提权）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workspaces/{workspaceId}/weixin/logins/{loginId}/verify-code": {
+      "parameters": [
+        {
+          "name": "workspaceId",
+          "in": "path",
+          "required": true,
+          "description": "空间 id，形如 `ws_example`。\n\n⚠️ **不是 `key`**：空间有两个标识——`id`（`ws_` 开头，接口里用）与 `key`（短名，出现在前端 URL 里）。拿到 key 要先用 `GET /api/workspace-by-key` 换 id。",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "loginId",
+          "in": "path",
+          "required": true,
+          "description": "微信扫码登录的 id（`wxl_` 开头），由 `POST .../weixin/logins` 返回。",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "VerifyCode_create",
+        "summary": "提交微信验证码",
+        "tags": [
+          "微信"
+        ],
+        "description": "提交手机微信上显示的数字（`status` 为 `need_verify_code` 时）。\n\n**权限**：`manage`——要求是该空间成员，最低角色 `admin`（owner 同级）。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "提交验证码。",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "description": "手机微信上显示的数字。"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeixinLogin"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未登录：没带凭据、凭据不认识、或会话过期。`code=unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "没权限。`code=access_denied`。两种情况文案不同：**不是这个空间的成员**（去找管理员邀请你），或**角色不够**（本接口要求 `admin`，去找管理员提权）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/llms.txt": {
       "get": {
         "operationId": "LLMsTxt_retrieve",
@@ -10540,7 +10912,7 @@
         "name": "trigger",
         "in": "query",
         "required": false,
-        "description": "只看这些触发方式的运行（`manual` / `feishu` / `schedule` / `api` / `webhook`）。缺省给全部。\n\n可以重复给（`?trigger=a&trigger=b`），也可以逗号分隔——两种都收。\n\n「人跟 agent 对话」的会话是 `manual,feishu` 两种（网页发起的与飞书里聊出来的），对话页左栏取的就是这个组合。",
+        "description": "只看这些触发方式的运行（`manual` / `feishu` / `weixin` / `schedule` / `api` / `webhook`）。缺省给全部。\n\n可以重复给（`?trigger=a&trigger=b`），也可以逗号分隔——两种都收。\n\n「人跟 agent 对话」的会话是 `manual,feishu,weixin` 三种（网页发起的、飞书里与微信里聊出来的），对话页左栏取的就是这个组合。",
         "schema": {
           "type": "string"
         }
@@ -11853,6 +12225,7 @@
             "enum": [
               "manual",
               "feishu",
+              "weixin",
               "api",
               "schedule",
               "webhook"
@@ -12316,6 +12689,125 @@
           "verificationUrl": {
             "type": "string",
             "description": "授权页地址，给用户点。"
+          }
+        }
+      },
+      "WeixinAccount": {
+        "type": "object",
+        "description": "一个接入到空间的微信机器人。token 与同步游标永远不出服务端。",
+        "required": [
+          "id",
+          "workspaceId",
+          "botId",
+          "ownerUserId",
+          "agentId",
+          "status",
+          "lastError",
+          "lastInboundAt",
+          "createdBy",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "agentId": {
+            "type": "string",
+            "description": "绑定的 agent；空串表示还没绑，此时机器人只回一句提示。"
+          },
+          "botId": {
+            "type": "string",
+            "description": "微信那边的机器人 id（ilink_bot_id）。"
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "接入时刻。"
+          },
+          "createdBy": {
+            "type": "string",
+            "description": "谁扫码接入的（邮箱）。"
+          },
+          "id": {
+            "type": "string",
+            "description": "AMA 这边的 id，`wxa_` 开头。"
+          },
+          "lastError": {
+            "type": "string",
+            "description": "最近一个值得展示的问题，没有则为空串。"
+          },
+          "lastInboundAt": {
+            "type": "string",
+            "description": "最近一次收到消息的时刻，没有则为空串。"
+          },
+          "ownerUserId": {
+            "type": "string",
+            "description": "扫码的那个微信用户，机器人和这个人对话。"
+          },
+          "status": {
+            "type": "string",
+            "description": "`expired` 表示微信那边拒绝了 token（被解绑或在别处登录），要重新扫码。",
+            "enum": [
+              "active",
+              "expired"
+            ]
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "最后修改时刻。"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "所属空间。"
+          }
+        }
+      },
+      "WeixinLogin": {
+        "type": "object",
+        "description": "一次进行中的微信扫码登录。",
+        "required": [
+          "id",
+          "status",
+          "qrcodeDataUrl",
+          "qrcodeContent",
+          "message",
+          "accountId",
+          "expiresAt"
+        ],
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "description": "`confirmed` 时接入的微信机器人 id。"
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "登录失效时刻。"
+          },
+          "id": {
+            "type": "string",
+            "description": "登录 id，`wxl_` 开头，轮询用。"
+          },
+          "message": {
+            "type": "string",
+            "description": "当前状态的一句话说明。"
+          },
+          "qrcodeContent": {
+            "type": "string",
+            "description": "二维码里的内容（一个链接）；终态时为空串。"
+          },
+          "qrcodeDataUrl": {
+            "type": "string",
+            "description": "二维码 PNG 的 data URL，直接放进 `<img>`；终态时为空串。"
+          },
+          "status": {
+            "type": "string",
+            "description": "进度。`confirmed` / `already_connected` / `expired` / `failed` 是终态。",
+            "enum": [
+              "waiting",
+              "scanned",
+              "need_verify_code",
+              "confirmed",
+              "already_connected",
+              "expired",
+              "failed"
+            ]
           }
         }
       }

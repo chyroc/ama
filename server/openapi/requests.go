@@ -34,6 +34,7 @@ var pathParamDocs = map[string]string{
 	"runId":     "Run 的 id，形如 `run_example`。一次对话就是一条 Run。",
 	"provider":  "授权源标识，取值见 `GET /api/integrations` 返回的 `provider` 字段。",
 	"sessionId": "飞书注册流程的 sessionId，由发起注册的接口返回。",
+	"loginId":   "微信扫码登录的 id（`wxl_` 开头），由 `POST .../weixin/logins` 返回。",
 	// The ones below had no description before. **Missing one gives no error**, but agents cannot tell what to put in,
 	// so they fill it with the parent resource's id, which gives 404, and the error does not point to "filled in the wrong kind of id".
 	"revisionId": "版本 id，取值来自对应资源的 `GET .../revisions` 列表。\n\n" +
@@ -65,6 +66,8 @@ var pathParamDocs = map[string]string{
 // authorization management (integrations), whose description says "the value comes from /api/integrations/...",
 // and used on Ark Vault credentials it would send agents to a completely unrelated endpoint.
 var pathParamDocsByPath = map[string]string{
+	"/api/workspaces/{workspaceId}/weixin/accounts/{accountId} accountId": "微信机器人的 id（`wxa_` 开头），取值来自 `GET .../weixin/accounts`。\n\n" +
+		"⚠️ 不是火山账号 id，也不是微信那边的 `botId`。",
 	"/api/workspaces/{workspaceId}/ark/vaults/{vaultId}/credentials credentialId": "方舟保管库凭证 id，取值来自 `GET .../ark/vaults/{vaultId}/credentials`。\n\n" +
 		"⚠️ 不是授权管理里那个 integrations credential id，两者是不同系统的东西。",
 	"/api/workspaces/{workspaceId}/ark/vaults/{vaultId}/credentials/{credentialId} credentialId": "方舟保管库凭证 id，取值来自 `GET .../ark/vaults/{vaultId}/credentials`。\n\n" +
@@ -232,11 +235,11 @@ func queryParameters(r authz.RouteDecl) []any {
 					"另外 `trigger=schedule` **不能替代它**：那只筛出「所有定时任务的运行」，"+
 					"一个空间有多条任务时它们混在一起。"),
 			queryParam("trigger", false,
-				"只看这些触发方式的运行（`manual` / `feishu` / `schedule` / "+
+				"只看这些触发方式的运行（`manual` / `feishu` / `weixin` / `schedule` / "+
 					"`api` / `webhook`）。缺省给全部。\n\n"+
 					"可以重复给（`?trigger=a&trigger=b`），也可以逗号分隔——两种都收。\n\n"+
-					"「人跟 agent 对话」的会话是 `manual,feishu` 两种"+
-					"（网页发起的与飞书里聊出来的），对话页左栏取的就是这个组合。"),
+					"「人跟 agent 对话」的会话是 `manual,feishu,weixin` 三种"+
+					"（网页发起的、飞书里与微信里聊出来的），对话页左栏取的就是这个组合。"),
 			queryParam("limit", false,
 				"这一页最多给多少条，上限 200（超了截到上限而不是报错）。\n\n"+
 					"⚠️ **缺省是不限**（把整个空间的运行全给），"+
@@ -755,6 +758,14 @@ var requestSchemas = map[string]any{
 		"发起飞书应用自助注册。", nil, map[string]any{
 			"appId": stringField("飞书应用的 app_id，形如 `cli_xxx`。"),
 		}),
+	"PATCH /api/workspaces/{workspaceId}/weixin/accounts/{accountId}": objectSchema(
+		"改绑定的 agent。", requiredFields("agentId"), map[string]any{
+			"agentId": stringField("同一空间里的 agent id；传空串表示解绑。"),
+		}),
+	"POST /api/workspaces/{workspaceId}/weixin/logins/{loginId}/verify-code": objectSchema(
+		"提交验证码。", requiredFields("code"), map[string]any{
+			"code": stringField("手机微信上显示的数字。"),
+		}),
 	"POST /api/integrations/{provider}/authorize": objectSchema(
 		"发起一次授权（给我自己）。", nil, map[string]any{}),
 	"PUT /api/integrations/{provider}/app": objectSchema(
@@ -1076,6 +1087,12 @@ var responseSchemas = map[string]any{
 	"POST /api/feishu/apps/{id}/admin-authorization":                     schemaRef("FeishuApp"),
 	"GET /api/workspaces/{workspaceId}/feishu/registrations/{sessionId}": schemaRef("FeishuRegistration"),
 	"POST /api/workspaces/{workspaceId}/feishu/registrations":            schemaRef("FeishuRegistration"),
+
+	"GET /api/workspaces/{workspaceId}/weixin/accounts":                      arrayOf("WeixinAccount"),
+	"PATCH /api/workspaces/{workspaceId}/weixin/accounts/{accountId}":        schemaRef("WeixinAccount"),
+	"POST /api/workspaces/{workspaceId}/weixin/logins":                       schemaRef("WeixinLogin"),
+	"GET /api/workspaces/{workspaceId}/weixin/logins/{loginId}":              schemaRef("WeixinLogin"),
+	"POST /api/workspaces/{workspaceId}/weixin/logins/{loginId}/verify-code": schemaRef("WeixinLogin"),
 
 	"GET " + PathSpec:    typeSchema("object"),
 	"GET " + PathLLMsTxt: typeSchema("string"),

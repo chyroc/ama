@@ -229,6 +229,7 @@ func tagsArray() []any {
 		{tagSchedule, "定时任务与自唤醒"},
 		{tagUsage, "token 用量聚合"},
 		{tagFeishu, "飞书应用接入"},
+		{tagWeixin, "微信机器人接入（扫码登录、绑定 agent）"},
 		{tagUserFile, "个人文件：账号级的文件存储，按登录用户隔离（字节在对象存储）。" +
 			"小文件一次上传，大文件分片上传；下载返回限时签名 URL"},
 		{tagMeta, "面向 agent 的自描述接口（本文档与 /llms.txt），免鉴权"},

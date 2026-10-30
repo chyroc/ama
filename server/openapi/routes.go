@@ -39,6 +39,7 @@ const (
 	tagSchedule      = "定时任务"
 	tagUsage         = "用量"
 	tagFeishu        = "飞书"
+	tagWeixin        = "微信"
 	tagMeta          = "自描述"
 	tagDebug         = "开发用"
 	tagArkProxy      = "方舟透传"
@@ -62,6 +63,8 @@ func tagFor(r authz.RouteDecl) string {
 		return tagDebug
 	case strings.Contains(p, "/feishu"):
 		return tagFeishu
+	case strings.Contains(p, "/weixin"):
+		return tagWeixin
 	case strings.Contains(p, "/members"):
 		return tagMember
 	case strings.Contains(p, "/agents"):
@@ -445,6 +448,16 @@ var routeDocs = map[string]string{
 	"POST /api/feishu/apps/{id}/admin-authorization":                     "标记管理员已授权。",
 	"DELETE /api/feishu/apps/{id}":                                       "解除飞书应用接入。",
 
+	"GET /api/workspaces/{workspaceId}/weixin/accounts": "列出空间里已接入的微信机器人（不含 token）。",
+	"PATCH /api/workspaces/{workspaceId}/weixin/accounts/{accountId}": "给微信机器人绑定 agent，`agentId` 传空串即解绑。\n\n" +
+		"绑定从下一条消息起生效，且会开始新的对话（会话按 agent 区分）。",
+	"DELETE /api/workspaces/{workspaceId}/weixin/accounts/{accountId}": "断开微信机器人，一分钟内停止收消息。",
+	"POST /api/workspaces/{workspaceId}/weixin/logins":                 "发起一次微信扫码登录，返回二维码（PNG data URL）。",
+	"GET /api/workspaces/{workspaceId}/weixin/logins/{loginId}": "推进一次扫码登录并返回当前状态。\n\n" +
+		"一次请求最多等 20 秒（微信那边是长轮询），返回后接着再调即可，直到 `status` 是终态。" +
+		"只有发起登录的那个人能轮询。",
+	"POST /api/workspaces/{workspaceId}/weixin/logins/{loginId}/verify-code": "提交手机微信上显示的数字（`status` 为 `need_verify_code` 时）。",
+
 	"GET /api/workspaces/{workspaceId}/api-keys": "列出**我自己**在这个空间页面里创建的 API Key。\n\n" +
 		"⚠️ **key 是账号级的，不是空间级的**：这里只是管理入口放在空间设置页，" +
 		"返回的是当前调用者自己的全部 key。换个空间打开会看到同一批。\n\n" +
@@ -753,6 +766,13 @@ var routeSummaries = map[string]string{
 	"POST /api/feishu/apps/{id}/admin-authorization":                     "标记管理员已授权",
 	"PATCH /api/feishu/apps/{id}/trigger-mode":                           "改机器人在群里什么时候开口",
 	"DELETE /api/feishu/apps/{id}":                                       "解除飞书接入",
+
+	"GET /api/workspaces/{workspaceId}/weixin/accounts":                      "列出微信机器人",
+	"PATCH /api/workspaces/{workspaceId}/weixin/accounts/{accountId}":        "绑定微信机器人的 agent",
+	"DELETE /api/workspaces/{workspaceId}/weixin/accounts/{accountId}":       "断开微信机器人",
+	"POST /api/workspaces/{workspaceId}/weixin/logins":                       "发起微信扫码登录",
+	"GET /api/workspaces/{workspaceId}/weixin/logins/{loginId}":              "轮询微信扫码登录",
+	"POST /api/workspaces/{workspaceId}/weixin/logins/{loginId}/verify-code": "提交微信验证码",
 
 	"GET /api/workspaces/{workspaceId}/api-keys":  "列出我的 API Key",
 	"POST /api/workspaces/{workspaceId}/api-keys": "创建 API Key",

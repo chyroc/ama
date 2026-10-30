@@ -30,13 +30,24 @@ type Mux interface {
 }
 
 // Register mounts the routes. Each one must also be declared in authz/matrix.go.
+//
+// With a nil service the routes are still mounted (authz panics on declared-but-missing routes) and
+// answer 503, so a server built without the WeChat channel says so instead of returning 404.
 func (h *Handler) Register(mux Mux) {
-	mux.HandleFunc("GET /api/workspaces/{workspaceId}/weixin/accounts", h.listAccounts)
-	mux.HandleFunc("PATCH /api/workspaces/{workspaceId}/weixin/accounts/{accountId}", h.updateAccount)
-	mux.HandleFunc("DELETE /api/workspaces/{workspaceId}/weixin/accounts/{accountId}", h.deleteAccount)
-	mux.HandleFunc("POST /api/workspaces/{workspaceId}/weixin/logins", h.startLogin)
-	mux.HandleFunc("GET /api/workspaces/{workspaceId}/weixin/logins/{loginId}", h.pollLogin)
-	mux.HandleFunc("POST /api/workspaces/{workspaceId}/weixin/logins/{loginId}/verify-code", h.submitVerifyCode)
+	route := func(pattern string, fn http.HandlerFunc) {
+		if h.svc == nil {
+			fn = func(w http.ResponseWriter, _ *http.Request) {
+				failWith(w, http.StatusServiceUnavailable, "这个服务没有启用微信渠道", "weixin_disabled")
+			}
+		}
+		mux.HandleFunc(pattern, fn)
+	}
+	route("GET /api/workspaces/{workspaceId}/weixin/accounts", h.listAccounts)
+	route("PATCH /api/workspaces/{workspaceId}/weixin/accounts/{accountId}", h.updateAccount)
+	route("DELETE /api/workspaces/{workspaceId}/weixin/accounts/{accountId}", h.deleteAccount)
+	route("POST /api/workspaces/{workspaceId}/weixin/logins", h.startLogin)
+	route("GET /api/workspaces/{workspaceId}/weixin/logins/{loginId}", h.pollLogin)
+	route("POST /api/workspaces/{workspaceId}/weixin/logins/{loginId}/verify-code", h.submitVerifyCode)
 }
 
 func (h *Handler) listAccounts(w http.ResponseWriter, r *http.Request) {

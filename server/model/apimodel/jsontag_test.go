@@ -132,6 +132,8 @@ func roots() []any {
 		apimodel.Host{},
 		apimodel.WorkspaceHost{},
 		apimodel.UserFile{},
+		apimodel.WeixinAccount{},
+		apimodel.WeixinLogin{},
 		apimodel.StartUserFileUpload{},
 		apimodel.UserFilePart{},
 		apimodel.Issue{},

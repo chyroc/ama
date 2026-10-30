@@ -817,6 +817,19 @@ var routePermissions = map[string]permission{
 	"PATCH /api/feishu/apps/{id}/trigger-mode": {action: ActionManage, kind: KindFeishuApp, idParam: "id"},
 	"DELETE /api/feishu/apps/{id}":             {action: ActionManage, kind: KindFeishuApp, idParam: "id"},
 
+	// -- WeChat channel (server/weixin) ----------------------------------------------
+	//
+	// Everything is under the workspace, so the role check needs no resource lookup; the handler makes
+	// sure the account / login belongs to that workspace (and a login to the person who started it).
+	// Connecting, binding and disconnecting are Manage, like the Feishu app writes above: they change who
+	// answers in a chat outside AMA.
+	"GET /api/workspaces/{workspaceId}/weixin/accounts":                      {action: ActionRead},
+	"PATCH /api/workspaces/{workspaceId}/weixin/accounts/{accountId}":        {action: ActionManage},
+	"DELETE /api/workspaces/{workspaceId}/weixin/accounts/{accountId}":       {action: ActionManage},
+	"POST /api/workspaces/{workspaceId}/weixin/logins":                       {action: ActionManage},
+	"GET /api/workspaces/{workspaceId}/weixin/logins/{loginId}":              {action: ActionManage},
+	"POST /api/workspaces/{workspaceId}/weixin/logins/{loginId}/verify-code": {action: ActionManage},
+
 	// -- For development (only registered when DevRoutes is on; see optionalRoutes below) ------------
 	"POST /api/_debug/reset": {action: ActionNone},
 	"POST /api/_debug/clear": {action: ActionNone},

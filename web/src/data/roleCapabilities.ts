@@ -94,11 +94,11 @@ export const ROLE_CAPABILITIES: readonly RoleCapability[] = [
   {
     id: "view-content",
     label: "查看空间内容",
-    detail: "Agent、技能、运行历史与对话记录、定时任务、问题、飞书接入状态，以及空间可用的宿主机列表（Agent 编辑页选执行端要用）",
+    detail: "Agent、技能、运行历史与对话记录、定时任务、问题、飞书与微信接入状态，以及空间可用的宿主机列表（Agent 编辑页选执行端要用）",
     minRole: "viewer",
     roles: ["owner", "admin", "member", "viewer"],
     action: "read",
-    routes: ["GET /api/agents/{id}", "GET /api/agents/{id}/ark-console", "GET /api/agents/{id}/revisions", "GET /api/agents/{id}/revisions/{revisionId}", "GET /api/agents/{id}/sync-task", "GET /api/feishu/apps/{id}", "GET /api/issue-attachments/{id}", "GET /api/issues/{id}", "GET /api/issues/{id}/attachments", "GET /api/issues/{id}/comments", "GET /api/runs/{id}", "GET /api/runs/{runId}/ark-console", "GET /api/runs/{runId}/events", "GET /api/runs/{runId}/events/stream", "GET /api/runs/{runId}/pending", "GET /api/schedules/{id}", "GET /api/schedules/{id}/revisions", "GET /api/schedules/{id}/revisions/{revisionId}", "GET /api/skills/{id}", "GET /api/skills/{id}/ark-console", "GET /api/skills/{id}/file", "GET /api/skills/{id}/revisions", "GET /api/skills/{id}/revisions/{revisionId}", "GET /api/workspaces/{workspaceId}/agents", "GET /api/workspaces/{workspaceId}/feishu/apps", "GET /api/workspaces/{workspaceId}/feishu/chats", "GET /api/workspaces/{workspaceId}/hosts", "GET /api/workspaces/{workspaceId}/issues", "GET /api/workspaces/{workspaceId}/runs", "GET /api/workspaces/{workspaceId}/schedules", "GET /api/workspaces/{workspaceId}/skills", "GET /api/workspaces/{workspaceId}/usage"],
+    routes: ["GET /api/agents/{id}", "GET /api/agents/{id}/ark-console", "GET /api/agents/{id}/revisions", "GET /api/agents/{id}/revisions/{revisionId}", "GET /api/agents/{id}/sync-task", "GET /api/feishu/apps/{id}", "GET /api/issue-attachments/{id}", "GET /api/issues/{id}", "GET /api/issues/{id}/attachments", "GET /api/issues/{id}/comments", "GET /api/runs/{id}", "GET /api/runs/{runId}/ark-console", "GET /api/runs/{runId}/events", "GET /api/runs/{runId}/events/stream", "GET /api/runs/{runId}/pending", "GET /api/schedules/{id}", "GET /api/schedules/{id}/revisions", "GET /api/schedules/{id}/revisions/{revisionId}", "GET /api/skills/{id}", "GET /api/skills/{id}/ark-console", "GET /api/skills/{id}/file", "GET /api/skills/{id}/revisions", "GET /api/skills/{id}/revisions/{revisionId}", "GET /api/workspaces/{workspaceId}/agents", "GET /api/workspaces/{workspaceId}/feishu/apps", "GET /api/workspaces/{workspaceId}/feishu/chats", "GET /api/workspaces/{workspaceId}/hosts", "GET /api/workspaces/{workspaceId}/issues", "GET /api/workspaces/{workspaceId}/runs", "GET /api/workspaces/{workspaceId}/schedules", "GET /api/workspaces/{workspaceId}/skills", "GET /api/workspaces/{workspaceId}/usage", "GET /api/workspaces/{workspaceId}/weixin/accounts"],
   },
   {
     id: "view-sandbox",
@@ -252,6 +252,15 @@ export const ROLE_CAPABILITIES: readonly RoleCapability[] = [
     roles: ["owner", "admin"],
     action: "manage",
     routes: ["DELETE /api/feishu/apps/{id}", "GET /api/workspaces/{workspaceId}/feishu/registrations/{sessionId}", "PATCH /api/feishu/apps/{id}/trigger-mode", "POST /api/feishu/apps/{id}/admin-authorization", "POST /api/feishu/apps/{id}/readiness/refresh", "POST /api/workspaces/{workspaceId}/feishu/registrations"],
+  },
+  {
+    id: "manage-weixin",
+    label: "微信接入",
+    detail: "扫码接入微信机器人、给它绑定 Agent、断开接入",
+    minRole: "admin",
+    roles: ["owner", "admin"],
+    action: "manage",
+    routes: ["DELETE /api/workspaces/{workspaceId}/weixin/accounts/{accountId}", "GET /api/workspaces/{workspaceId}/weixin/logins/{loginId}", "PATCH /api/workspaces/{workspaceId}/weixin/accounts/{accountId}", "POST /api/workspaces/{workspaceId}/weixin/logins", "POST /api/workspaces/{workspaceId}/weixin/logins/{loginId}/verify-code"],
   },
   {
     id: "manage-integration",

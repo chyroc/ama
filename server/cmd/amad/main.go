@@ -48,6 +48,9 @@ import (
 	"syscall"
 	"time"
 
+	wx "github.com/chyroc/ama/server/shared/infra/weixin"
+	"github.com/chyroc/ama/server/weixin"
+
 	"github.com/chyroc/ama/server/apihandler"
 	"github.com/chyroc/ama/server/auth"
 	"github.com/chyroc/ama/server/authz"
@@ -57,6 +60,7 @@ import (
 	"github.com/chyroc/ama/server/httpd"
 	"github.com/chyroc/ama/server/model/apimodel"
 	"github.com/chyroc/ama/server/repository/dao/authdao"
+	"github.com/chyroc/ama/server/repository/dao/channeldao"
 	"github.com/chyroc/ama/server/repository/dao/coredao"
 	"github.com/chyroc/ama/server/repository/dao/coremem"
 	"github.com/chyroc/ama/server/repository/dao/feishudao"
@@ -149,11 +153,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	startupPhase(log, 2, "连接数据库并装配 Store")
-	coreStore, feishuStore, authStore, termRelay, workerWakes, mqDB, pgDSN, closeStores, err := openStores(ctx, cfg, log)
+	st, err := openStores(ctx, cfg, log)
 	if err != nil {
 		return err
 	}
-	defer closeStores()
+	defer st.close()
+	coreStore, feishuStore, authStore := st.core, st.feishu, st.auth
+	termRelay, workerWakes, mqDB, pgDSN := st.termRelay, st.workerWakes, st.mqDB, st.pgDSN
 
 	// File bytes (attachments, skill files, skill packages, personal files) are all in S3-compatible object storage; PG only stores metadata.
 	s3Client, blobs, err := openBlobStore(ctx, cfg, log)
@@ -350,6 +356,19 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
+	// WeChat channel (server/weixin): QR-code login and connected bots. The pollers start with the other
+	// background loops below, once Redis is known.
+	weixinClient := wx.New(wx.Config{})
+	weixinSvc, err := weixin.NewService(weixin.Config{
+		Store:  st.weixin,
+		Client: weixinClient,
+		Agents: weixinAgents{svc: coreSvc},
+		Logger: log,
+	})
+	if err != nil {
+		return err
+	}
+
 	// Feishu user authorization: registered as the last card.
 	//
 	// ⚠️ **It can only be registered here, not moved into newIntegrationRegistry**: it depends on coreSvc
@@ -474,6 +493,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	srv, err := httpd.New(httpd.Config{
 		Addr:          cfg.Server.AddrOrDefault(),
 		FeishuService: svc,
+		WeixinService: weixinSvc,
 		CoreHandler:   coreHandler,
 		AuthHandler:   authHandler,
 		Authz:         guard,
@@ -553,6 +573,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 	defer closeRedis()
+
+	// WeChat pollers: one long poll per connected bot, each on exactly one instance (Redis lease). Without
+	// Redis two instances would race on the same bot's cursor and each answer part of the messages, so the
+	// pollers do not start at all; the page still connects bots, they just get no answers. Say so here.
+	weixinPoller, err := newWeixinPoller(st, weixinClient, coreSvc, rdb, log)
+	if err != nil {
+		return err
+	}
 
 	// HTTP, worker and Feishu long connections run in parallel; if any one exits, all are wound down.
 	// errgroup cancels ctx at the first non-nil error, so the others exit gracefully along with it.
@@ -708,19 +736,23 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if feishuSupervisor != nil {
 		g.Go(func() error { return feishuSupervisor.Run(runCtx) })
 	}
+	if weixinPoller != nil {
+		g.Go(func() error { return weixinPoller.Run(runCtx) })
+	}
 	return g.Wait()
 }
 
-// feishuConversations adapts *core.Service to feishu.Conversations.
+// channelConversations adapts *core.Service to the Conversations interfaces of the chat channels
+// (channel.Conversations, and feishu.Conversations which extends it).
 //
 // The two modules are deliberately coupled only by an ID string (see the comment in core/agent.go), so feishu does not import
 // core, and only declares the few methods it needs. The only mismatch is the return type of CreateChannelConversation
 // (core gives apimodel.Run, a channel only wants a session ID), converted here.
-type feishuConversations struct{ svc *core.Service }
+type channelConversations struct{ svc *core.Service }
 
 // CreateChannelConversation marks the run with the channel as its trigger; channel.Kind values equal
 // the channel members of apimodel.RunTrigger (see apimodel.RunTrigger.IsChannel).
-func (c feishuConversations) CreateChannelConversation(
+func (c channelConversations) CreateChannelConversation(
 	ctx context.Context, workspaceID, agentID string, kind channel.Kind, detail string,
 ) (feishu.Run, error) {
 	run, err := c.svc.CreateChannelConversation(ctx, workspaceID, agentID, apimodel.RunTrigger(kind), detail)
@@ -730,25 +762,25 @@ func (c feishuConversations) CreateChannelConversation(
 	return feishu.Run{ID: run.ID}, nil
 }
 
-func (c feishuConversations) AppendRunEvents(
+func (c channelConversations) AppendRunEvents(
 	ctx context.Context, runID string, raw []json.RawMessage,
 ) ([]json.RawMessage, error) {
 	return c.svc.AppendRunEvents(ctx, runID, raw)
 }
 
-func (c feishuConversations) StreamRunEvents(
+func (c channelConversations) StreamRunEvents(
 	ctx context.Context, runID string, onFrame func(raw []byte) error,
 ) error {
 	return c.svc.StreamRunEvents(ctx, runID, onFrame)
 }
 
-func (c feishuConversations) AgentsBoundToFeishuApp(
+func (c channelConversations) AgentsBoundToFeishuApp(
 	ctx context.Context, feishuAppID string,
 ) ([]string, error) {
 	return c.svc.Agents().AgentsBoundToFeishuApp(ctx, feishuAppID)
 }
 
-func (c feishuConversations) AgentDisabled(ctx context.Context, agentID string) bool {
+func (c channelConversations) AgentDisabled(ctx context.Context, agentID string) bool {
 	return c.svc.Agents().AgentDisabled(ctx, agentID)
 }
 
@@ -759,7 +791,7 @@ func (c feishuConversations) AgentDisabled(ctx context.Context, agentID string) 
 //
 // **Not found returns false (steer)**, matching the default side of apimodel.FollowUpMode: that enum's
 // empty string means steer. Failing open to the same side means a database hiccup does not flip this agent's behavior.
-func (c feishuConversations) AgentFollowUpQueues(ctx context.Context, agentID string) bool {
+func (c channelConversations) AgentFollowUpQueues(ctx context.Context, agentID string) bool {
 	agent, err := c.svc.GetAgent(ctx, agentID)
 	if err != nil {
 		return false
@@ -777,7 +809,7 @@ func (c feishuConversations) AgentFollowUpQueues(ctx context.Context, agentID st
 // (which returns false), because the two have their "default level" on different sides; the rule is **fall back to each one's own
 // default**, not "both return false". Getting the direction wrong would make a database hiccup wipe this agent's
 // chain of thought for a whole turn, with zero errors on the user side.
-func (c feishuConversations) AgentShowsProgress(ctx context.Context, agentID string) bool {
+func (c channelConversations) AgentShowsProgress(ctx context.Context, agentID string) bool {
 	agent, err := c.svc.GetAgent(ctx, agentID)
 	if err != nil {
 		return true
@@ -787,11 +819,11 @@ func (c feishuConversations) AgentShowsProgress(ctx context.Context, agentID str
 
 // InterruptRun only sends the interrupt, no new message. The new message of steering is sent by the feishu side through the normal path
 // after it gets the lock; for the reason see the comment on core.Service.InterruptRun.
-func (c feishuConversations) InterruptRun(ctx context.Context, runID string) error {
+func (c channelConversations) InterruptRun(ctx context.Context, runID string) error {
 	return c.svc.InterruptRun(ctx, runID)
 }
 
-func (c feishuConversations) SyncRunEvents(ctx context.Context, runID string) error {
+func (c channelConversations) SyncRunEvents(ctx context.Context, runID string) error {
 	return c.svc.SyncRunEvents(ctx, runID)
 }
 
@@ -799,7 +831,7 @@ func (c feishuConversations) SyncRunEvents(ctx context.Context, runID string) er
 //
 // The feishu side deliberately does not know core's domain models (see the comment on feishu.Conversations),
 // so the type degrades here into string, and the value range is pinned by comments on both sides.
-func (c feishuConversations) RunStatus(ctx context.Context, runID string) (string, error) {
+func (c channelConversations) RunStatus(ctx context.Context, runID string) (string, error) {
 	run, err := c.svc.GetRun(ctx, runID)
 	if err != nil {
 		return "", err
@@ -811,7 +843,7 @@ func (c feishuConversations) RunStatus(ctx context.Context, runID string) (strin
 //
 // authz needs two things: looking up someone's role in some workspace, and resolving a resource id to its owning workspace.
 // The former and the resolution of agent/skill/run/schedule are in core, and Feishu app resolution is in feishu:
-// one interface spans two modules, so the adapter lives in the process layer (the same reason as feishuConversations:
+// one interface spans two modules, so the adapter lives in the process layer (the same reason as channelConversations:
 // the two business modules are deliberately coupled only by ID strings, and neither imports the other).
 type authzMembership struct {
 	core   *core.Service
@@ -929,7 +961,7 @@ func newFeishuSupervisor(
 
 	inbound, err := feishu.NewInbound(feishu.InboundConfig{
 		Store:         store,
-		Conversations: feishuConversations{svc: coreSvc},
+		Conversations: channelConversations{svc: coreSvc},
 		Sender:        larkSender{},
 		Tokens:        larkTokens{},
 		// Prefetch message context: card bodies, sub-messages of merged forwards, group names. Failures only degrade;
@@ -962,6 +994,50 @@ func newFeishuSupervisor(
 		return nil, nil, noop, err
 	}
 	return sup, rdb, func() { _ = rdb.Close() }, nil
+}
+
+// newWeixinPoller wires the WeChat pollers. It returns nil (not an error) without Redis; see the call site.
+func newWeixinPoller(
+	st *stores, client *wx.Client, coreSvc *core.Service, rdb *redis.Client, log *slog.Logger,
+) (*weixin.Poller, error) {
+	if rdb == nil {
+		log.Warn("未配置 Redis，微信消息轮询不启动 —— 微信机器人能接入，但发消息不会有任何回复")
+		return nil, nil
+	}
+	return weixin.NewPoller(weixin.PollerConfig{
+		Store:         st.weixin,
+		Channel:       st.channel,
+		Conversations: channelConversations{svc: coreSvc},
+		Client:        client,
+		Leases:        channelLeases{client: rdb},
+		Logger:        log,
+	})
+}
+
+// channelLeases adapts shared/infra/redis to channel.LeaseStore. Same shape as larkLeases, but channel
+// declares its own interface (it does not import infra packages it does not need).
+type channelLeases struct{ client *redis.Client }
+
+func (l channelLeases) Acquire(ctx context.Context, key string, ttl time.Duration) (channel.Lease, bool, error) {
+	lease, ok, err := l.client.Acquire(ctx, key, ttl)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return lease, true, nil
+}
+
+// weixinAgents adapts core to weixin.Agents.
+type weixinAgents struct{ svc *core.Service }
+
+func (a weixinAgents) AgentWorkspace(ctx context.Context, agentID string) (string, error) {
+	agent, err := a.svc.GetAgent(ctx, agentID)
+	if err != nil {
+		if errors.Is(err, core.ErrNotFound) {
+			return "", weixin.ErrAgentNotFound
+		}
+		return "", err
+	}
+	return agent.WorkspaceID, nil
 }
 
 // schedulerLeases adapts shared/infra/redis to core.Leases.
@@ -1177,7 +1253,7 @@ func progressStoreOf(store feishu.Store, log *slog.Logger) feishu.ProgressStore 
 
 // chatOrigins adapts *feishu.Service to core.ChatOrigins.
 //
-// One more example of "core only declares what it needs, the process layer connects it" (same as feishuConversations /
+// One more example of "core only declares what it needs, the process layer connects it" (same as channelConversations /
 // larkLeases). The only translation needed here is turning feishu.ChatOrigin into apimodel.DeliveryTarget:
 // the fields on both sides map one to one, they just belong to different packages.
 type chatOrigins struct{ svc *feishu.Service }
@@ -1213,7 +1289,7 @@ func (c chatOrigins) OriginOf(
 // It needs three things at once: core's DeliveryTarget (the shape of the delivery address), feishu's Store
 // (looking up apps and secrets), and shared/infra/lark's message sending. core and feishu are deliberately coupled only by ID strings
 // (see the comment in core/agent.go), and putting it on either side would break that decoupling, so it lives in the process wiring layer,
-// the same technique as feishuConversations / larkLeases.
+// the same technique as channelConversations / larkLeases.
 type scheduleDeliverer struct {
 	store  feishu.Store
 	sender larkSender
@@ -1298,24 +1374,41 @@ func scheduleCardText(title, text string) string {
 // lands on B, and the login drops. So mem only suits a single local process; production must use pg.
 // ⚠️ It also returns a pgmq.DB: for "expired message cleanup" (see shared/infra/pgmq/purge.go).
 // In the mem tier it is nil: then there is no mq_messages table, so nothing to clean.
-func openStores(
-	ctx context.Context, cfg *config.Config, log *slog.Logger,
-) (core.Store, feishu.Store, auth.Store, core.TerminalRelay, core.WorkerWakeups, pgmq.DB, string, func(), error) {
+// stores is the data layer chosen by openStores.
+//
+// termRelay / workerWakes / mqDB are nil and pgDSN is "" in the mem tier (see openStores).
+type stores struct {
+	core        core.Store
+	feishu      feishu.Store
+	auth        auth.Store
+	channel     channel.Store
+	weixin      weixin.Store
+	termRelay   core.TerminalRelay
+	workerWakes core.WorkerWakeups
+	mqDB        pgmq.DB
+	pgDSN       string
+	close       func()
+}
+
+func openStores(ctx context.Context, cfg *config.Config, log *slog.Logger) (*stores, error) {
 	if cfg.Server.UseMemStore() {
 		log.Warn("用内存 Store，进程重启数据就没了（server.store=mem）；多实例下还会随机掉登录")
 		coreStore, err := coremem.NewSeededMemStore()
 		if err != nil {
-			return nil, nil, nil, nil, nil, nil, "", nil, err
+			return nil, err
 		}
 		// With the in-memory Store there is no terminal relay: that path needs a table visible to all instances.
 		// **A single process does not need it** (every POST is sure to land in the same process), so nil is right.
-		return coreStore, feishu.NewMemStore(), auth.NewMemStore(), nil, nil, nil, "", func() {}, nil
+		return &stores{
+			core: coreStore, feishu: feishu.NewMemStore(), auth: auth.NewMemStore(),
+			channel: channel.NewMemStore(), weixin: weixin.NewMemStore(), close: func() {},
+		}, nil
 	}
 
 	stdCfg := cfg.PG.ToStdConfig()
 	client, err := pg.NewStandard(ctx, stdCfg)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, "", nil, fmt.Errorf("连 PostgreSQL 失败（%s）: %w", stdCfg.Redacted(), err)
+		return nil, fmt.Errorf("连 PostgreSQL 失败（%s）: %w", stdCfg.Redacted(), err)
 	}
 
 	// Encryptor for Ark credentials. **A wrong key must exit right here**, not wait until the first read/write:
@@ -1323,7 +1416,7 @@ func openStores(
 	crypto, err := cryptobox.New(cfg.Ark.SecretKey)
 	if err != nil {
 		client.Close()
-		return nil, nil, nil, nil, nil, nil, "", nil, fmt.Errorf("方舟凭证加密密钥不可用（ark.secretKey）: %w", err)
+		return nil, fmt.Errorf("方舟凭证加密密钥不可用（ark.secretKey）: %w", err)
 	}
 	// This line is the **only** way for ops to know "is encryption really in effect": the two modes are exactly the same
 	// in function (keys work normally either way); the only difference is the shape in the database. So both modes must be stated, with the consequence.
@@ -1338,32 +1431,48 @@ func openStores(
 	coreStore, err := coredao.NewSeededPGStore(ctx, client, coredao.WithCrypto(crypto))
 	if err != nil {
 		client.Close()
-		return nil, nil, nil, nil, nil, nil, "", nil, fmt.Errorf("初始化 core 的 PG Store 失败: %w", err)
+		return nil, fmt.Errorf("初始化 core 的 PG Store 失败: %w", err)
 	}
 	feishuStore, err := feishudao.NewPGStore(ctx, client)
 	if err != nil {
 		client.Close()
-		return nil, nil, nil, nil, nil, nil, "", nil, fmt.Errorf("初始化 feishu 的 PG Store 失败: %w", err)
+		return nil, fmt.Errorf("初始化 feishu 的 PG Store 失败: %w", err)
 	}
 	authStore, err := authdao.NewPGStore(ctx, client)
 	if err != nil {
 		client.Close()
-		return nil, nil, nil, nil, nil, nil, "", nil, fmt.Errorf("初始化 auth 的 PG Store 失败: %w", err)
+		return nil, fmt.Errorf("初始化 auth 的 PG Store 失败: %w", err)
+	}
+
+	// Chat channels other than Feishu (server/channel) and the WeChat channel. The WeChat bot tokens use the
+	// same encryption key as the Ark credentials.
+	channelStore, err := channeldao.NewPGStore(ctx, client)
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("初始化 channel 的 PG Store 失败: %w", err)
+	}
+	weixinStore, err := channeldao.NewWeixinPGStore(ctx, client, crypto)
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("初始化 weixin 的 PG Store 失败: %w", err)
 	}
 
 	relay, wakeups, err := newTerminalRelay(client, stdCfg, log)
 	if err != nil {
 		client.Close()
-		return nil, nil, nil, nil, nil, nil, "", nil, fmt.Errorf("初始化终端中转失败: %w", err)
+		return nil, fmt.Errorf("初始化终端中转失败: %w", err)
 	}
 
 	dsn, err := stdCfg.DSN()
 	if err != nil {
 		client.Close()
-		return nil, nil, nil, nil, nil, nil, "", nil, fmt.Errorf("拼宿主机唤醒监听 DSN 失败: %w", err)
+		return nil, fmt.Errorf("拼宿主机唤醒监听 DSN 失败: %w", err)
 	}
 	log.Info("已连上 PostgreSQL", slog.String("dsn", stdCfg.Redacted()))
-	return coreStore, feishuStore, authStore, relay, wakeups, pgmqDB{client}, dsn, func() { client.Close() }, nil
+	return &stores{
+		core: coreStore, feishu: feishuStore, auth: authStore, channel: channelStore, weixin: weixinStore,
+		termRelay: relay, workerWakes: wakeups, mqDB: pgmqDB{client}, pgDSN: dsn, close: func() { client.Close() },
+	}, nil
 }
 
 // openBlobStore decides where file bytes go, returning the S3 client (the personal files domain needs it too) and the BlobStore for core.

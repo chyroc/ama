@@ -57,6 +57,7 @@ const (
 	domainArk          = "ark"
 	domainIntegration  = "integration"
 	domainFeishu       = "feishu"
+	domainWeixin       = "weixin"
 	domainSandbox      = "sandbox"
 	domainAPIKey       = "apiKey"
 	// domainHost is "the host executor": workspace-level bindings are managed in workspace settings.
@@ -105,6 +106,8 @@ func domainOf(path string) string {
 		return domainArk
 	case contains(path, "/feishu"):
 		return domainFeishu
+	case contains(path, "/weixin"):
+		return domainWeixin
 	// Agent authorization injection (handing a real person's credentials to an agent). Must be checked before agents:
 	// it lives on /api/agents/{id}/integrations, but its meaning is far from "change the agent":
 	// the injected token represents a real person, and what the agent can do equals what that employee can do.
@@ -198,7 +201,7 @@ var capabilityDecls = []capabilityDecl{
 	{
 		id:    "view-content",
 		label: "查看空间内容",
-		detail: "Agent、技能、运行历史与对话记录、定时任务、问题、飞书接入状态，" +
+		detail: "Agent、技能、运行历史与对话记录、定时任务、问题、飞书与微信接入状态，" +
 			"以及空间可用的宿主机列表（Agent 编辑页选执行端要用）",
 		pairs: []string{
 			domainAgent + ":read",
@@ -207,6 +210,7 @@ var capabilityDecls = []capabilityDecl{
 			domainSchedule + ":read",
 			domainIssue + ":read",
 			domainFeishu + ":read",
+			domainWeixin + ":read",
 			domainHost + ":read",
 		},
 	},
@@ -325,6 +329,12 @@ var capabilityDecls = []capabilityDecl{
 		label:  "飞书接入",
 		detail: "注册应用、解除接入、改免 @ 触发",
 		pairs:  []string{domainFeishu + ":manage"},
+	},
+	{
+		id:     "manage-weixin",
+		label:  "微信接入",
+		detail: "扫码接入微信机器人、给它绑定 Agent、断开接入",
+		pairs:  []string{domainWeixin + ":manage"},
 	},
 	{
 		id:    "manage-integration",
