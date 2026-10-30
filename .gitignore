@@ -44,3 +44,6 @@ web/test-results/
 
 # Cross-compiled CLI outputs (made by ./cli/build.sh, for publishing to npm; do not commit)
 cli/bin/ama-*
+
+# Third-party repositories cloned for reference (e.g. repos/openclaw-weixin); read-only, never commit
+repos/
