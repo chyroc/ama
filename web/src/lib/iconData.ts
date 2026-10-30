@@ -3,7 +3,7 @@
  * subset of `@iconify-json/gravity-ui` picked by the USED list in `src/lib/icons.ts`.
  *
  * Why not import the whole package: that would put all 799 icons (451KB raw / 104KB gzip) into
- * the main chunk, while we only use 75 of them. JSON cannot be
+ * the main chunk, while we only use 76 of them. JSON cannot be
  * tree-shaken by key, and the runtime subset loop does not stop bundling. See the header
  * comment of scripts/gen-icon-data.mjs for details.
  *
@@ -216,6 +216,9 @@ export const GRAVITY_ICONS: IconifyJSON["icons"] = {
   },
   "shield-check": {
     "body": "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"m3.003 4.702l4.22-2.025a1.8 1.8 0 0 1 1.554 0l4.22 2.025a.89.89 0 0 1 .503.8V6a8.55 8.55 0 0 1-3.941 7.201l-.986.631a1.06 1.06 0 0 1-1.146 0l-.986-.63A8.55 8.55 0 0 1 2.5 6v-.498c0-.341.196-.652.503-.8m3.57-3.377L2.354 3.35A2.39 2.39 0 0 0 1 5.502V6a10.05 10.05 0 0 0 4.632 8.465l.986.63a2.56 2.56 0 0 0 2.764 0l.986-.63A10.05 10.05 0 0 0 15 6v-.498c0-.918-.526-1.755-1.354-2.152l-4.22-2.025a3.3 3.3 0 0 0-2.852 0M11.1 6.45a.75.75 0 1 0-1.2-.9L7.419 8.858L6.03 7.47a.75.75 0 0 0-1.06 1.06l2 2a.75.75 0 0 0 1.13-.08z\" clip-rule=\"evenodd\"/>"
+  },
+  "smartphone": {
+    "body": "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M12 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-5A1.5 1.5 0 0 1 4 12.5v-9A1.5 1.5 0 0 1 5.5 2h5A1.5 1.5 0 0 1 12 3.5m-1.5-3a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-5a3 3 0 0 1-3-3v-9a3 3 0 0 1 3-3zM6.25 11a.75.75 0 0 0 0 1.5h3.5a.75.75 0 0 0 0-1.5z\" clip-rule=\"evenodd\"/>"
   },
   "sparkles": {
     "body": "<path fill=\"currentColor\" d=\"M13 10a.75.75 0 0 1 .725.556a2.37 2.37 0 0 0 1.72 1.72a.75.75 0 0 1 0 1.449a2.37 2.37 0 0 0-1.72 1.72a.75.75 0 0 1-1.45 0a2.37 2.37 0 0 0-1.72-1.72a.75.75 0 0 1 0-1.45a2.37 2.37 0 0 0 1.72-1.72l.043-.117A.75.75 0 0 1 13 10M7 0a1.5 1.5 0 0 1 1.48 1.253c.242 1.455.696 2.364 1.3 2.968c.603.603 1.512 1.057 2.967 1.3a1.5 1.5 0 0 1 0 2.958c-1.455.243-2.364.697-2.968 1.3c-.603.604-1.057 1.513-1.3 2.968a1.5 1.5 0 0 1-2.958 0c-.243-1.455-.697-2.364-1.3-2.968c-.604-.603-1.513-1.057-2.968-1.3a1.5 1.5 0 0 1 0-2.958c1.455-.243 2.364-.697 2.968-1.3c.603-.604 1.057-1.513 1.3-2.968l.028-.133A1.5 1.5 0 0 1 7 0m0 1.5C6.45 4.8 4.8 6.45 1.5 7c3.3.55 4.95 2.2 5.5 5.5c.55-3.3 2.2-4.95 5.5-5.5C9.2 6.45 7.55 4.8 7 1.5\"/>"
