@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chyroc/ama/server/channel"
 	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 	"github.com/chyroc/ama/server/shared/infra/lark"
 )
@@ -116,8 +117,8 @@ func (f *fakeConversations) CreateConversation(_ context.Context, _, agentID str
 
 // CreateFeishuConversation uses the same counter as CreateConversation, and also records detail,
 // so tests can assert "the Feishu path used the method with the source marker".
-func (f *fakeConversations) CreateFeishuConversation(
-	ctx context.Context, workspaceID, agentID, detail string,
+func (f *fakeConversations) CreateChannelConversation(
+	ctx context.Context, workspaceID, agentID string, _ channel.Kind, detail string,
 ) (Run, error) {
 	f.mu.Lock()
 	f.details = append(f.details, detail)

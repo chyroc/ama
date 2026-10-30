@@ -42,6 +42,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chyroc/ama/server/channel"
 	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 )
 
@@ -140,8 +141,8 @@ func (in *Inbound) resumeLive(ctx context.Context, rec InflightTurnRecord, log *
 	//
 	// **It cannot be cleared and restarted**: the text already produced may no longer be sent by the Ark side
 	// (frames consumed by the previous process are not replayed), and clearing would permanently lose the beginning of the answer.
-	answer := &answerBuffer{persist: in.inflightPersister(ctx, rec)}
-	answer.write(rec.LastText)
+	answer := &channel.AnswerBuffer{Persist: in.inflightPersister(ctx, rec)}
+	answer.Write(rec.LastText)
 
 	// A recovered turn is subject to the same time limit; do not let it hang forever.
 	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runTimeout)
@@ -184,12 +185,12 @@ func (in *Inbound) resumeLive(ctx context.Context, rec InflightTurnRecord, log *
 	var failedUpstream bool
 	streamErr := in.cfg.Conversations.StreamRunEvents(runCtx, rec.RunID, func(raw []byte) error {
 		if text, ok := arkframe.AgentText(raw); ok && text != "" {
-			answer.write(text)
+			answer.Write(text)
 		}
 		// Same as runAndReply: the part before a tool call is usually narration like "let me go check", not the reply.
-		// See the type comment on answerBuffer: splitting **does not lose content**, and it falls back when the turn ends with tool_use.
+		// See channel.AnswerBuffer: splitting **does not lose content**, and it falls back when the turn ends with tool_use.
 		if arkframe.StartsToolCall(raw) {
-			answer.reset()
+			answer.Reset()
 		}
 		// Same as runAndReply: a turn whose retries were exhausted on the Ark side gets a message that can state the cause.
 		// See turnFailedUpstream.
@@ -203,8 +204,8 @@ func (in *Inbound) resumeLive(ctx context.Context, rec InflightTurnRecord, log *
 		log.Warn("续跑的事件流异常结束", "error", streamErr.Error())
 	}
 	// However the stream ends, finish up: close the chain of thought and send what was collected.
-	if failedUpstream && strings.TrimSpace(answer.text()) == "" {
-		answer.write(replyRetriesExhausted)
+	if failedUpstream && strings.TrimSpace(answer.Text()) == "" {
+		answer.Write(replyRetriesExhausted)
 	}
 	return in.finishAndClear(ctx, rec, token, answer, progress, log)
 }
@@ -215,7 +216,7 @@ func (in *Inbound) resumeLive(ctx context.Context, rec InflightTurnRecord, log *
 // and the user would see a duplicate reply. So send errors are only reported, not allowed to block cleanup.
 func (in *Inbound) finishAndClear(
 	ctx context.Context, rec InflightTurnRecord, token string,
-	answer *answerBuffer, progress *turnProgress, log *slog.Logger,
+	answer *channel.AnswerBuffer, progress *turnProgress, log *slog.Logger,
 ) error {
 	defer in.clearInflight(ctx, rec)
 
@@ -229,7 +230,7 @@ func (in *Inbound) finishAndClear(
 		waitForProgressTerminal(finishCtx, in.cfg.Progress, ProgressDeliveryKey(rec.RunID, rec.SrcMessageID), in.now, log)
 	}
 	sendErr := sendFinalReply(finishCtx, in.cfg.Sender, token, rec.SrcMessageID,
-		ProgressDeliveryKey(rec.RunID, rec.SrcMessageID), answer.text(), rec.ReplyInThread, log)
+		ProgressDeliveryKey(rec.RunID, rec.SrcMessageID), answer.Text(), rec.ReplyInThread, log)
 
 	// After the answer is sent, add a DONE.
 	//

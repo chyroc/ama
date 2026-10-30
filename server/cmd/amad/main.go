@@ -51,6 +51,7 @@ import (
 	"github.com/chyroc/ama/server/apihandler"
 	"github.com/chyroc/ama/server/auth"
 	"github.com/chyroc/ama/server/authz"
+	"github.com/chyroc/ama/server/channel"
 	"github.com/chyroc/ama/server/core"
 	"github.com/chyroc/ama/server/feishu"
 	"github.com/chyroc/ama/server/httpd"
@@ -713,24 +714,16 @@ func run(ctx context.Context, log *slog.Logger) error {
 // feishuConversations adapts *core.Service to feishu.Conversations.
 //
 // The two modules are deliberately coupled only by an ID string (see the comment in core/agent.go), so feishu does not import
-// core, and only declares the few methods it needs. The only mismatch is the return type of CreateConversation
-// (core gives apimodel.Run, feishu only wants a session ID), converted here.
+// core, and only declares the few methods it needs. The only mismatch is the return type of CreateChannelConversation
+// (core gives apimodel.Run, a channel only wants a session ID), converted here.
 type feishuConversations struct{ svc *core.Service }
 
-func (c feishuConversations) CreateConversation(
-	ctx context.Context, workspaceID, agentID string,
+// CreateChannelConversation marks the run with the channel as its trigger; channel.Kind values equal
+// the channel members of apimodel.RunTrigger (see apimodel.RunTrigger.IsChannel).
+func (c feishuConversations) CreateChannelConversation(
+	ctx context.Context, workspaceID, agentID string, kind channel.Kind, detail string,
 ) (feishu.Run, error) {
-	run, err := c.svc.CreateConversation(ctx, workspaceID, agentID)
-	if err != nil {
-		return feishu.Run{}, err
-	}
-	return feishu.Run{ID: run.ID}, nil
-}
-
-func (c feishuConversations) CreateFeishuConversation(
-	ctx context.Context, workspaceID, agentID, detail string,
-) (feishu.Run, error) {
-	run, err := c.svc.CreateFeishuConversation(ctx, workspaceID, agentID, detail)
+	run, err := c.svc.CreateChannelConversation(ctx, workspaceID, agentID, apimodel.RunTrigger(kind), detail)
 	if err != nil {
 		return feishu.Run{}, err
 	}

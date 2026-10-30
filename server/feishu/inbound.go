@@ -48,9 +48,9 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/chyroc/ama/server/channel"
 	"github.com/chyroc/ama/server/feishu/feishumodel"
 
 	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
@@ -114,29 +114,12 @@ const (
 // It is an interface instead of a direct dependency on core: the two modules are coupled only by ID strings, and a reverse import would
 // break that decoupling. The method signatures match the methods of the same name on *core.Service, which is passed in directly at wiring time.
 type Conversations interface {
-	// CreateConversation creates a new session; the returned run.ID is the Ark session id.
-	CreateConversation(ctx context.Context, workspaceID, agentID string) (Run, error)
-	// CreateFeishuConversation is the same, but marks the Run as trigger=feishu and carries a source description
-	// (chat name / direct chat). **The Feishu path always uses it**, otherwise the run history cannot tell whether a session was
-	// started from the web page or from a Feishu chat.
-	CreateFeishuConversation(ctx context.Context, workspaceID, agentID, detail string) (Run, error)
-	// AppendRunEvents sends events into the session (we only send user.message).
-	AppendRunEvents(ctx context.Context, runID string, raw []json.RawMessage) ([]json.RawMessage, error)
-	// StreamRunEvents subscribes to the session's event stream, blocking until the stream ends or ctx is cancelled.
-	StreamRunEvents(ctx context.Context, runID string, onFrame func(raw []byte) error) error
+	// channel.Conversations is the part every chat channel shares: create a session (marked
+	// trigger=feishu so the run history shows where it came from), send events, subscribe, and
+	// "is this agent disabled".
+	channel.Conversations
 	// AgentsBoundToFeishuApp lists the agent IDs bound to a Feishu app.
 	AgentsBoundToFeishuApp(ctx context.Context, feishuAppID string) ([]string, error)
-
-	// AgentDisabled answers "has this agent been disabled".
-	//
-	// **It must be asked before running**; we cannot rely on the error from AppendRunEvents. core does block
-	// disabled agents, but that is an error, and when this package sees an error it only logs and returns,
-	// so **people in the chat get nothing**, which looks like "the bot is ignoring me". Silent failures like this are the hardest to debug.
-	// Asking first lets us reply with a human sentence; see how dispatch uses it.
-	//
-	// Not found / store query failed always returns false (fail-open): a store hiccup should not make every Feishu bot
-	// go silent together, and "agent does not exist" is handled elsewhere (session creation reports it).
-	AgentDisabled(ctx context.Context, agentID string) bool
 
 	// AgentFollowUpQueues answers "should this agent queue the next message sent in a row".
 	//
@@ -193,13 +176,8 @@ type Conversations interface {
 	RunStatus(ctx context.Context, runID string) (string, error)
 }
 
-// Run is a minimal projection of apimodel.Run from core, with only the fields this package uses.
-//
-// We do not use apimodel.Run directly so that the Conversations interface is self-contained: this package does not need to know
-// core's domain model, only a session ID.
-type Run struct {
-	ID string
-}
+// Run is the Ark session a turn runs on; see channel.Run.
+type Run = channel.Run
 
 // MessageSender is the ability to send cards, provided by shared/infra/lark.
 type MessageSender interface {
@@ -711,8 +689,8 @@ func (in *Inbound) ensureScopedRun(
 	if !scope.Valid() {
 		log.Warn("这条消息算不出会话作用域，退回一次性会话（不会有上下文）",
 			"chatType", msg.ChatType)
-		run, err := in.cfg.Conversations.CreateFeishuConversation(
-			ctx, app.WorkspaceID, agentID, feishuTriggerDetail(msg))
+		run, err := in.cfg.Conversations.CreateChannelConversation(
+			ctx, app.WorkspaceID, agentID, channel.Feishu, feishuTriggerDetail(msg))
 		if err != nil {
 			return scope, "", fmt.Errorf("建会话失败: %w", err)
 		}
@@ -741,8 +719,8 @@ func (in *Inbound) ensureScopedRun(
 		return scope, "", fmt.Errorf("查会话作用域失败: %w", err)
 	}
 
-	run, err := in.cfg.Conversations.CreateFeishuConversation(
-		ctx, app.WorkspaceID, agentID, feishuTriggerDetail(msg))
+	run, err := in.cfg.Conversations.CreateChannelConversation(
+		ctx, app.WorkspaceID, agentID, channel.Feishu, feishuTriggerDetail(msg))
 	if err != nil {
 		return scope, "", fmt.Errorf("建会话失败: %w", err)
 	}
@@ -967,119 +945,46 @@ func (in *Inbound) runAndReply(
 	// Collecting it separately from progress is deliberate: the chain of thought wants "thinking + tool calls", the answer wants
 	// the text the agent finally says, and the two are different event types in the Ark event stream. Mixing them would let
 	// the thinking process leak into the final answer.
-	answer := &answerBuffer{
+	answer := &channel.AnswerBuffer{
 		// Each time new content arrives, write it back to the store, so the answer can continue after a service restart.
 		//
-		// **This step cannot be skipped.** The answer used to live only in this strings.Builder (process memory);
-		// when the process died, the text already produced was gone. On recovery SyncRunEvents can fill in events from the Ark side,
-		// but **frames already consumed by this process do not come again**, so the user got
-		// an answer missing its beginning, with no sign that anything was missing.
-		persist: in.inflightPersister(ctx, rec),
+		// **This step cannot be skipped.** The answer used to live only in process memory; when the process died, the text
+		// already produced was gone. On recovery SyncRunEvents can fill in events from the Ark side, but **frames already
+		// consumed by this process do not come again**, so the user got an answer missing its beginning.
+		Persist: in.inflightPersister(ctx, rec),
 	}
 
-	// **Ark does not close this stream by itself**; we must recognize the final frame and disconnect ourselves.
+	// Subscribe, send, and wait for the final frame (channel.RunTurn). Feishu adds two things on top:
+	// the chain of thought eats every frame (progress.consume), and the user message carries the prefetched context.
 	//
-	// Ark keeps an SSE long connection per session and keeps waiting for the next user message after end_turn, so
-	// StreamRunEvents does not return. Without this step, wg.Wait() below would block until runCtx
-	// times out (runTimeout, 60 minutes), and **the release of the serial lock above hangs off this function's defer**,
-	// so the turn is clearly finished but the lock is held until the wait limit. When the user asks the next question in the chat, they get
-	// "the previous message is still being processed", and the log looks completely normal. This bug really happened in production.
-	//
-	// The test is the same as turnEnded in core/scheduler.go and applyEventToRun in core/chat.go:
-	// an idle with requires_action **does not count as ended** (the agent is waiting for a tool result, and continues after the worker
-	// returns it); treating it as ended would cut the answer in half.
-	//
-	// Use a separate streamCtx instead of reusing cancel: cancellation here is "normal finishing",
-	// and must not affect other timeout-based decisions on runCtx.
-	streamCtx, stopStream := context.WithCancel(runCtx)
-	defer stopStream()
-
-	// Subscribe before sending: core events are only stored when someone is subscribed; the other way round loses the beginning.
-	var streamErr error
-	var interrupted atomic.Bool
-	// Diagnostic counters for this turn: when we fall back to the default text, we use them to explain "why answer is empty".
-	// Without them the fallback branch leaves no trace at all, and afterwards we can only guess (this investigation got stuck exactly here).
-	var frames, messages atomic.Int64
-	var failedUpstream atomic.Bool
-	var lastStop atomic.Value
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		streamErr = in.cfg.Conversations.StreamRunEvents(streamCtx, runID, func(raw []byte) error {
-			frames.Add(1)
-			if text, ok := arkframe.AgentText(raw); ok && text != "" {
-				messages.Add(1)
-				answer.write(text)
+	// ⚠️ The final frame must reach progress.consume before the stream is dropped (RunTurn calls OnFrame first),
+	// or the chat is left with a thinking process that spins forever.
+	res, err := channel.RunTurn(runCtx, channel.TurnConfig{
+		Conversations: in.cfg.Conversations,
+		RunID:         runID,
+		Answer:        answer,
+		OnFrame:       progress.consume,
+		BuildEvent: func(ctx context.Context) (json.RawMessage, error) {
+			// Prefetch context: card body / sub-messages of a merged forward / chat name. It is done after subscribing
+			// because it needs the token and may be slow. It never returns an error; failure only means less context.
+			prefetched := in.prefetchContext(ctx, in.cfg.Fetcher, token, msg, log)
+			// The prefetch also gets the chat name, shown when picking a chat for scheduled tasks. Failure only affects display.
+			if name := strings.TrimSpace(prefetched.ChatName); name != "" {
+				if err := in.cfg.Store.SetChatName(ctx, msg.AppID, msg.ChatID, name); err != nil {
+					log.Warn("更新群名失败，定时任务的群列表里可能仍显示旧名或 chat_id", "error", err.Error())
+				}
 			}
-			// A tool call splits the text collected so far into segments: that segment is usually narration like "let me go check", not the reply.
-			// See the type comment on answerBuffer: splitting **does not lose content**, and it falls back when the turn ends with tool_use.
-			if arkframe.StartsToolCall(raw) {
-				answer.reset()
-			}
-			// This turn was redirected by the user's next message. Record it, and **send no message when finishing because of it**:
-			// being interrupted is not a failure, and having no answer is its normal result. See turnInterrupted.
-			if arkframe.Interrupted(raw) {
-				interrupted.Store(true)
-			}
-			// The Ark side gave up on this turn (rate-limit retries exhausted). It satisfies turnEnded but is not "finished answering";
-			// when finishing we use it to switch to a message that can state the cause. See turnFailedUpstream.
-			if arkframe.FailedUpstream(raw) {
-				failedUpstream.Store(true)
-			}
-			if s := arkframe.StopReason(raw); s != "" {
-				lastStop.Store(s)
-			}
-			// The chain of thought eats every frame: thinking, tool calls, and final state are all in there.
-			progress.consume(streamCtx, raw)
-			// The final frame must be fed to the chain of thought before dropping the stream, or the closing frame is lost,
-			// and the chat is left with a thinking process that spins forever.
-			if arkframe.TurnEnded(raw) {
-				stopStream()
-			}
-			return nil
-		})
-		// Us dropping the stream is normal finishing, not a failure; do not let it mark this turn as error.
-		if streamErr != nil && streamCtx.Err() != nil && runCtx.Err() == nil {
-			streamErr = nil
-		}
-	}()
-
-	// Give the subscription a moment to be set up. No complex handshake here: StreamRunEvents first fills in historical events internally,
-	// so even if we send too early nothing is lost.
-	time.Sleep(50 * time.Millisecond)
-
-	// Prefetch context: card body / sub-messages of a merged forward / chat name.
-	//
-	// ⚠️ **It is placed here and not earlier** because it needs the token, and the token is only obtained at this step.
-	// It never returns an error (see prefetchContext); failure only means a bit less context.
-	prefetched := in.prefetchContext(runCtx, in.cfg.Fetcher, token, msg, log)
-	// The prefetch also gets the chat name, which is recorded in the chat list: that is what is shown when picking a chat for scheduled tasks.
-	// After a chat is renamed, the next time someone @-mentions the bot in the chat this gets updated. Failure only affects display.
-	if name := strings.TrimSpace(prefetched.ChatName); name != "" {
-		if err := in.cfg.Store.SetChatName(runCtx, msg.AppID, msg.ChatID, name); err != nil {
-			log.Warn("更新群名失败，定时任务的群列表里可能仍显示旧名或 chat_id", "error", err.Error())
-		}
-	}
-
-	event, err := arkframe.UserMessage(
-		larkUserText(msg, prefetched, log),
-		renderLarkPromptWithContext(msg, prefetched, log),
-	)
+			return arkframe.UserMessage(
+				larkUserText(msg, prefetched, log),
+				renderLarkPromptWithContext(msg, prefetched, log),
+			)
+		},
+	})
 	if err != nil {
-		cancel()
-		wg.Wait()
 		in.abortTurn(ctx, progress, token, msg, reactionID, log)
 		return err
 	}
-	if _, err := in.cfg.Conversations.AppendRunEvents(runCtx, runID, []json.RawMessage{event}); err != nil {
-		cancel()
-		wg.Wait()
-		in.abortTurn(ctx, progress, token, msg, reactionID, log)
-		return fmt.Errorf("发消息到会话失败: %w", err)
-	}
-
-	wg.Wait()
+	streamErr := res.StreamErr
 	if streamErr != nil {
 		log.Warn("事件流异常结束", "error", streamErr.Error())
 	}
@@ -1108,7 +1013,7 @@ func (in *Inbound) runAndReply(
 	//
 	// The reaction is not switched to DONE either: this turn did not finish answering, so DONE would be lying. The user's message already has
 	// the "redirect" reaction from interruptForRedirect; removing OnIt is enough.
-	if interrupted.Load() {
+	if res.Interrupted {
 		log.Info("这一轮被下一条消息转向，不发回复（答案属于新的那一轮）", "run", runID)
 		clearReceived(finishCtx, in.cfg.Reactor, token, msg.MessageID, reactionID, log)
 		return nil
@@ -1137,16 +1042,15 @@ func (in *Inbound) runAndReply(
 	//	messages>0                                 it spoke but was lost by segment splitting (one of the bugs fixed here)
 	//	stop=retries_exhausted                     killed by rate limiting, not our problem
 	//	frames=0                                   no events received at all (subscription or Ark error)
-	answerText := answer.text()
+	answerText := res.Answer
 	if strings.TrimSpace(answerText) == "" {
-		stop, _ := lastStop.Load().(string)
 		log.Warn("这一轮没有产生回复，将发兜底提示",
 			"run", runID,
-			"frames", frames.Load(),
-			"messages", messages.Load(),
-			"stop_reason", stop,
-			"failed_upstream", failedUpstream.Load(),
-			"interrupted", interrupted.Load(),
+			"frames", res.Frames,
+			"messages", res.Messages,
+			"stop_reason", res.StopReason,
+			"failed_upstream", res.FailedUpstream,
+			"interrupted", res.Interrupted,
 			"stream_error", streamErr != nil)
 	}
 
@@ -1155,7 +1059,7 @@ func (in *Inbound) runAndReply(
 	// The generic fallback "something may have gone wrong during execution" gives the user no next step: they do not know whether to wait, re-ask,
 	// or find someone. In this case the cause is known (model-side retries exhausted), and the next step is known too
 	// (wait a bit and resend the same message).
-	if failedUpstream.Load() && strings.TrimSpace(answerText) == "" {
+	if res.FailedUpstream && strings.TrimSpace(answerText) == "" {
 		answerText = replyRetriesExhausted
 	}
 
@@ -1321,122 +1225,17 @@ func (in *Inbound) mark(ctx context.Context, messageID, status string) error {
 // Accumulating the final answer
 // ---------------------------------------------------------------------------
 
-// answerBuffer collects the text the agent finally says, and stores it along the way.
-//
-// # Why store it
-//
-// The answer used to live only in process memory. Once amad restarts (deploy, OOM, panic), the text already produced
-// is gone; on recovery SyncRunEvents can only fill in events **still kept on the Ark side**, and frames consumed by the previous
-// process do not come again. So the user got an answer missing its beginning, with no sign that anything was missing.
-//
-// What is stored is InflightTurnRecord.LastText, the same field the recovery path reads.
-//
-// # Keep only "the last segment", not all agent.message joined together
-//
-// Before calling a tool, the agent first says a transitional sentence for humans: "let me pull the chat history first",
-// "let me pull the messages of this thread". Those are **process narration, not the reply**, and they are the same kind of event
-// as the final reply in the event stream (agent.message); the type alone cannot tell them apart.
-//
-// The dividing line is the tool call: `agent.message → agent.tool_use` means the sentence just now was narration of "what I am about to do";
-// after the tool result comes back the agent goes on talking, and the real reply is **the last segment**. So
-// reset() clears the buffer at tool_use, and what remains is the segment before the final frame.
-//
-// Measured (sesn-example-06): one turn had 4 agent.message segments; the first 3 were transitions
-// or leftovers from other turns, and only the 4th was the reply. Joining them all gave exactly the mess users saw in Feishu.
-//
-// # ⚠️ Splitting must not really drop text: a turn may end with tool_use
-//
-// reset() used to be "clear b". That implementation assumed that **after a tool call the agent always speaks again**,
-// and that does not hold: after the tool result comes back the agent can end the turn directly (it already said everything
-// before calling the tool, or the result left it nothing to say). Then there is no agent.message after the last tool_use,
-// so text() returns an empty string, and sendFinalReply replaces a **real answer** with "this turn produced no reply,
-// something may have gone wrong during execution". Not only did the user not get the reply already produced, they were told execution failed.
-//
-// Measured on the first turn of local sesn-example-01 (seq 3→13): seq 6 was a complete
-// clarifying reply ("before starting the analysis, I need to confirm a few definitions with you: ..."), a tool_use at seq 7
-// cleared it, the agent said nothing after the tool result, and the final state was end_turn. The user should have received seq 6;
-// what they actually got was that "something went wrong during execution".
-//
-// So reset() was changed to **keep a backup** (prev): normally text() uses the new segment collected after clearing,
-// which was the original intent; when the new segment is empty it falls back to prev. Better to send text that "may be narration"
-// than to replace a reply already produced with "something went wrong during execution". The trade-off is clear:
-// in the former the user reads one extra transitional sentence; in the latter the user loses the answer and is misled into chasing a failure that does not exist.
-type answerBuffer struct {
-	// persist writes the collected text back to the store; may be nil (tests and callers that do not need recovery).
-	persist func(cardMsgID, text string)
-
-	mu sync.Mutex
-	b  strings.Builder
-	// prev is the text dropped by the most recent reset(), used only when the new segment is empty. See the type comment.
-	prev string
-}
-
-// write appends a piece of text and stores it.
-//
-// Storing every frame looks heavy, but the write here is "one UPDATE against local PG", and the agent's text frames themselves
-// are sparse (delta frames do not come here; agentText only recognizes agent.message). The real high-frequency throttling is left to
-// the chain-of-thought side (progressPushInterval), which is where a frame comes every few characters.
-func (a *answerBuffer) write(text string) {
-	a.mu.Lock()
-	a.b.WriteString(text)
-	current := a.b.String()
-	a.mu.Unlock()
-
-	if a.persist != nil {
-		// cardMsgID is passed empty: the new path no longer has "the card that keeps getting PATCHed";
-		// this field is kept only for compatibility with old records.
-		a.persist("", current)
-	}
-}
-
-// reset splits the text into segments: it clears the current segment, but **keeps it as a backup**.
-//
-// Used at tool calls: see the type comment. The segment just now is usually narration of "I am about to call a tool", not the reply.
-//
-// ⚠️ **It must not really be dropped**: a turn may end with tool_use (the agent ends right after the tool result comes back),
-// and clearing then would replace a real reply with "something went wrong during execution". The backup lets text() fall back when the new segment is empty.
-//
-// **The stored value is cleared too** (what is stored is the state after clearing, not the backup): if the process dies at this moment, the recovery path reads
-// LastText and would send narration that is already obsolete as the beginning of the answer (that is exactly the entry point of
-// answer.write(rec.LastText) in resumeLive). The backup lives only in this process and is not stored; the recovery path has
-// its own fallback (see finishAndClear in resume.go).
-func (a *answerBuffer) reset() {
-	a.mu.Lock()
-	// Only update the backup when this segment is non-empty: when there is no text between two consecutive tool_use calls,
-	// the previous backup with content must not be overwritten with an empty string.
-	if cur := a.b.String(); strings.TrimSpace(cur) != "" {
-		a.prev = cur
-	}
-	a.b.Reset()
-	a.mu.Unlock()
-
-	if a.persist != nil {
-		a.persist("", "")
-	}
-}
-
-// text returns the text collected so far; when the current segment is empty it falls back to the backup left by reset().
-//
-// The fallback is deliberate; see "a turn may end with tool_use" in the type comment.
-func (a *answerBuffer) text() string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if cur := a.b.String(); strings.TrimSpace(cur) != "" {
-		return cur
-	}
-	return a.prev
-}
-
 // inflightPersister builds a callback that "writes this turn's progress back to the store".
 //
 // It is called for every piece of text collected, so it is deliberately cheap and does not block the main flow: a failed write is logged once and never returns
 // an error. Cutting off the reply the user is reading because one write to an ops table failed would cost far more.
 //
 // Use a ctx without cancellation: this turn's runCtx may have timed out (long task), but progress should still be recorded.
-func (in *Inbound) inflightPersister(ctx context.Context, rec InflightTurnRecord) func(string, string) {
+func (in *Inbound) inflightPersister(ctx context.Context, rec InflightTurnRecord) func(string) {
 	var once sync.Once
-	return func(cardMsgID, text string) {
-		rec.CardMessageID = cardMsgID
+	return func(text string) {
+		// CardMessageID stays empty: the path that PATCHed one card is gone; the field is kept only for old records.
+		rec.CardMessageID = ""
 		rec.LastText = text
 		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()

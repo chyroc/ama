@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chyroc/ama/server/channel"
 	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 )
 
@@ -276,18 +277,18 @@ func TestTurnDoesNotInheritPreviousTurnAnswer(t *testing.T) {
 func TestAnswerBufferKeepsOnlyLastSegment(t *testing.T) {
 	var persisted []string
 	var mu sync.Mutex
-	a := &answerBuffer{persist: func(_, text string) {
+	a := &channel.AnswerBuffer{Persist: func(text string) {
 		mu.Lock()
 		defer mu.Unlock()
 		persisted = append(persisted, text)
 	}}
 
-	a.write("让我先查一下。")
-	a.reset() // agent.tool_use
-	a.write("查完了，")
-	a.write("结论是这样。")
+	a.Write("让我先查一下。")
+	a.Reset() // agent.tool_use
+	a.Write("查完了，")
+	a.Write("结论是这样。")
 
-	if got := a.text(); got != "查完了，结论是这样。" {
+	if got := a.Text(); got != "查完了，结论是这样。" {
 		t.Errorf("只该留工具调用之后那段，实际 %q", got)
 	}
 	// The stored value must be cleared too: otherwise if the process dies at this moment, the recovery path would take the obsolete narration as the start of the answer.

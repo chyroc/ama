@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chyroc/ama/server/channel"
 	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 	"github.com/chyroc/ama/server/shared/infra/lark"
 )
@@ -61,8 +62,8 @@ func (f *stickyConversations) CreateConversation(_ context.Context, _, _ string)
 	return Run{ID: "sesn-sticky"}, nil
 }
 
-func (f *stickyConversations) CreateFeishuConversation(
-	ctx context.Context, workspaceID, agentID, _ string,
+func (f *stickyConversations) CreateChannelConversation(
+	ctx context.Context, workspaceID, agentID string, _ channel.Kind, _ string,
 ) (Run, error) {
 	return f.CreateConversation(ctx, workspaceID, agentID)
 }

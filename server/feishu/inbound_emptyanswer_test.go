@@ -34,6 +34,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chyroc/ama/server/channel"
 	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 )
 
@@ -207,16 +208,16 @@ func TestStopReasonInterruptSendsNothing(t *testing.T) {
 // otherwise the narration before the tool call shows up for the user again, exactly the bug TestFinalReplyIsOnlyTheLastSegment
 // was written to fix. Without this test, the "fallback" fix could degrade into "no segmenting at all".
 func TestAnswerBufferPrefersLatestSegment(t *testing.T) {
-	var a answerBuffer
-	a.write(narrationOnly)
-	a.reset()
-	a.write(answerBeforeTool)
+	var a channel.AnswerBuffer
+	a.Write(narrationOnly)
+	a.Reset()
+	a.Write(answerBeforeTool)
 
-	if got := a.text(); got != answerBeforeTool {
+	if got := a.Text(); got != answerBeforeTool {
 		t.Errorf("有新段时该用新段，实际 %q", got)
 	}
-	if strings.Contains(a.text(), narrationOnly) {
-		t.Errorf("过场旁白不该出现在最终答案里：%q", a.text())
+	if strings.Contains(a.Text(), narrationOnly) {
+		t.Errorf("过场旁白不该出现在最终答案里：%q", a.Text())
 	}
 }
 
@@ -226,11 +227,11 @@ func TestAnswerBufferPrefersLatestSegment(t *testing.T) {
 // so the cleared segment **is** the final answer. Better to send text that may be narration
 // than to replace a reply already produced with "something went wrong during execution".
 func TestAnswerBufferFallsBackWhenNothingFollows(t *testing.T) {
-	var a answerBuffer
-	a.write(answerBeforeTool)
-	a.reset()
+	var a channel.AnswerBuffer
+	a.Write(answerBeforeTool)
+	a.Reset()
 
-	if got := a.text(); got != answerBeforeTool {
+	if got := a.Text(); got != answerBeforeTool {
 		t.Errorf("新段为空时该回落到被清掉的那段，实际 %q", got)
 	}
 }
@@ -241,12 +242,12 @@ func TestAnswerBufferFallsBackWhenNothingFollows(t *testing.T) {
 // There is no text between the two tool_use calls; if the second reset() overwrote the backup unconditionally, the real reply would be
 // flushed by an empty string, back to "the user gets something went wrong during execution".
 func TestAnswerBufferKeepsFirstBackupAcrossEmptySegments(t *testing.T) {
-	var a answerBuffer
-	a.write(answerBeforeTool)
-	a.reset() // first tool_use
-	a.reset() // second tool_use, nothing said in between
+	var a channel.AnswerBuffer
+	a.Write(answerBeforeTool)
+	a.Reset() // first tool_use
+	a.Reset() // second tool_use, nothing said in between
 
-	if got := a.text(); got != answerBeforeTool {
+	if got := a.Text(); got != answerBeforeTool {
 		t.Errorf("连续划段不该冲掉已有备份，实际 %q", got)
 	}
 }

@@ -1435,7 +1435,7 @@ const (
 // RunTrigger is the trigger source of a run.
 type RunTrigger string
 
-// The five trigger sources. **The values must match the RunTrigger union in the frontend web/src/types/domain.ts exactly**:
+// The trigger sources. **The values must match the RunTrigger union in the frontend web/src/types/domain.ts exactly**:
 // that is a discriminated union; one extra value and TypeScript errors, one missing and RUN_TRIGGER_LABELS cannot find
 // the label, which shows as blank in the UI.
 //
@@ -1447,6 +1447,8 @@ const (
 	TriggerManual RunTrigger = "manual"
 	// TriggerFeishu is triggered by @-mentioning the bot in a Feishu group.
 	TriggerFeishu RunTrigger = "feishu"
+	// TriggerWeixin is triggered by a message to a WeChat bot (server/weixin).
+	TriggerWeixin RunTrigger = "weixin"
 	// TriggerAPI is triggered by an external caller through the API.
 	TriggerAPI RunTrigger = "api"
 	// TriggerSchedule is triggered by a scheduled task when it is due (cron / interval / a user-scheduled oneshot).
@@ -1455,6 +1457,12 @@ const (
 	// frontend and backend enums once, saving another change to both sides' contract next time.
 	TriggerWebhook RunTrigger = "webhook"
 )
+
+// IsChannel reports whether the run was started from a chat channel (see server/channel).
+// The values equal channel.Kind.
+func (t RunTrigger) IsChannel() bool {
+	return t == TriggerFeishu || t == TriggerWeixin
+}
 
 // TokenUsage is the token usage summary, summed from model_usage of all span.model_request_end.
 // All four fields are required, and **none may have omitempty**: 0 is a valid value, and a missing key would make the frontend compute NaN.

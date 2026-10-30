@@ -119,6 +119,7 @@ func TestRunTriggerValues(t *testing.T) {
 	want := map[apimodel.RunTrigger]string{
 		apimodel.TriggerManual:   "manual",
 		apimodel.TriggerFeishu:   "feishu",
+		apimodel.TriggerWeixin:   "weixin",
 		apimodel.TriggerAPI:      "api",
 		apimodel.TriggerSchedule: "schedule",
 		apimodel.TriggerWebhook:  "webhook",

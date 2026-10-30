@@ -1,20 +1,8 @@
 // Long-connection supervisor: keeps one long connection for each connected Feishu app.
 //
-// # Why this layer exists
-//
-// The Receiver in shared/infra/lark only manages **one** connection (grab the lock, connect, reconnect when dropped). But we have N
-// connected apps, and N changes: users may connect new apps or disconnect old ones at any time. This layer is responsible for:
-//
-//	on process start   open a connection for every existing app
-//	periodic reconcile add connections for new apps, stop connections for deleted apps
-//	on process exit    stop them all and give the Redis locks back
-//
-// # Why polling reconcile instead of event-driven
-//
-// Connecting/disconnecting is a **very low frequency** operation (a workspace connects only a few apps in its whole life), while event-driven would either add
-// a new message path or make feishu.Service depend back on this type. Polling once a minute costs
-// "a newly connected app may wait up to a minute before receiving messages"; the registration flow itself needs the user to click agree on the authorization page,
-// so this delay is buried in it and goes unnoticed.
+// The Receiver in shared/infra/lark manages **one** connection (grab the lock, connect, reconnect when dropped). The
+// "N apps, and N changes" part (start on boot, add new apps, stop deleted ones, stop all on exit) is the generic
+// channel.Supervisor; this file is the Feishu Source for it: which apps exist, and how to run one app's connection.
 package feishu
 
 import (
@@ -23,13 +11,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
+	"github.com/chyroc/ama/server/channel"
 	"github.com/chyroc/ama/server/shared/infra/lark"
 )
-
-// reconcileInterval is the reconcile interval. See the file header for why.
-const reconcileInterval = time.Minute
 
 // SupervisorConfig wires the supervisor.
 type SupervisorConfig struct {
@@ -47,12 +32,9 @@ type SupervisorConfig struct {
 
 // Supervisor keeps the long connections of all apps.
 type Supervisor struct {
-	cfg SupervisorConfig
-	log *slog.Logger
-
-	mu      sync.Mutex
-	running map[string]context.CancelFunc // Feishu appID → stops its connection
-	wg      sync.WaitGroup
+	cfg   SupervisorConfig
+	log   *slog.Logger
+	inner *channel.Supervisor
 }
 
 // NewSupervisor creates a supervisor. **It does not connect**; call Run.
@@ -70,11 +52,9 @@ func NewSupervisor(cfg SupervisorConfig) (*Supervisor, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Supervisor{
-		cfg:     cfg,
-		log:     log,
-		running: make(map[string]context.CancelFunc),
-	}, nil
+	s := &Supervisor{cfg: cfg, log: log}
+	s.inner = channel.NewSupervisor(s, channel.DefaultReconcileInterval, log)
+	return s, nil
 }
 
 // Run blocks maintaining all connections until ctx is cancelled.
@@ -85,143 +65,92 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	// It runs in a goroutine because recovery may hold a stream for minutes (the agent is still running), and must not delay
 	// setting up the long connections; that would make all new messages unreceivable for those minutes.
 	//
-	// # Recovery and new messages competing for the same session are blocked by the inflight record itself
-	//
-	// Sessions are now reused by scope (see scope.go), so a session being recovered **will** receive new messages from that chat;
-	// this differs from the "one turn, one session" assumption before the change. No extra lock is needed: during recovery that
-	// inflight record stays (deleted only when finished), and a new message must TryBeginTurn before running,
-	// so it is naturally blocked and gets "the previous message is still being processed". Cross-instance safety is likewise covered by the CAS in the store
+	// Recovery and new messages competing for the same session are blocked by the inflight record itself: during recovery that
+	// record stays (deleted only when finished), and a new message must TryBeginTurn before running, so it gets
+	// "the previous message is still being processed". Cross-instance safety is covered by the CAS in the store
 	// (see Store.ClaimInflightTurn / TryBeginTurn), not by timing here.
-	s.wg.Add(1)
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
-		defer s.wg.Done()
+		defer wg.Done()
 		s.cfg.Inbound.ResumeInflightTurns(ctx)
 	}()
-
-	s.reconcile(ctx)
-
-	ticker := time.NewTicker(reconcileInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			// Each connection's ctx is derived from this ctx, so they receive the cancellation signal by themselves.
-			// Here we only wait for them to give the locks back; without waiting, the locks would remain in Redis when the process exits,
-			// and the next instance would have to wait a full TTL before taking over.
-			s.wg.Wait()
-			return nil
-		case <-ticker.C:
-			s.reconcile(ctx)
-		}
-	}
+	// The inner supervisor waits for every connection to give its Redis lock back before returning; without waiting,
+	// the next instance would have to wait a full TTL before taking over.
+	err := s.inner.Run(ctx)
+	wg.Wait()
+	return err
 }
 
-// reconcile reconciles once: start what should start, stop what should stop.
-func (s *Supervisor) reconcile(ctx context.Context) {
+// Name implements channel.Source.
+func (s *Supervisor) Name() string { return string(channel.Feishu) }
+
+// ListAccounts implements channel.Source: every connected app with an app id.
+//
+// Version stays empty: a running connection is not restarted when the app row changes (trigger mode and the like
+// are read per message, not per connection).
+func (s *Supervisor) ListAccounts(ctx context.Context) ([]channel.Account, error) {
 	apps, err := s.cfg.Store.ListAllApps(ctx)
 	if err != nil {
-		s.log.Warn("列飞书应用失败，这轮对账跳过", "error", err.Error())
-		return
+		return nil, err
 	}
-
-	want := make(map[string]*App, len(apps))
+	out := make([]channel.Account, 0, len(apps))
 	for _, app := range apps {
 		if id := strings.TrimSpace(app.AppID); id != "" {
-			want[id] = app
+			out = append(out, channel.Account{Key: id, Value: app})
 		}
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Stop connections of apps that were deleted.
-	for appID, cancel := range s.running {
-		if _, ok := want[appID]; !ok {
-			s.log.Info("飞书应用已断开，停掉它的长连接", "larkApp", appID)
-			cancel()
-			delete(s.running, appID)
-		}
-	}
-
-	// Start connections for new apps.
-	for appID, app := range want {
-		if _, ok := s.running[appID]; ok {
-			continue
-		}
-		s.startLocked(ctx, app)
-	}
+	return out, nil
 }
 
-// startLocked starts a long connection for one app. The caller must hold the lock.
+// RunAccount implements channel.Source: one app's long connection.
 //
-// ⚠️ **No remote calls inside the lock.** botIdentity now asks Feishu every time (two HTTP requests,
-// each with a 30-second timeout); here, one app's Feishu API going down could hold s.mu for a minute,
-// also blocking other apps from connecting and the "stop connections of deleted apps" half. So it moved into
-// the goroutine below, and inside the lock we only "register + start the goroutine".
-func (s *Supervisor) startLocked(ctx context.Context, app *App) {
+// Returning means "start it again at the next reconcile". Failures like invalid credentials keep failing, but
+// retrying once a minute is an acceptable cost, and it recovers by itself after the user reconnects.
+func (s *Supervisor) RunAccount(ctx context.Context, account channel.Account) error {
+	app, ok := account.Value.(*App)
+	if !ok || app == nil {
+		return nil
+	}
 	secret, err := s.cfg.Store.AppSecret(ctx, app.AppID)
 	if err != nil {
 		// Without a secret it cannot connect. This is not an error: an app whose registration failed midway may have no secret.
 		s.log.Warn("飞书应用没有密钥，跳过", "larkApp", app.AppID)
-		return
+		return nil
 	}
 
-	connCtx, cancel := context.WithCancel(ctx)
-	s.running[app.AppID] = cancel
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		defer cancel()
-		defer func() {
-			// Remove it from the table; the next reconcile retries (failures like invalid credentials keep failing,
-			// but retrying once a minute is an acceptable cost, and it recovers automatically after the user reconnects).
-			s.mu.Lock()
-			if s.running[app.AppID] != nil {
-				delete(s.running, app.AppID)
-			}
-			s.mu.Unlock()
-		}()
-
-		// Reading the bot identity calls Feishu, so it is outside the lock, before building the Receiver.
-		receiver, err := lark.NewReceiver(lark.ReceiverConfig{
-			AppID:     app.AppID,
-			AppSecret: secret,
-			Bot:       s.botIdentity(connCtx, app, secret),
-			Handler:   s.cfg.Inbound.Handle,
-			Leases:    s.cfg.Leases,
-			Logger:    s.log,
-		})
-		if err != nil {
-			s.log.Error("建长连接失败", "larkApp", app.AppID, "error", err.Error())
-			return
-		}
-		// State at once "what this connection can actually receive".
-		//
-		// ⚠️ **This log line is a direct product of the 2026-09-02 investigation.** Before it, an
-		// app "missing the include_bot permission and therefore receiving no bot messages at all" looked **word for word identical** in the logs
-		// to a perfectly normal app: both had only the two lines "long connection started" + "ready",
-		// then nothing. And the readiness API did not help either: runtimeConnected is only a REST liveness probe,
-		// and all green still receives no messages (see the comment on that field in app.go).
-		//
-		// So debugging could only rely on "send a message in the chat and see if it reacts", and the alert chat had no real people,
-		// so even that could not be done. With these three values, "why does this chat not react" proves itself **at the moment of connecting**,
-		// without waiting for the next alert.
-		//
-		// What is logged are enums and booleans, with no user data at all.
-		s.log.Info("已为飞书应用拉起长连接",
-			"larkApp", app.AppID,
-			"workspace", app.WorkspaceID,
-			"triggerMode", string(NormalizeTriggerMode(app.TriggerMode)),
-			// receive chat messages without @ (only those sent by users)
-			"groupMsgScope", groupMessageGranted(app),
-			// receive chat messages without @ (**including those sent by other bots**): chats like alert chats where "only bots talk"
-			// depend on it entirely, and when it is false such chats get not a single event.
-			"botMsgScope", botMessageGranted(app))
-		s.warnIfBotMessagesUnreachable(app)
-		if err := receiver.Run(connCtx); err != nil {
-			s.log.Error("长连接退出", "larkApp", app.AppID, "error", err.Error())
-		}
-	}()
+	// Reading the bot identity calls Feishu (two HTTP requests); it happens here in the account's own goroutine, never
+	// under the supervisor's lock, so one app's Feishu API going down cannot block the other apps.
+	receiver, err := lark.NewReceiver(lark.ReceiverConfig{
+		AppID:     app.AppID,
+		AppSecret: secret,
+		Bot:       s.botIdentity(ctx, app, secret),
+		Handler:   s.cfg.Inbound.Handle,
+		Leases:    s.cfg.Leases,
+		Logger:    s.log,
+	})
+	if err != nil {
+		s.log.Error("建长连接失败", "larkApp", app.AppID, "error", err.Error())
+		return nil
+	}
+	// State at once "what this connection can actually receive".
+	//
+	// ⚠️ An app "missing the include_bot permission and therefore receiving no bot messages at all" used to look
+	// **word for word identical** in the logs to a perfectly normal app: "long connection started" + "ready", then nothing.
+	// With these three values, "why does this chat not react" proves itself at the moment of connecting.
+	//
+	// What is logged are enums and booleans, with no user data at all.
+	s.log.Info("已为飞书应用拉起长连接",
+		"larkApp", app.AppID,
+		"workspace", app.WorkspaceID,
+		"triggerMode", string(NormalizeTriggerMode(app.TriggerMode)),
+		// receive chat messages without @ (only those sent by users)
+		"groupMsgScope", groupMessageGranted(app),
+		// receive chat messages without @ (**including those sent by other bots**): chats like alert chats where "only bots talk"
+		// depend on it entirely, and when it is false such chats get not a single event.
+		"botMsgScope", botMessageGranted(app))
+	s.warnIfBotMessagesUnreachable(app)
+	return receiver.Run(ctx)
 }
 
 // groupMessageGranted / botMessageGranted fold the grant state of the two levels of chat message permissions into a
@@ -264,8 +193,7 @@ func botMessageGranted(app *App) string {
 //
 // # Frequency: at worst once a minute, and only for apps that are really misconfigured
 //
-// It follows connecting, not every reconcile round: `reconcile` is guarded by `s.running`, and a live connection is not
-// restarted. Only the kind that "exits right after connecting" (invalid credentials and the like) restarts every minute,
+// It follows connecting, not every reconcile round: channel.Supervisor does not restart a live connection. Only the kind that "exits right after connecting" (invalid credentials and the like) restarts every minute,
 // which is the same rhythm as the adjacent "started a long connection for the Feishu app", adding no new flooding.
 //
 // ⚠️ Only report when **we know for sure it is not granted**. When readiness is nil (never checked), stay quiet:

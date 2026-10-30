@@ -400,7 +400,7 @@ func newChatService(t *testing.T) (*Service, *coremem.MemStore, *fakeRunner) {
 //
 // # Which end-to-end path this case guards
 //
-// Feishu inbound → CreateFeishuConversation → lands in the agent's workspace → found by the web
+// Feishu inbound → CreateChannelConversation → lands in the agent's workspace → found by the web
 // ListRuns. If any link breaks, the user sees the same thing: "messages sent in Feishu don't show
 // on the web":
 //
@@ -415,7 +415,7 @@ func TestFeishuConversationVisibleInWorkspaceList(t *testing.T) {
 	ctx := context.Background()
 	svc, _, _ := newChatService(t)
 
-	run, err := svc.CreateFeishuConversation(ctx, seedWS, "agent_triage", "飞书单聊")
+	run, err := svc.CreateChannelConversation(ctx, seedWS, "agent_triage", apimodel.TriggerFeishu, "飞书单聊")
 	if err != nil {
 		t.Fatalf("建飞书会话失败：%v", err)
 	}

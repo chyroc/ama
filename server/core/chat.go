@@ -152,21 +152,22 @@ func (s *Service) CreateConversation(ctx context.Context, workspaceID, agentID s
 	return s.createConversation(ctx, workspaceID, agentID, triggerManual, "")
 }
 
-// CreateFeishuConversation creates a session that **comes from Feishu**. Apart from
-// trigger/triggerDetail it is exactly the same as CreateConversation.
+// CreateChannelConversation creates a session started from a chat channel (Feishu, WeChat ...).
+// Apart from trigger/triggerDetail it is exactly the same as CreateConversation.
 //
-// Why a separate method instead of a new parameter on CreateConversation: that method has a
-// dozen or so call sites (including tests), all of which would need changes, while what they
-// express has not changed.
+// trigger must be one of the channel triggers (apimodel.TriggerFeishu / apimodel.TriggerWeixin).
+// detail is the human-readable source shown in the run history ("Feishu group", "WeChat direct chat").
 //
-// ⚠️ After tagging trigger=feishu, the frontend session list filter **must** also be widened
-// to accept feishu (CONVERSATION_TRIGGERS in ChatPage.tsx). Changing only this side makes
-// Feishu sessions disappear from the left column entirely, which is exactly the bug this
-// change fixes.
-func (s *Service) CreateFeishuConversation(
-	ctx context.Context, workspaceID, agentID, detail string,
+// ⚠️ A new channel trigger must also be accepted by the chat page's session list filter
+// (CONVERSATION_TRIGGERS in ChatPage.tsx). Changing only this side makes that channel's sessions
+// disappear from the left column.
+func (s *Service) CreateChannelConversation(
+	ctx context.Context, workspaceID, agentID string, trigger apimodel.RunTrigger, detail string,
 ) (apimodel.Run, error) {
-	return s.createConversation(ctx, workspaceID, agentID, apimodel.TriggerFeishu, detail)
+	if !trigger.IsChannel() {
+		return apimodel.Run{}, fmt.Errorf("%w: 不是聊天渠道的触发来源: %q", ErrInvalidArgument, trigger)
+	}
+	return s.createConversation(ctx, workspaceID, agentID, trigger, detail)
 }
 
 func (s *Service) createConversation(

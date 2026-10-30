@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chyroc/ama/server/channel"
 	"github.com/chyroc/ama/server/feishu"
 	"github.com/chyroc/ama/server/feishu/feishumodel"
 	"github.com/chyroc/ama/server/shared/infra/lark"
@@ -115,8 +116,8 @@ func (f *fakeConversations) CreateConversation(_ context.Context, _, agentID str
 
 // CreateFeishuConversation uses the same counter as CreateConversation and also records detail,
 // so tests can assert "the Feishu path uses the method that carries the source label".
-func (f *fakeConversations) CreateFeishuConversation(
-	ctx context.Context, workspaceID, agentID, detail string,
+func (f *fakeConversations) CreateChannelConversation(
+	ctx context.Context, workspaceID, agentID string, _ channel.Kind, detail string,
 ) (feishu.Run, error) {
 	f.mu.Lock()
 	f.details = append(f.details, detail)
