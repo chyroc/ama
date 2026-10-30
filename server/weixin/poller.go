@@ -149,7 +149,7 @@ func (p *Poller) poll(ctx context.Context, accountID string, log *slog.Logger) e
 				wait, fails = backoffDelay, 0
 			}
 			log.Warn("拉微信消息失败，稍后重试", "error", err.Error(), "wait", wait.String())
-			if !sleep(ctx, wait) {
+			if !channel.Sleep(ctx, wait) {
 				return nil
 			}
 			continue
@@ -257,7 +257,7 @@ func (p *Poller) answer(ctx context.Context, accountID string, msg wx.Message, l
 	}
 	if p.cfg.Conversations.AgentDisabled(ctx, acc.AgentID) {
 		log.Info("绑定的 agent 已停用，不触发这一轮", "agent", acc.AgentID)
-		return reply(replyDisabled)
+		return reply(channel.ReplyAgentDisabled)
 	}
 
 	runID, err := channel.EnsureSession(ctx, p.cfg.Channel, p.cfg.Conversations, channel.SessionRequest{
@@ -307,10 +307,7 @@ func (p *Poller) answer(ctx context.Context, accountID string, msg wx.Message, l
 		log.Warn("这一轮没有产生回复，将发兜底提示",
 			"frames", res.Frames, "messages", res.Messages, "stop_reason", res.StopReason,
 			"failed_upstream", res.FailedUpstream, "stream_error", res.StreamErr != nil)
-		answer = replyEmpty
-		if res.FailedUpstream {
-			answer = replyRateLimited
-		}
+		answer = channel.FallbackAnswer(res)
 	}
 	return reply(answer)
 }
@@ -431,15 +428,4 @@ func (d *dispatcher) stop(grace time.Duration) {
 		<-done
 	}
 	d.cancel()
-}
-
-func sleep(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-t.C:
-		return true
-	}
 }

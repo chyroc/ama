@@ -456,7 +456,7 @@ func TestHandleHintsWithoutAgentAndIgnoresGroupsAndBots(t *testing.T) {
 	env2 := newPollerEnv(t, "agent_a")
 	env2.conv.disabled = true
 	env2.poller.handle(ctx, "wxa_1", userMessage("1", "u1", "hi"))
-	if s := env2.f.sentTexts(); len(s) != 1 || s[0].Text != replyDisabled {
+	if s := env2.f.sentTexts(); len(s) != 1 || s[0].Text != channel.ReplyAgentDisabled {
 		t.Fatalf("disabled: %+v", s)
 	}
 }

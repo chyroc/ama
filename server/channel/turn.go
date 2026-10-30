@@ -118,7 +118,7 @@ func RunTurn(ctx context.Context, cfg TurnConfig) (TurnResult, error) {
 		}
 	}()
 
-	sleepCtx(ctx, subscribeGrace)
+	Sleep(ctx, subscribeGrace)
 
 	event, err := cfg.BuildEvent(ctx)
 	if err != nil {
@@ -143,8 +143,8 @@ func RunTurn(ctx context.Context, cfg TurnConfig) (TurnResult, error) {
 	return res, nil
 }
 
-// sleepCtx sleeps for d or until ctx is done. It reports whether the full sleep happened.
-func sleepCtx(ctx context.Context, d time.Duration) bool {
+// Sleep sleeps for d or until ctx is done. It reports whether the full sleep happened.
+func Sleep(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {

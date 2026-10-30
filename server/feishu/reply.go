@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chyroc/ama/server/channel"
 	"github.com/chyroc/ama/server/shared/infra/lark"
 )
 
@@ -52,15 +53,11 @@ const (
 // while in these two cases what to do is actually known (resend once / wait a bit and resend).
 const (
 	// replyNoAnswer is the generic fallback: this turn really produced nothing, for an unknown reason.
-	replyNoAnswer = "这一轮没有产生回复，可能是执行出了问题。把刚才那句话再发一次试试；" +
-		"要是还不行，换个说法或稍后再问。"
+	replyNoAnswer = channel.ReplyNoAnswer
 
 	// replyRetriesExhausted is for a turn where "retries were exhausted on the Ark side", with a known cause (most likely rate limiting).
-	//
-	// It is separate from the generic one because **the next step differs**: here resending the same sentence is enough, no need to rephrase,
-	// and no need to doubt whether the question was wrong. See turnFailedUpstream.
-	replyRetriesExhausted = "这一轮没能完成：模型侧连续失败、重试次数已用尽（多半是被限流了）。" +
-		"稍等一会儿把刚才那句话再发一次就好。"
+	// The text is shared with the other channels; see channel.ReplyRetriesExhausted.
+	replyRetriesExhausted = channel.ReplyRetriesExhausted
 )
 
 // Reactor is the ability to add/remove reactions, provided by shared/infra/lark.

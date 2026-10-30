@@ -586,8 +586,7 @@ func (in *Inbound) dispatch(ctx context.Context, msg *lark.InboundMessage, log *
 	// find the cause when "users report the bot does not reply"; without the reply, users have no idea what happened.
 	if in.cfg.Conversations.AgentDisabled(ctx, agentID) {
 		log.Info("绑定的 agent 已停用，不触发这一轮", "agent", agentID)
-		return in.replyStatic(ctx, app, msg,
-			"这个 agent 已停用，暂时不会回答。到 AMA 的 agent 详情页把状态改回「已启用」就能继续用了。")
+		return in.replyStatic(ctx, app, msg, channel.ReplyAgentDisabled)
 	}
 
 	secret, err := in.cfg.Store.AppSecret(ctx, app.AppID)

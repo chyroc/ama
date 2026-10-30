@@ -68,7 +68,7 @@ func RunWithLease(
 		lease, ok, err := leases.Acquire(ctx, key, leaseTTL)
 		if err != nil {
 			log.Warn("抢锁失败，退避后重试", "lease", key, "error", err.Error(), "backoff", backoff.String())
-			if !sleepCtx(ctx, backoff) {
+			if !Sleep(ctx, backoff) {
 				return nil
 			}
 			backoff = nextBackoff(backoff)
@@ -76,7 +76,7 @@ func RunWithLease(
 		}
 		if !ok {
 			// Another instance holds it; that is the normal state for all but one instance.
-			if !sleepCtx(ctx, leaseRetryGap) {
+			if !Sleep(ctx, leaseRetryGap) {
 				return nil
 			}
 			continue
@@ -98,7 +98,7 @@ func RunWithLease(
 			continue
 		}
 		log.Warn("持锁的循环出错，退避后重来", "lease", key, "error", err.Error(), "backoff", backoff.String())
-		if !sleepCtx(ctx, backoff) {
+		if !Sleep(ctx, backoff) {
 			return nil
 		}
 		backoff = nextBackoff(backoff)
