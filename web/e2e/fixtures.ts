@@ -679,6 +679,11 @@ export async function completeLogin(page: Page): Promise<void> {
  * With this hook, tests can deterministically get past the authorization step, instead of sleeping until
  * the mock's poll counter naturally runs out.
  */
+/** Confirm the WeChat login in progress (a person would scan the QR code). */
+export async function completeWeixinLogin(page: Page): Promise<void> {
+  await page.evaluate(() => window.__amaApi?.completeWeixinLogin?.());
+}
+
 export async function completeFeishuAuth(page: Page): Promise<void> {
   await page.evaluate(() => window.__amaApi?.completeFeishuAuth());
 }
@@ -831,6 +836,8 @@ declare global {
       reset: () => void;
       clear: () => void;
       completeFeishuAuth: () => void;
+      /** Confirm every WeChat login in progress on the next poll. Only LocalApiClient has it. */
+      completeWeixinLogin?: () => void;
       /**
        * Mark the current Feishu app directly as authorized. Only LocalApiClient has it.
        *

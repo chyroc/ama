@@ -65,6 +65,8 @@ import type {
   FeishuReadiness,
   FeishuRegistration,
   FeishuRegistrationResult,
+  WeixinAccount,
+  WeixinLogin,
   OnboardingState,
   PendingMessage,
   Run,
@@ -704,6 +706,21 @@ export interface ApiClient {
   /** Change the trigger mode (when to speak up in groups); returns the whole app. */
   setFeishuTriggerMode(appId: string, mode: FeishuTriggerMode): Promise<FeishuApp>;
   deleteFeishuApp(id: string): Promise<void>;
+
+  // WeChat channel: connect a bot by scanning a QR code, bind it to an agent
+  listWeixinAccounts(workspaceId: string): Promise<WeixinAccount[]>;
+  /** Bind the bot to an agent of the same workspace; "" unbinds. */
+  bindWeixinAgent(workspaceId: string, accountId: string, agentId: string): Promise<WeixinAccount>;
+  deleteWeixinAccount(workspaceId: string, accountId: string): Promise<void>;
+  /** Start a QR-code login. */
+  startWeixinLogin(workspaceId: string): Promise<WeixinLogin>;
+  /**
+   * Advance a login by one status check. The server waits up to ~20 seconds (WeChat long-polls),
+   * so call it again right after it returns until the status is final.
+   */
+  pollWeixinLogin(workspaceId: string, loginId: string): Promise<WeixinLogin>;
+  /** Send the number shown on the phone (when status is need_verify_code). */
+  submitWeixinVerifyCode(workspaceId: string, loginId: string, code: string): Promise<WeixinLogin>;
 
   // Ark credentials (one per workspace)
   getArkCredential(workspaceId: string): Promise<ArkCredential>;
@@ -1912,6 +1929,13 @@ interface StoreShape {
    * AppSecret); the mock only keeps the minimum needed to simulate "waiting for authorization →
    * done".
    */
+  /** Connected WeChat bots. */
+  weixinAccounts: WeixinAccount[];
+  /**
+   * WeChat logins in progress. The mock has no WeChat: a login is "scanned" after one poll and
+   * "confirmed" after `pendingPolls` reach 0 (e2e jumps there with completeWeixinLogin()).
+   */
+  weixinLogins: Record<string, { workspaceId: string; pendingPolls: number; expiresAt: string }>;
   feishuSessions: Record<
     string,
     {
@@ -2144,6 +2168,8 @@ function freshStore(): StoreShape {
     agentArkCredentials: {},
     feishuApps: SEED.feishuApps,
     feishuSessions: {},
+    weixinAccounts: [],
+    weixinLogins: {},
     runs: SEED.runs,
     events: SEED.events,
     // No schedules in the seed: they are "things the user configures", not part of the demo data.
@@ -2226,6 +2252,9 @@ function load(): StoreShape {
     if (!parsed.suggestionAttachments) parsed.suggestionAttachments = {};
     // The two sets of host data were added later and old data does not have them; fill in empty values instead of resetting everything.
     if (!Array.isArray(parsed.hosts)) parsed.hosts = [];
+    // The WeChat channel was added later; old stores do not have it.
+    if (!Array.isArray(parsed.weixinAccounts)) parsed.weixinAccounts = [];
+    if (!parsed.weixinLogins) parsed.weixinLogins = {};
     if (!parsed.wsHostBinds) parsed.wsHostBinds = {};
     // triggerMode was added later, and old stores saved in the browser do not have it.
     // **Fill in the default level instead of leaving undefined**: the selector reads it to decide
@@ -2318,6 +2347,31 @@ function mockNextRunAt(spec: ScheduleSpec): string {
       // Roughly "one hour later". The real next cron run is computed by the server, and the real value shows after a page refresh.
       return new Date(now + 3600_000).toISOString();
   }
+}
+
+/**
+ * A placeholder QR code for the mock: a 1x1 transparent PNG. The real one is rendered by the
+ * server from the link WeChat returns.
+ */
+const MOCK_QR_PNG =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+
+function mockWeixinLogin(
+  id: string,
+  status: WeixinLogin["status"],
+  message: string,
+  expiresAt: string,
+): WeixinLogin {
+  const done = status === "confirmed" || status === "already_connected" || status === "expired" || status === "failed";
+  return {
+    id,
+    status,
+    message,
+    accountId: "",
+    expiresAt,
+    qrcodeDataUrl: done ? "" : MOCK_QR_PNG,
+    qrcodeContent: done ? "" : "https://example.com/mock-weixin-login",
+  };
 }
 
 function nextId(prefix: string): string {
@@ -3436,6 +3490,8 @@ class LocalApiClient implements ApiClient {
       skills: [],
       feishuApps: [],
         feishuSessions: {},
+      weixinAccounts: [],
+      weixinLogins: {},
       schedules: [],
       // Revision history must be cleared too: otherwise history created by the previous case shows
       // up in the next, and "rolled back to a version that does not belong to this case" is very
@@ -5519,6 +5575,92 @@ class LocalApiClient implements ApiClient {
     }
     this.commit();
     return delay(undefined);
+  }
+
+  // -- WeChat ---------------------------------------------------------------
+
+  listWeixinAccounts(workspaceId: string): Promise<WeixinAccount[]> {
+    return guardRead(() =>
+      delay(structuredClone(this.store.weixinAccounts.filter((a) => a.workspaceId === workspaceId))),
+    );
+  }
+
+  bindWeixinAgent(workspaceId: string, accountId: string, agentId: string): Promise<WeixinAccount> {
+    const acc = this.store.weixinAccounts.find((a) => a.id === accountId && a.workspaceId === workspaceId);
+    if (!acc) return Promise.reject(new Error("这个微信账号不存在"));
+    if (agentId) {
+      const agent = this.store.agents.find((a) => a.id === agentId);
+      if (!agent) return Promise.reject(new Error("Agent 不存在"));
+      if (agent.workspaceId !== workspaceId) return Promise.reject(new Error("Agent 不属于该空间"));
+    }
+    acc.agentId = agentId;
+    acc.updatedAt = nowIso();
+    this.commit();
+    return delay(structuredClone(acc));
+  }
+
+  deleteWeixinAccount(workspaceId: string, accountId: string): Promise<void> {
+    const before = this.store.weixinAccounts.length;
+    this.store.weixinAccounts = this.store.weixinAccounts.filter(
+      (a) => !(a.id === accountId && a.workspaceId === workspaceId),
+    );
+    if (this.store.weixinAccounts.length === before) {
+      return Promise.reject(new Error("这个微信账号不存在"));
+    }
+    this.commit();
+    return delay(undefined);
+  }
+
+  /**
+   * Start a login. The mock has no WeChat: it hands out a placeholder QR code; the first poll
+   * reports "scanned" and the login is confirmed once pendingPolls runs out (or right away after
+   * completeWeixinLogin()).
+   */
+  startWeixinLogin(workspaceId: string): Promise<WeixinLogin> {
+    const id = nextId("wxl");
+    const expiresAt = new Date(Date.now() + 8 * 60 * 1000).toISOString();
+    this.store.weixinLogins[id] = { workspaceId, pendingPolls: 2, expiresAt };
+    this.commit();
+    return delay(mockWeixinLogin(id, "waiting", "用手机微信扫描二维码，并在手机上确认", expiresAt));
+  }
+
+  pollWeixinLogin(workspaceId: string, loginId: string): Promise<WeixinLogin> {
+    const login = this.store.weixinLogins[loginId];
+    if (!login || login.workspaceId !== workspaceId) {
+      return Promise.reject(new Error("登录已失效，请重新扫码"));
+    }
+    if (login.pendingPolls > 0) {
+      login.pendingPolls -= 1;
+      this.commit();
+      return delay(mockWeixinLogin(loginId, "scanned", "已扫码，请在手机上确认", login.expiresAt), 300);
+    }
+    const now = nowIso();
+    const account: WeixinAccount = {
+      id: nextId("wxa"),
+      workspaceId,
+      botId: `mock_${loginId.slice(-4)}@im.bot`,
+      ownerUserId: "owner@im.wechat",
+      agentId: "",
+      status: "active",
+      lastError: "",
+      lastInboundAt: "",
+      createdBy: "",
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.store.weixinAccounts.push(account);
+    delete this.store.weixinLogins[loginId];
+    this.commit();
+    return delay({ ...mockWeixinLogin(loginId, "confirmed", "已接入", login.expiresAt), accountId: account.id });
+  }
+
+  submitWeixinVerifyCode(workspaceId: string, loginId: string, code: string): Promise<WeixinLogin> {
+    const login = this.store.weixinLogins[loginId];
+    if (!login || login.workspaceId !== workspaceId) {
+      return Promise.reject(new Error("登录已失效，请重新扫码"));
+    }
+    if (!code.trim()) return Promise.reject(new Error("请求参数不完整"));
+    return delay(mockWeixinLogin(loginId, "scanned", "正在验证", login.expiresAt));
   }
 
   // -- Ark credentials --------------------------------------------------------------
@@ -8442,6 +8584,14 @@ class LocalApiClient implements ApiClient {
    * click it. With this hook, tests can step over authorization deterministically instead of
    * sleeping until the mock's poll counter runs out naturally.
    */
+  completeWeixinLogin(): void {
+    for (const login of Object.values(this.store.weixinLogins)) {
+      login.pendingPolls = 0;
+    }
+    this.commit();
+  }
+
+  /** Same reason as completeWeixinLogin, for the Feishu device-code flow. */
   completeFeishuAuth(): void {
     for (const session of Object.values(this.store.feishuSessions)) {
       session.pendingPolls = 0;

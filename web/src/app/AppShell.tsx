@@ -66,6 +66,7 @@ const BUILD_NAV: NavItem[] = [
   // the "Observe" group holds produced data (run history, usage).
   { to: "/schedules", labelKey: "nav.schedules", icon: "gravity-ui:clock" },
   { to: "/feishu", labelKey: "nav.feishu", icon: "gravity-ui:comment" },
+  { to: "/weixin", labelKey: "nav.weixin", icon: "gravity-ui:smartphone" },
   // Issues go at the end of "Build": they are collaboration output in the workspace, like agents / skills they answer "what does this workspace have".
   { to: "/issues", labelKey: "nav.issues", icon: "gravity-ui:bug" },
 ];

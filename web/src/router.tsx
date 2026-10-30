@@ -20,6 +20,7 @@ import { IssuesPage } from "@/pages/IssuesPage";
 import { IssueDetailPage } from "@/pages/IssueDetailPage";
 import { FeishuPage } from "@/pages/FeishuPage";
 import { FeishuConnectPage } from "@/pages/FeishuConnectPage";
+import { WeixinPage } from "@/pages/WeixinPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 
 /*
@@ -179,6 +180,7 @@ export const router = createBrowserRouter([
           { path: "issues/:issueId", element: <IssueDetailPage /> },
           { path: "feishu", element: <FeishuPage /> },
           { path: "feishu/connect", element: <FeishuConnectPage /> },
+          { path: "weixin", element: <WeixinPage /> },
           { path: "settings", element: <SettingsPage /> },
           // Members are back as a tab of the settings page; this path segment only keeps a redirect (see MembersRedirect)
           { path: "settings/members", element: <MembersRedirect /> },

@@ -81,6 +81,8 @@ import type {
   FeishuChat,
   FeishuRegistration,
   FeishuRegistrationResult,
+  WeixinAccount,
+  WeixinLogin,
   OnboardingState,
   PendingMessage,
   Run,
@@ -1054,6 +1056,40 @@ export class HttpApiClient implements ApiClient {
     return requestVoid("DELETE", `/feishu/apps/${seg(id)}`);
   }
 
+  // -- WeChat ---------------------------------------------------------------
+
+  listWeixinAccounts(workspaceId: string): Promise<WeixinAccount[]> {
+    return request<WeixinAccount[]>("GET", `/workspaces/${seg(workspaceId)}/weixin/accounts`);
+  }
+
+  bindWeixinAgent(workspaceId: string, accountId: string, agentId: string): Promise<WeixinAccount> {
+    return request<WeixinAccount>(
+      "PATCH",
+      `/workspaces/${seg(workspaceId)}/weixin/accounts/${seg(accountId)}`,
+      { body: { agentId } },
+    );
+  }
+
+  deleteWeixinAccount(workspaceId: string, accountId: string): Promise<void> {
+    return requestVoid("DELETE", `/workspaces/${seg(workspaceId)}/weixin/accounts/${seg(accountId)}`);
+  }
+
+  startWeixinLogin(workspaceId: string): Promise<WeixinLogin> {
+    return request<WeixinLogin>("POST", `/workspaces/${seg(workspaceId)}/weixin/logins`);
+  }
+
+  pollWeixinLogin(workspaceId: string, loginId: string): Promise<WeixinLogin> {
+    return request<WeixinLogin>("GET", `/workspaces/${seg(workspaceId)}/weixin/logins/${seg(loginId)}`);
+  }
+
+  submitWeixinVerifyCode(workspaceId: string, loginId: string, code: string): Promise<WeixinLogin> {
+    return request<WeixinLogin>(
+      "POST",
+      `/workspaces/${seg(workspaceId)}/weixin/logins/${seg(loginId)}/verify-code`,
+      { body: { code } },
+    );
+  }
+
   // -- Ark credentials --------------------------------------------------------------
 
   /**
@@ -1723,6 +1759,11 @@ export class HttpApiClient implements ApiClient {
    * does not have, and should not have, an API that conjures an authorization result. e2e cases
    * that need it must run in local mode (see playwright.config.ts).
    */
+  /** No server equivalent, same reason as completeFeishuAuth: only a person can scan the QR code. */
+  completeWeixinLogin(): never {
+    throw new Error("completeWeixinLogin() 只有 LocalApiClient 有：真实的微信登录必须由人扫码确认。");
+  }
+
   completeFeishuAuth(): never {
     throw new Error(
       "completeFeishuAuth() 只有 LocalApiClient 有：真实后端的设备码授权必须由用户在飞书点同意，" +

@@ -1734,6 +1734,63 @@ export interface FeishuRegistration {
   pollIntervalSeconds: number;
 }
 
+// -- WeChat channel (server/weixin) --------------------------------------------
+
+/** `expired`: WeChat rejected the bot token (unbound or logged in elsewhere); scan again to fix it. */
+export type WeixinAccountStatus = "active" | "expired";
+
+/** A WeChat bot connected to the workspace. The token and sync cursor never leave the server. */
+export interface WeixinAccount {
+  id: string;
+  workspaceId: string;
+  /** The bot id on the WeChat side (ilink_bot_id). */
+  botId: string;
+  /** The WeChat user who scanned the login code; the bot talks with this user. */
+  ownerUserId: string;
+  /** The bound agent; "" when none (the bot then only answers with a hint). */
+  agentId: string;
+  status: WeixinAccountStatus;
+  /** The last problem worth showing; "" when fine. */
+  lastError: string;
+  /** When the last message came in; "" when none yet. */
+  lastInboundAt: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Login progress. confirmed / already_connected / expired / failed are final. */
+export type WeixinLoginStatus =
+  | "waiting"
+  | "scanned"
+  | "need_verify_code"
+  | "confirmed"
+  | "already_connected"
+  | "expired"
+  | "failed";
+
+export const WEIXIN_LOGIN_DONE: readonly WeixinLoginStatus[] = [
+  "confirmed",
+  "already_connected",
+  "expired",
+  "failed",
+];
+
+/** A QR-code login in progress. */
+export interface WeixinLogin {
+  id: string;
+  status: WeixinLoginStatus;
+  /** The QR code as a PNG data URL; "" once the login is final. */
+  qrcodeDataUrl: string;
+  /** The text inside the QR code (a link); "" once the login is final. */
+  qrcodeContent: string;
+  /** A sentence about the current state, from the server. */
+  message: string;
+  /** The connected bot, when confirmed. */
+  accountId: string;
+  expiresAt: string;
+}
+
 /** The result of one poll. */
 export interface FeishuRegistrationResult {
   status: FeishuRegistrationStatus;
@@ -1778,11 +1835,12 @@ export const RUN_STATUS_LABELS: Record<RunStatus, string> = {
   terminated: "已结束",
 };
 
-export type RunTrigger = "manual" | "feishu" | "api" | "schedule" | "webhook";
+export type RunTrigger = "manual" | "feishu" | "weixin" | "api" | "schedule" | "webhook";
 
 export const RUN_TRIGGER_LABELS: Record<RunTrigger, string> = {
   manual: "手动",
   feishu: "飞书",
+  weixin: "微信",
   api: "API",
   schedule: "定时",
   webhook: "Webhook",

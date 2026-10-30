@@ -151,7 +151,7 @@ import type { Agent, Run, RunTrigger } from "@/types/domain";
  * slow, and with zero errors.
  * Paging needs a paging UI first; see the `RunQuery.limit` note in api.ts.
  */
-const CONVERSATION_TRIGGERS: readonly RunTrigger[] = ["manual", "feishu"];
+const CONVERSATION_TRIGGERS: readonly RunTrigger[] = ["manual", "feishu", "weixin"];
 
 /**
  * "Does this agent have usable Ark credentials right now": **if not, stop the user before they

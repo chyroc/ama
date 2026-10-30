@@ -49,6 +49,7 @@ export function runAwaitsUser(items: TimelineItem[]): boolean {
 
 const TRIGGER_ICONS: Record<string, string> = {
   feishu: "gravity-ui:comment",
+  weixin: "gravity-ui:smartphone",
   manual: "gravity-ui:person",
   api: "gravity-ui:code",
   schedule: "gravity-ui:clock",
