@@ -48,6 +48,10 @@ from pathlib import Path
 # (exactly the trap described above).
 SCRATCH = 'ama_gen_scratch'
 
+# Defined before anything that runs at import time: _compose_pg_container() below uses REPO.
+REPO = Path(__file__).resolve().parent.parent
+SCHEMA_DIR = REPO / 'server/repository/schema'
+
 def _compose_pg_container():
     # compose does not hard-code container_name (the name carries the project prefix),
     # so look it up by service name.
@@ -64,9 +68,6 @@ def _compose_pg_container():
 CONTAINER = os.environ.get('AMA_SCHEMA_PG_CONTAINER') or _compose_pg_container()
 DB = os.environ.get('AMA_SCHEMA_PG_DB') or 'ama'
 USER = os.environ.get('AMA_SCHEMA_PG_USER') or 'ama'
-
-REPO = Path(__file__).resolve().parent.parent
-SCHEMA_DIR = REPO / 'server/repository/schema'
 
 # Use 0x1f (Unit Separator) as the field separator: SQL defaults and comments can contain
 # any character, so a comma or pipe separator would sooner or later collide with the content.
