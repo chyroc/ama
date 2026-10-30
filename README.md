@@ -4,7 +4,7 @@ English | [中文](README.zh-CN.md)
 
 AMA is a self-hostable agent platform built on [Volcengine Ark Managed Agents](https://www.volcengine.com/docs/82379).
 Create workspaces, set up agents and skills, chat with agents and review every run in the browser.
-Agents can also answer in Feishu (Lark) groups and run on a schedule.
+Agents can also answer in Feishu (Lark) groups and in WeChat (connect a bot by scanning a QR code), and run on a schedule.
 
 Ark only runs the model. Every tool the agent calls (bash / read / write / edit / glob / grep) **runs in an
 environment you control**: by default one Docker container per session, or a machine you register with

@@ -81,7 +81,9 @@ almost every item in those docs is a pitfall someone already hit.
 | Touching PostgreSQL connections / pool / timeouts | [server/shared/infra/pg/README.md](server/shared/infra/pg/README.md) |
 | Touching Redis leases / leader election | [server/shared/infra/redis/README.md](server/shared/infra/redis/README.md) |
 | Touching object storage / attachment and file bytes / presigned links | [server/shared/infra/s3/README.md](server/shared/infra/s3/README.md) (**bytes in object storage, metadata in PG; the three endpoints must not be mixed up**) |
+| Touching any chat channel (shared pieces, adding a platform) | [server/channel/README.md](server/channel/README.md) |
 | Touching the Feishu bot | [server/feishu/README.md](server/feishu/README.md) + [server/shared/infra/lark/README.md](server/shared/infra/lark/README.md) |
+| Touching the WeChat bot | [server/weixin/README.md](server/weixin/README.md) + [server/shared/infra/weixin/README.md](server/shared/infra/weixin/README.md) |
 | Touching credential sources (ama / lark-user, which inject credentials into containers) | [server/core/README-integrations.md](server/core/README-integrations.md) |
 | Installing dependencies, building, debugging the environment | [docs/guides/environment.md](docs/guides/environment.md) |
 | Changing what problem feedback collects / adding a "dev team only" endpoint | [server/core/README-feedback.md](server/core/README-feedback.md) |
@@ -121,7 +123,9 @@ server/           Go backend (module: github.com/chyroc/ama/server)
   authz/          authorization: workspace member role → permission matrix → Guard wrapper (declare new routes here)
   core/           business logic: workspaces / members / agents / skills / Ark credentials / run history / worker
   service/ orchestrator/  business services split by resource, and logic that spans several services (see each README)
-  feishu/         business logic: Feishu app integration
+  channel/        what every chat channel shares: run a turn, dedup, session scopes, one loop per account
+  feishu/         business logic: Feishu app integration (a channel)
+  weixin/         business logic: WeChat bots via the iLink bot API (a channel)
   openapi/        OpenAPI generation and up-to-date check
   model/apimodel/  base types and event definitions shared across modules. **Types that go into HTTP responses live here**
   model/persistmodel/ types used only by the storage layer (Store inputs, row structs that don't go into responses).
@@ -130,18 +134,20 @@ server/           Go backend (module: github.com/chyroc/ama/server)
   repository/schema/ all SQL/DDL, **one table per file, file name is the table name**, each file starts with a generated
                   "table overview". The order they are applied in is an explicit ordered list in schema.go. To add a table see that directory's README
   shared/infra/   **integration layer (does io)**: config (YAML + env vars), lark (Feishu open platform),
+                  weixin (WeChat iLink bot protocol, ported from Tencent/openclaw-weixin),
                   ma (Ark Managed Agents), docker (Docker Engine API client),
                   dockertools (default executor: one container per Ark session),
                   shelltools (the six agent tools themselves, independent of the executor),
                   pg / pgmq / redis (storage and queues), s3 (S3-compatible object storage, file bytes), oidc (OpenID Connect login),
                   github (GitHub device flow login),
                   cryptobox / secret (encryption and credentials), filebytes (reading/writing attachment bytes)
-  shared/gopkg/   **pure function helpers (no io)**: attachment, authzdoc, humanize, mdtitle,
+  shared/gopkg/   **pure function helpers (no io)**: arkframe (reading Ark event frames), attachment, authzdoc, humanize, mdtitle,
                   resource, selfurl, requestid, xlog
 web/              frontend Vite + React 19 + TS + Tailwind 4 + HeroUI 3
 cli/              npm wrapper for the ama command (prebuilt binaries)
 sandbox-image/    image for Docker session containers
 deploy/           default config inside the amad image
+repos/            read-only clones of third-party projects used as references (git-ignored, see Working rules)
 docs/
   DESIGN.md       frontend design doc: information architecture, data model, routes, how events are shown
   guides/         development guides by task, see the index table above
@@ -293,7 +299,7 @@ because the command line is recorded as-is in `RunEvent` forever.
 **Authorization**: the `authz` package decides permissions by **workspace member role**: owner/admin can do everything, member can read and write, viewer can only read,
 **non-members always get 403**, and the workspace list returns only the workspaces you belong to. ⚠️ **Every new HTTP route must declare its permission in
 `server/authz/matrix.go`, otherwise startup panics** (a missing declaration would silently let requests through, a failure with zero errors).
-Three system-driven paths (worker pool checks, Feishu inbound, scheduled jobs) **have no identity and skip authorization on purpose**.
+Four system-driven paths (worker pool checks, Feishu inbound, WeChat inbound, scheduled jobs) **have no identity and skip authorization on purpose**.
 Don't add auth to them: doing so makes the bot silently stop replying and tool calls hang. Read
 [server/authz/README.md](server/authz/README.md) before you start.
 

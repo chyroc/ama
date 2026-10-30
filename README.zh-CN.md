@@ -3,7 +3,7 @@
 [English](README.md) | 中文
 
 AMA 是一个可以自己部署的 agent 平台，构建在[火山方舟 Managed Agents](https://www.volcengine.com/docs/82379) 之上。
-在网页上建空间、配 agent 与技能、和 agent 对话、回看每一次运行；也可以把 agent 接进飞书群、配定时任务。
+在网页上建空间、配 agent 与技能、和 agent 对话、回看每一次运行；也可以把 agent 接进飞书群、扫码接进微信、配定时任务。
 
 方舟只负责模型推理；agent 调用的工具（bash / read / write / edit / glob / grep）**跑在你自己的执行环境里**：
 默认是每个会话一个 Docker 容器，也可以是你用 `ama daemon` 注册的一台机器。

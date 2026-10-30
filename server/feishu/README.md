@@ -6,6 +6,15 @@ AppID、抄 AppSecret、再贴回来」变成「点个链接去授权」。
 协议层在
 [`shared/infra/lark`](../shared/infra/lark/)，本包只做业务编排。
 
+> **Feishu is one channel of the channel layer** ([`server/channel`](../channel/README.md)).
+> What is not specific to Feishu now lives there and is shared with the WeChat channel:
+> session creation (`CreateChannelConversation`), running a turn (`channel.RunTurn`, used by
+> `runAndReply`), the answer buffer (`channel.AnswerBuffer`), the long-connection supervisor
+> (`Supervisor` here is a `channel.Source`) and the fixed fallback replies. Ark frame parsing moved to
+> `shared/gopkg/arkframe`. Feishu still keeps its own dedup / scope / inflight tables. The rest of this
+> README predates the move and is still in Chinese; function names like `agentText` / `turnEnded`
+> below now refer to their `arkframe` equivalents.
+
 ## 分层
 
 ```
