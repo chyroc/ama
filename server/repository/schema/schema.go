@@ -480,6 +480,9 @@ var feishuOrder = []string{
 var channelOrder = []string{
 	"channel_inbound_messages.sql",
 	"channel_session_scopes.sql",
+	// WeChat: connected bots and QR-code logins in progress.
+	"weixin_accounts.sql",
+	"weixin_logins.sql",
 }
 
 // CorePG returns the DDL scripts of the core tables **in apply order**.
