@@ -294,3 +294,44 @@ func TestRunWithLeaseOnlyOneHolder(t *testing.T) {
 		t.Fatalf("peak holders = %d, want 1", peak.Load())
 	}
 }
+
+// ---- EnsureSession ----
+
+// racingStore loses every BindScope to a session created "by another instance".
+type racingStore struct {
+	*MemStore
+}
+
+func (r racingStore) BindScope(ctx context.Context, scope Scope) (Scope, bool, error) {
+	other := scope
+	other.RunID = "run_other_instance"
+	_, _, _ = r.MemStore.BindScope(ctx, other)
+	return r.MemStore.BindScope(ctx, scope)
+}
+
+func TestEnsureSessionReusesAndLosesRaceGracefully(t *testing.T) {
+	ctx := context.Background()
+	conv := &fakeConversations{}
+	req := SessionRequest{
+		Scope:       ScopeKey{Channel: Weixin, AccountID: "acc", Key: "user:u1", AgentID: "a"},
+		WorkspaceID: "ws", Detail: "test", Now: time.Now(),
+	}
+
+	store := NewMemStore()
+	first, err := EnsureSession(ctx, store, conv, req, nil)
+	if err != nil || first != "run_1" {
+		t.Fatalf("first = %q, %v", first, err)
+	}
+	again, _ := EnsureSession(ctx, store, conv, req, nil)
+	if again != first {
+		t.Fatalf("the second message must reuse the session, got %q", again)
+	}
+	if s, _ := store.GetScope(ctx, req.Scope); s.TurnCount != 2 {
+		t.Fatalf("turn count = %d", s.TurnCount)
+	}
+
+	got, err := EnsureSession(ctx, racingStore{NewMemStore()}, conv, req, nil)
+	if err != nil || got != "run_other_instance" {
+		t.Fatalf("the loser must switch to the winner's session, got %q, %v", got, err)
+	}
+}

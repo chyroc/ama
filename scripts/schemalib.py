@@ -119,7 +119,7 @@ def order():
     """
     src = (SCHEMA_DIR / 'schema.go').read_text()
     names = []
-    for var in ('coreOrder', 'authOrder', 'feishuOrder'):
+    for var in ('coreOrder', 'authOrder', 'feishuOrder', 'channelOrder'):
         m = re.search(r'var ' + var + r' = \[\]string\{(.*?)\n\}', src, re.S)
         if not m:
             die(f'schema.go 里找不到 {var}——它的写法变了？本脚本靠正则解析它取下发顺序。')

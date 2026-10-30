@@ -471,6 +471,17 @@ var feishuOrder = []string{
 	"feishu_session_scopes.sql",
 }
 
+// ---------------------------------------------------------------------------
+// channel: the tables shared by chat channels, plus the WeChat channel's own tables
+// ---------------------------------------------------------------------------
+//
+// All real columns, no doc. Feishu predates this group and keeps its own tables for the same jobs.
+// No foreign keys, so the order is only for reading.
+var channelOrder = []string{
+	"channel_inbound_messages.sql",
+	"channel_session_scopes.sql",
+}
+
 // CorePG returns the DDL scripts of the core tables **in apply order**.
 //
 // The caller (coredao's migrate) runs them one by one. **Why not join them into one big string**:
@@ -485,6 +496,9 @@ func AuthPG() []Script { return load(authOrder) }
 
 // FeishuPG returns the DDL scripts of the seven feishu tables, in apply order.
 func FeishuPG() []Script { return load(feishuOrder) }
+
+// ChannelPG returns the tables shared by chat channels (server/channel) and the WeChat channel.
+func ChannelPG() []Script { return load(channelOrder) }
 
 // load reads the scripts in the given order.
 //
