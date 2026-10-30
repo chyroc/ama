@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/chyroc/ama/server/core"
+	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 	"github.com/chyroc/ama/server/shared/infra/lark"
 )
 
@@ -437,7 +438,7 @@ func TestSafeLarkID(t *testing.T) {
 
 // TestUserMessageEvent_HarnessIsSecondBlock checks the shape of the event.
 func TestUserMessageEvent_HarnessIsSecondBlock(t *testing.T) {
-	raw, err := userMessageEvent("用户说的话", "\n\n"+larkPromptOpenTag+"\nchat_id: oc_x\n"+larkPromptCloseTag)
+	raw, err := arkframe.UserMessage("用户说的话", "\n\n"+larkPromptOpenTag+"\nchat_id: oc_x\n"+larkPromptCloseTag)
 	if err != nil {
 		t.Fatalf("拼事件失败：%v", err)
 	}
@@ -470,7 +471,7 @@ func TestUserMessageEvent_HarnessIsSecondBlock(t *testing.T) {
 func TestUserMessageEvent_NoHarnessKeepsSingleBlock(t *testing.T) {
 	// Without a harness block the shape must be **exactly the same** as before the change (only one block).
 	// This protects the chat page path: core/chat_test.go asserts len(Content) == 1.
-	raw, err := userMessageEvent("只有正文", "")
+	raw, err := arkframe.UserMessage("只有正文", "")
 	if err != nil {
 		t.Fatalf("拼事件失败：%v", err)
 	}
@@ -507,7 +508,7 @@ func TestUserMessageEvent_NoHarnessKeepsSingleBlock(t *testing.T) {
 func TestHarnessBlockDoesNotPolluteTitle(t *testing.T) {
 	const userText = "结算页面打不开了"
 
-	raw, err := userMessageEvent(userText, renderLarkPrompt(groupMsg(), nil))
+	raw, err := arkframe.UserMessage(userText, renderLarkPrompt(groupMsg(), nil))
 	if err != nil {
 		t.Fatalf("拼事件失败：%v", err)
 	}
@@ -533,7 +534,7 @@ func TestHarnessBlockDoesNotPolluteTitle(t *testing.T) {
 // If it were taken by the block it would be pinned forever (filling back only happens when Title == ""), and this is the shape where
 // "unrecoverable" is most likely to really happen.
 func TestHarnessOnlyMessageLeavesTitleEmpty(t *testing.T) {
-	raw, err := userMessageEvent("", renderLarkPrompt(groupMsg(), nil))
+	raw, err := arkframe.UserMessage("", renderLarkPrompt(groupMsg(), nil))
 	if err != nil {
 		t.Fatalf("拼事件失败：%v", err)
 	}

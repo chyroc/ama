@@ -31,6 +31,7 @@ import (
 	"testing"
 
 	"github.com/chyroc/ama/server/core"
+	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 	"github.com/chyroc/ama/server/shared/infra/lark"
 )
 
@@ -311,7 +312,7 @@ func TestCardMessageEvent_TitleAndBody(t *testing.T) {
 	msg := cardMsg()
 	ctx := larkContext{Expanded: "线上告警：TLS 错误数超阈值\n值班同学请跟进"}
 
-	raw, err := userMessageEvent(
+	raw, err := arkframe.UserMessage(
 		larkUserText(msg, ctx, nil),
 		renderLarkPromptWithContext(msg, ctx, nil),
 	)

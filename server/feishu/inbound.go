@@ -45,13 +45,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/chyroc/ama/server/feishu/feishumodel"
 	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/chyroc/ama/server/feishu/feishumodel"
+
+	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 	"github.com/chyroc/ama/server/shared/infra/lark"
 	"github.com/chyroc/ama/server/shared/infra/secret"
 )
@@ -1006,33 +1008,33 @@ func (in *Inbound) runAndReply(
 		defer wg.Done()
 		streamErr = in.cfg.Conversations.StreamRunEvents(streamCtx, runID, func(raw []byte) error {
 			frames.Add(1)
-			if text, ok := agentText(raw); ok && text != "" {
+			if text, ok := arkframe.AgentText(raw); ok && text != "" {
 				messages.Add(1)
 				answer.write(text)
 			}
 			// A tool call splits the text collected so far into segments: that segment is usually narration like "let me go check", not the reply.
 			// See the type comment on answerBuffer: splitting **does not lose content**, and it falls back when the turn ends with tool_use.
-			if startsToolCall(raw) {
+			if arkframe.StartsToolCall(raw) {
 				answer.reset()
 			}
 			// This turn was redirected by the user's next message. Record it, and **send no message when finishing because of it**:
 			// being interrupted is not a failure, and having no answer is its normal result. See turnInterrupted.
-			if turnInterrupted(raw) {
+			if arkframe.Interrupted(raw) {
 				interrupted.Store(true)
 			}
 			// The Ark side gave up on this turn (rate-limit retries exhausted). It satisfies turnEnded but is not "finished answering";
 			// when finishing we use it to switch to a message that can state the cause. See turnFailedUpstream.
-			if turnFailedUpstream(raw) {
+			if arkframe.FailedUpstream(raw) {
 				failedUpstream.Store(true)
 			}
-			if s := stopReasonOf(raw); s != "" {
+			if s := arkframe.StopReason(raw); s != "" {
 				lastStop.Store(s)
 			}
 			// The chain of thought eats every frame: thinking, tool calls, and final state are all in there.
 			progress.consume(streamCtx, raw)
 			// The final frame must be fed to the chain of thought before dropping the stream, or the closing frame is lost,
 			// and the chat is left with a thinking process that spins forever.
-			if turnEnded(raw) {
+			if arkframe.TurnEnded(raw) {
 				stopStream()
 			}
 			return nil
@@ -1060,7 +1062,7 @@ func (in *Inbound) runAndReply(
 		}
 	}
 
-	event, err := userMessageEvent(
+	event, err := arkframe.UserMessage(
 		larkUserText(msg, prefetched, log),
 		renderLarkPromptWithContext(msg, prefetched, log),
 	)
@@ -1289,36 +1291,6 @@ func larkUserText(msg *lark.InboundMessage, prefetched larkContext, log *slog.Lo
 		return expanded
 	}
 	return placeholder + "\n" + expanded
-}
-
-// userMessageEvent builds an Ark user.message event.
-//
-// harness is the `<harness:lark>` block built by renderLarkPrompt; an empty string means none.
-//
-// ⚠️ **The harness block is a separate second content block, and it must come after the user's text.**
-// Both are deliberate:
-//
-//   - **A separate block** (instead of concatenating it into text): the frontend uses it to render "platform injected" and "what the user said"
-//     separately (a fold-out section collapsed by default), without string matching in the body; that kind of test misfires when the user
-//     types text that looks like a tag;
-//   - **Placed after**: firstUserText in core/chat.go joins **all** text blocks of the first user.message
-//     as the session title. If it came first, the title of every Feishu session would become
-//     "<harness:lark> below is the source of this Feishu message...". larkprompt_test.go pins this down.
-func userMessageEvent(text, harness string) (json.RawMessage, error) {
-	content := []map[string]any{
-		{"type": "text", "text": text},
-	}
-	if strings.TrimSpace(harness) != "" {
-		content = append(content, map[string]any{"type": "text", "text": harness})
-	}
-	raw, err := json.Marshal(map[string]any{
-		"type":    "user.message",
-		"content": content,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("拼消息事件失败: %w", err)
-	}
-	return raw, nil
 }
 
 // claim tries to claim a message. Returning true means it is a new message and should be handled.
@@ -1605,176 +1577,4 @@ func (in *Inbound) reclaimFinishedTurn(ctx context.Context, runID string, log *s
 	}
 	log.Info("上一轮其实已经结束，回收残留的轮次记录后继续", "status", status)
 	return true
-}
-
-// agentText extracts the text the agent said from one Ark frame.
-//
-// Only agent.message is recognized; everything else (thinking, tool calls, status changes) is not put on the card for now:
-// that is noise for people in the chat. [DONE] is not JSON and is quietly skipped here.
-func agentText(raw []byte) (string, bool) {
-	var ev struct {
-		Type    string `json:"type"`
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(raw, &ev); err != nil {
-		return "", false
-	}
-	if ev.Type != "agent.message" {
-		return "", false
-	}
-	var b strings.Builder
-	for _, c := range ev.Content {
-		if c.Type == "text" {
-			b.WriteString(c.Text)
-		}
-	}
-	return b.String(), true
-}
-
-// startsToolCall decides whether this frame means "the agent is about to call a tool".
-//
-// It has only one use: splitting segments for answerBuffer. See the type comment on answerBuffer:
-// the agent.message before a tool call is usually transitional narration, not the reply.
-//
-// ⚠️ **All three kinds of tool calls must be recognized**: built-in tools are agent.tool_use, while custom tools and MCP tools
-// each have their own types (agent.custom_tool_use / agent.mcp_tool_use; see the event list in docs/DESIGN.md;
-// both have really appeared in the local store). Recognizing only the first means agents that use custom or MCP tools
-// get no segment split, so the narration before a tool call is sent glued to the reply in the same message.
-// This is the same thing TestFinalReplyIsOnlyTheLastSegment guards, only it breaks with a different tool type.
-func startsToolCall(raw []byte) bool {
-	var ev struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(raw, &ev); err != nil {
-		return false
-	}
-	switch ev.Type {
-	case "agent.tool_use", "agent.custom_tool_use", "agent.mcp_tool_use":
-		return true
-	}
-	return false
-}
-
-// turnInterrupted decides whether this frame means "this turn was interrupted".
-//
-// # Why it must be separate from turnEnded
-//
-// In the event stream an interrupt **looks exactly like a normal end**: user.interrupt is followed by a frame
-// `session.status_idle + stop_reason=end_turn` (measured on sesn-example-06,
-// seq 14→16 and 21→23, both end_turn, **not** requires_action).
-// So turnEnded judges "ended" as usual. That is correct; the stream should be dropped.
-//
-// But **the reason it ended** decides whether to send the user a message:
-//
-//	normal end_turn         the agent finished answering → send the answer; if it really produced nothing, execution went wrong → show a notice
-//	interrupted by interrupt the user sent the next message and redirected this turn → **nothing should be sent**
-//
-// Without this distinction we get that production bug: the user sent "1, 2, 3" in a row, the first two were redirected,
-// and each got a pointless "this turn produced no reply, something may have gone wrong during execution", though nothing had failed.
-//
-// Only the user.interrupt frame is recognized: it is the **cause** of the redirect (core.RedirectRun sends it before the new message),
-// and it appears before the final frame, so the subscriber always sees it first.
-//
-// ⚠️ **But Ark has a second way to express it**: the final frame's own `stop_reason` can be `user_interrupt`
-// (see the stop_reason value range in docs/DESIGN.md; drainAllowed on the core side uses exactly this test).
-// Both mean the same thing, and recognizing only one misses cases: the missed turn goes into the fallback, and the user gets a pointless
-// "something went wrong during execution", which is exactly what this function exists to prevent. So both tests must be recognized.
-func turnInterrupted(raw []byte) bool {
-	var ev struct {
-		Type       string `json:"type"`
-		StopReason struct {
-			Type string `json:"type"`
-		} `json:"stop_reason"`
-	}
-	if err := json.Unmarshal(raw, &ev); err != nil {
-		return false
-	}
-	return ev.Type == "user.interrupt" || ev.StopReason.Type == "user_interrupt"
-}
-
-// turnFailedUpstream decides whether this frame means "the Ark side gave up on this turn".
-//
-// # Why recognize it separately
-//
-// `stop_reason` has four values (docs/DESIGN.md): `end_turn` / `requires_action` /
-// `user_interrupt` / **`retries_exhausted`**. The last one means "the model side failed repeatedly and ran out of
-// retries"; rate limiting (model_rate_limited_error) is the most common source.
-//
-// It satisfies turnEnded (the stream really should be dropped), but **it is not "the agent finished answering"**: that turn produced no
-// text at all. The old code did not make this distinction, so it shared the same fallback text with "execution really went wrong".
-// That sentence was not wrong in itself, but it described a **known cause** (rate limited; wait a bit and retry) as
-// a failure of unknown cause. Users did not know whether to wait or rephrase, and whoever debugged it could not see it was rate limiting.
-//
-// Measured on two local turns: sesn-example-02 (seq 21 is model_rate_limited_error,
-// seq 25 final state retries_exhausted) and sesn-example-03 (seq 60).
-// Both turns produced not a single character, and the user got "something may have gone wrong during execution" for each.
-func turnFailedUpstream(raw []byte) bool {
-	var ev struct {
-		StopReason struct {
-			Type string `json:"type"`
-		} `json:"stop_reason"`
-	}
-	if err := json.Unmarshal(raw, &ev); err != nil {
-		return false
-	}
-	return ev.StopReason.Type == "retries_exhausted"
-}
-
-// stopReasonOf returns the stop_reason type of this frame, or an empty string if there is none.
-//
-// Only for logs: when we reach the fallback text we need to record "how this turn ended", the most direct field for
-// diagnosing afterwards (end_turn means the agent really said nothing, retries_exhausted means rate limited,
-// user_interrupt means redirect).
-func stopReasonOf(raw []byte) string {
-	var ev struct {
-		StopReason struct {
-			Type string `json:"type"`
-		} `json:"stop_reason"`
-	}
-	if err := json.Unmarshal(raw, &ev); err != nil {
-		return ""
-	}
-	return ev.StopReason.Type
-}
-
-// turnEnded decides whether this frame means "this turn is finished".
-//
-// # Why it is needed: Ark does not close the stream by itself
-//
-// Ark keeps an SSE long connection per session and does not disconnect after end_turn; it is waiting for the session's next user
-// message. So the subscriber **must recognize the final frame itself**, otherwise StreamRunEvents never returns,
-// and this turn's serial lock is held until runTimeout (see how runAndReply uses it).
-//
-// The test is exactly the same as turnEnded in core/scheduler.go and applyEventToRun in core/chat.go:
-//
-//	session.status_idle + stop_reason=end_turn         this turn finished answering → ended
-//	session.status_idle + stop_reason=requires_action  **not ended**: the agent is waiting for
-//	                                                   a tool result, and after the worker returns it
-//	                                                   it continues producing events
-//	session.status_terminated                          the session was terminated, no more events → ended
-//
-// The requires_action one matters most: in a real turn it appears in the middle (measured on the sesn-...-kvz6t
-// session: among 34 events status_idle appeared 4 times, and the first two were requires_action).
-// Treating it as ended would drop the stream right when the agent is about to continue, and the user gets half an answer.
-func turnEnded(raw []byte) bool {
-	var ev struct {
-		Type       string `json:"type"`
-		StopReason struct {
-			Type string `json:"type"`
-		} `json:"stop_reason"`
-	}
-	// [DONE] is not JSON and is quietly skipped here.
-	if err := json.Unmarshal(raw, &ev); err != nil {
-		return false
-	}
-	switch ev.Type {
-	case "session.status_idle":
-		return ev.StopReason.Type != "requires_action"
-	case "session.status_terminated":
-		return true
-	}
-	return false
 }

@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 	"github.com/chyroc/ama/server/shared/infra/lark"
 )
 
@@ -236,8 +237,8 @@ func TestTurnEndedRecognizesArkFrames(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := turnEnded(c.raw); got != c.want {
-				t.Errorf("turnEnded(%s) = %v，想要 %v", c.raw, got, c.want)
+			if got := arkframe.TurnEnded(c.raw); got != c.want {
+				t.Errorf("arkframe.TurnEnded(%s) = %v，想要 %v", c.raw, got, c.want)
 			}
 		})
 	}

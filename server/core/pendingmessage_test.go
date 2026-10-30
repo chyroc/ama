@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/chyroc/ama/server/model/apimodel"
+	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 )
 
 // newPendingRun builds a session that can queue (running state, agent healthy).
@@ -408,7 +409,7 @@ func TestDrainAllowedExcludesUserInterrupt(t *testing.T) {
 // former, putting the narrowing into turnEnded would also make it pass, and that is wrong.
 func TestTurnEndedStillAcceptsInterrupt(t *testing.T) {
 	raw := []byte(`{"type":"session.status_idle","stop_reason":{"type":"user_interrupt"}}`)
-	if !turnEnded(raw) {
+	if !arkframe.TurnEnded(raw) {
 		t.Error("turnEnded 必须仍然认「用户中断」为一轮结束——" +
 			"定时任务那条路靠它收尾，不认会让 run 永远停在 running")
 	}

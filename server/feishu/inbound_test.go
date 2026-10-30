@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 	"github.com/chyroc/ama/server/shared/infra/lark"
 )
 
@@ -692,7 +693,7 @@ func TestNewInboundValidatesDependencies(t *testing.T) {
 
 // agentText only recognizes agent.message; other frames (thinking, status, [DONE]) must be skipped quietly.
 func TestAgentTextOnlyPicksAgentMessages(t *testing.T) {
-	if text, ok := agentText(agentFrame("你好")); !ok || text != "你好" {
+	if text, ok := arkframe.AgentText(agentFrame("你好")); !ok || text != "你好" {
 		t.Errorf("该取到文本: text=%q ok=%v", text, ok)
 	}
 
@@ -700,15 +701,15 @@ func TestAgentTextOnlyPicksAgentMessages(t *testing.T) {
 		"type":    "agent.thinking",
 		"content": []map[string]any{{"type": "text", "text": "让我想想"}},
 	})
-	if _, ok := agentText(thinking); ok {
+	if _, ok := arkframe.AgentText(thinking); ok {
 		t.Error("思考帧不该进卡片，那对群里的人是噪音")
 	}
 
 	// [DONE] is not JSON; it must not panic or be taken as text.
-	if _, ok := agentText([]byte("[DONE]")); ok {
+	if _, ok := arkframe.AgentText([]byte("[DONE]")); ok {
 		t.Error("[DONE] 不该被当成文本")
 	}
-	if _, ok := agentText(nil); ok {
+	if _, ok := arkframe.AgentText(nil); ok {
 		t.Error("空帧不该被当成文本")
 	}
 }

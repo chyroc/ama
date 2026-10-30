@@ -51,6 +51,7 @@ import (
 	"time"
 
 	"github.com/chyroc/ama/server/model/apimodel"
+	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 )
 
 const (
@@ -438,12 +439,12 @@ func (s *Scheduler) runOnce(
 	go func() {
 		defer close(streamDone)
 		streamErr = s.cfg.Service.StreamRunEvents(streamCtx, run.ID, func(raw []byte) error {
-			if text, ok := agentMessageText(raw); ok && text != "" {
+			if text, ok := arkframe.AgentText(raw); ok && text != "" {
 				mu.Lock()
 				builder.WriteString(text)
 				mu.Unlock()
 			}
-			if turnEnded(raw) {
+			if arkframe.TurnEnded(raw) {
 				// Cancel ctx so StreamRunEvents returns. **Do not return an error here**:
 				// that would be logged as "subscriber error" with a warning, while this is actually a
 				// normal shutdown.
@@ -760,51 +761,4 @@ func scheduleUserMessage(sch apimodel.Schedule, prompt string) (json.RawMessage,
 		return nil, fmt.Errorf("拼指令失败: %w", err)
 	}
 	return raw, nil
-}
-
-// turnEnded decides whether this frame means "this round is finished".
-//
-// Only session.status_idle counts, and only when stop_reason is not requires_action. The latter is
-// indeed idle on the Ark side, but it means "stuck waiting for user confirmation"; the agent will
-// continue, and treating it as over would collect only half the result.
-// Same check as applyEventToRun in core/chat.go.
-//
-// session.status_terminated also counts as over (the session was terminated; no more events will
-// come).
-func turnEnded(raw []byte) bool {
-	switch frameType(raw) {
-	case "session.status_idle":
-		return stopReasonType(raw) != "requires_action"
-	case "session.status_terminated":
-		return true
-	}
-	return false
-}
-
-// agentMessageText extracts the text the agent said from a frame.
-//
-// Only agent.message counts: thinking, tool calls, and status changes are not "results", and posting
-// them to the group is noise. Delta frames (event_delta) and [DONE] are quietly skipped here: the
-// former's type is not agent.message, and the latter is not JSON.
-func agentMessageText(raw []byte) (string, bool) {
-	var ev struct {
-		Type    string `json:"type"`
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(raw, &ev); err != nil {
-		return "", false
-	}
-	if ev.Type != "agent.message" {
-		return "", false
-	}
-	var b strings.Builder
-	for _, c := range ev.Content {
-		if c.Type == "text" {
-			b.WriteString(c.Text)
-		}
-	}
-	return b.String(), true
 }

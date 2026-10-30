@@ -65,6 +65,7 @@ import (
 
 	"github.com/chyroc/ama/server/model/apimodel"
 	"github.com/chyroc/ama/server/model/persistmodel"
+	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 	"github.com/chyroc/ama/server/shared/infra/ma"
 )
 
@@ -605,7 +606,7 @@ func (w *RunWatcher) watchOne(ctx context.Context, runID string) {
 		// instead of waiting a scan period.
 		drained := false
 		err := w.cfg.Service.StreamRunEvents(runCtx, runID, func(raw []byte) error {
-			if turnEnded(raw) {
+			if arkframe.TurnEnded(raw) {
 				// **This moment is the only reliable signal of "the next message can be sent".**
 				//
 				// "The run becomes idle" cannot replace it: requires_action is also idle on the

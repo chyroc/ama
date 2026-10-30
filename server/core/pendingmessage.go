@@ -67,6 +67,7 @@ import (
 	"time"
 
 	"github.com/chyroc/ama/server/model/apimodel"
+	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 )
 
 const (
@@ -279,7 +280,7 @@ func (s *Service) DrainPendingMessage(ctx context.Context, runID, owner string) 
 // cut in, that message itself starts a new turn, and when that turn ends normally the next one
 // is taken as usual.
 func drainAllowed(raw []byte) bool {
-	return stopReasonType(raw) != "user_interrupt"
+	return arkframe.StopReason(raw) != "user_interrupt"
 }
 
 // failPending marks a queued message as unsendable. A failure here is only logged; the next turn will try once more.

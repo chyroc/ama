@@ -27,6 +27,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 )
 
 // ---------------------------------------------------------------------------
@@ -216,14 +218,14 @@ func TestTurnEndedTreatsInterruptIdleAsEnd(t *testing.T) {
 		"type":        "session.status_idle",
 		"stop_reason": map[string]any{"type": "end_turn"},
 	})
-	if !turnEnded(idleAfterInterrupt) {
+	if !arkframe.TurnEnded(idleAfterInterrupt) {
 		t.Error("中断带来的 idle 必须算结束，否则流不关、串行锁握满 10 分钟")
 	}
-	if !turnInterrupted(mustJSON(map[string]any{"type": "user.interrupt"})) {
+	if !arkframe.Interrupted(mustJSON(map[string]any{"type": "user.interrupt"})) {
 		t.Error("user.interrupt 必须被认成中断")
 	}
 	// A normal end must not be misjudged as an interrupt, or the normal turn's answer cannot be sent.
-	if turnInterrupted(idleAfterInterrupt) {
+	if arkframe.Interrupted(idleAfterInterrupt) {
 		t.Error("终态帧本身不是中断标记——判据只能是 user.interrupt")
 	}
 }

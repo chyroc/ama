@@ -41,6 +41,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 )
 
 const (
@@ -181,17 +183,17 @@ func (in *Inbound) resumeLive(ctx context.Context, rec InflightTurnRecord, log *
 	log.Info("未结轮次仍在进行，重新挂流续跑", "status", status)
 	var failedUpstream bool
 	streamErr := in.cfg.Conversations.StreamRunEvents(runCtx, rec.RunID, func(raw []byte) error {
-		if text, ok := agentText(raw); ok && text != "" {
+		if text, ok := arkframe.AgentText(raw); ok && text != "" {
 			answer.write(text)
 		}
 		// Same as runAndReply: the part before a tool call is usually narration like "let me go check", not the reply.
 		// See the type comment on answerBuffer: splitting **does not lose content**, and it falls back when the turn ends with tool_use.
-		if startsToolCall(raw) {
+		if arkframe.StartsToolCall(raw) {
 			answer.reset()
 		}
 		// Same as runAndReply: a turn whose retries were exhausted on the Ark side gets a message that can state the cause.
 		// See turnFailedUpstream.
-		if turnFailedUpstream(raw) {
+		if arkframe.FailedUpstream(raw) {
 			failedUpstream = true
 		}
 		progress.consume(runCtx, raw)

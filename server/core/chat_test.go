@@ -29,6 +29,7 @@ import (
 	"github.com/chyroc/ama/server/model/apimodel"
 	"github.com/chyroc/ama/server/model/persistmodel"
 	"github.com/chyroc/ama/server/service/arkrun"
+	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 	"github.com/chyroc/ama/server/shared/infra/ma"
 )
 
@@ -1803,10 +1804,10 @@ func TestRedirectRunSendsInterruptBeforeMessage(t *testing.T) {
 	if len(runner.sentEvents) != 2 {
 		t.Fatalf("方舟应当收到 2 个事件，实际 %d", len(runner.sentEvents))
 	}
-	if got := frameType(runner.sentEvents[0]); got != "user.interrupt" {
+	if got := arkframe.Type(runner.sentEvents[0]); got != "user.interrupt" {
 		t.Errorf("第一个事件必须是 user.interrupt，实际 %q", got)
 	}
-	if got := frameType(runner.sentEvents[1]); got != "user.message" {
+	if got := arkframe.Type(runner.sentEvents[1]); got != "user.message" {
 		t.Errorf("第二个事件必须是 user.message，实际 %q", got)
 	}
 	// The text must be carried over unchanged; do not lose it while building the event.

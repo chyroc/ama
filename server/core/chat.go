@@ -64,6 +64,7 @@ import (
 
 	"github.com/chyroc/ama/server/model/apimodel"
 	"github.com/chyroc/ama/server/model/persistmodel"
+	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 	"github.com/chyroc/ama/server/shared/infra/ma"
 	"github.com/chyroc/ama/server/shared/infra/secret"
 )
@@ -1463,7 +1464,7 @@ func (s *Service) applyEventToRun(
 		// When stop_reason is requires_action the Ark side is still idle, but "stuck waiting for
 		// confirmation" and "normal idle" are different things to the user; the frontend treats it as
 		// a separate status (see apimodel.RunStatus).
-		if stopReasonType(ev.Raw) == "requires_action" {
+		if arkframe.StopReason(ev.Raw) == "requires_action" {
 			run.Status = apimodel.RunRequiresAction
 			// ⚠️ **This branch deliberately does not call closeRun.**
 			//
@@ -1852,35 +1853,11 @@ func isDoneFrame(raw []byte) bool {
 //	{"type":"event_start","event":{"id":"sevt-...","type":"agent.message"}}
 //	{"type":"event_delta","event_id":"sevt-...","delta":{"type":"content_delta",...}}
 func isDeltaFrame(raw []byte) bool {
-	switch frameType(raw) {
+	switch arkframe.Type(raw) {
 	case "event_start", "event_delta":
 		return true
 	}
 	return false
-}
-
-// frameType gets the top-level type of a frame. Returns an empty string if it cannot.
-func frameType(raw []byte) string {
-	var env struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return ""
-	}
-	return env.Type
-}
-
-// stopReasonType gets stop_reason.type.
-func stopReasonType(raw []byte) string {
-	var env struct {
-		StopReason struct {
-			Type string `json:"type"`
-		} `json:"stop_reason"`
-	}
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return ""
-	}
-	return env.StopReason.Type
 }
 
 // sessionErrorMessage gets the error message from a session.error event.
@@ -1986,7 +1963,7 @@ func firstUserText(raw []json.RawMessage) string {
 // isInterruptOnly reports whether this batch of upstream events is only interrupts (then the run should not be set back to running).
 func isInterruptOnly(raw []json.RawMessage) bool {
 	for _, item := range raw {
-		if frameType(item) != "user.interrupt" {
+		if arkframe.Type(item) != "user.interrupt" {
 			return false
 		}
 	}

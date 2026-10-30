@@ -33,6 +33,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 )
 
 // The **content** of these two bodies does not matter; what matters is that neither is a substring of the other, otherwise the Contains assertions would
@@ -266,9 +268,9 @@ func TestStartsToolCallRecognizesAllVariants(t *testing.T) {
 		{"user.tool_result", false},
 		{"agent.thinking", false},
 	} {
-		got := startsToolCall(mustJSON(map[string]any{"type": tc.typ}))
+		got := arkframe.StartsToolCall(mustJSON(map[string]any{"type": tc.typ}))
 		if got != tc.want {
-			t.Errorf("startsToolCall(%s) = %v，想要 %v", tc.typ, got, tc.want)
+			t.Errorf("arkframe.StartsToolCall(%s) = %v，想要 %v", tc.typ, got, tc.want)
 		}
 	}
 }
@@ -292,8 +294,8 @@ func TestTurnFailedUpstreamOnlyOnRetriesExhausted(t *testing.T) {
 			"type":        "session.status_idle",
 			"stop_reason": map[string]any{"type": tc.stop},
 		})
-		if got := turnFailedUpstream(raw); got != tc.want {
-			t.Errorf("turnFailedUpstream(stop=%s) = %v，想要 %v", tc.stop, got, tc.want)
+		if got := arkframe.FailedUpstream(raw); got != tc.want {
+			t.Errorf("arkframe.FailedUpstream(stop=%s) = %v，想要 %v", tc.stop, got, tc.want)
 		}
 	}
 }
