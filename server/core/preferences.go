@@ -171,6 +171,12 @@ func preferencesActor(ctx context.Context) (string, error) {
 // got the language wrong, the dark mode they set should not be wiped too. This matches the
 // per-field check in the frontend loadPrefs() (both sides need it: the backend keeps bad
 // data out of the DB, the frontend guards against bad data already in the DB or the cache).
+// NormalizeUserPreferences applies the same field-by-field fallback as SaveUserPreferences.
+// Downstream callers can use it when reading older stored values.
+func NormalizeUserPreferences(p UserPreferences) UserPreferences {
+	return normalizeUserPreferences(p)
+}
+
 func normalizeUserPreferences(p UserPreferences) UserPreferences {
 	out := DefaultUserPreferences()
 	switch p.Language {
