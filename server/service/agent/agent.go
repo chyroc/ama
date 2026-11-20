@@ -107,7 +107,7 @@ func (s *Service) CreateAgent(ctx context.Context, workspaceID string, draft api
 	actor := auth.ActorFrom(ctx)
 	if err := s.ensureIntegrationsAllowed(ctx,
 		apimodel.Agent{WorkspaceID: workspaceID, CreatedBy: actor}, workspaceID,
-		draft.IntegrationIDs); err != nil {
+		draft.IntegrationIDs, agentCredentialsOfDraft(draft)); err != nil {
 		return apimodel.Agent{}, err
 	}
 	// Aliases are on the same level as authorizations: carried at creation they also need admin. The
@@ -155,8 +155,10 @@ func (s *Service) CreateAgent(ctx context.Context, workspaceID string, draft api
 		// ⚠️ **No default is filled in here on purpose**. New agents default to no authorizations
 		// selected (the requirement says so explicitly),
 		// so both nil and [] become [].
-		IntegrationIDs: normalizeIntegrationIDs(draft.IntegrationIDs),
-		Envs:           normalizeAgentEnvs(draft.Envs),
+		IntegrationIDs:             normalizeIntegrationIDs(draft.IntegrationIDs),
+		CodebaseAppCredentialID:    strings.TrimSpace(draft.CodebaseAppCredentialID),
+		ServiceAccountCredentialID: strings.TrimSpace(draft.ServiceAccountCredentialID),
+		Envs:                       normalizeAgentEnvs(draft.Envs),
 		// Credential aliases (inject a platform credential once more under another name). Also made
 		// non-nil.
 		EnvAliases: normalizeAgentEnvAliases(draft.EnvAliases),
@@ -325,7 +327,7 @@ func (s *Service) UpdateAgentWithReason(
 	// unconditionally would stop
 	// members from even saving a rename. See the comment on ensureIntegrationsAllowed.
 	if err := s.ensureIntegrationsAllowed(
-		ctx, a, a.WorkspaceID, draft.IntegrationIDs); err != nil {
+		ctx, a, a.WorkspaceID, draft.IntegrationIDs, agentCredentialsOfDraft(draft)); err != nil {
 		return apimodel.Agent{}, err
 	}
 	a.IntegrationIDs = normalizeIntegrationIDs(draft.IntegrationIDs)
@@ -567,6 +569,8 @@ type integrationChange struct {
 	// personal holds the ids of **changed** personal authorizations (both added and removed count;
 	// see diffIntegrationIDs).
 	personal []string
+	// service holds changed service-account source ids registered by the downstream.
+	service []string
 }
 
 // changed reports whether this change touched authorizations at all.
@@ -617,6 +621,10 @@ func diffIntegrationIDs(want, have []string) integrationChange {
 
 // add records one changed id.
 func (c *integrationChange) add(id string) {
+	if apimodel.IsServiceAccountIntegration(id) {
+		c.service = append(c.service, id)
+		return
+	}
 	if apimodel.IsPersonalIntegration(id) {
 		c.personal = append(c.personal, id)
 	}
@@ -638,14 +646,43 @@ func (c *integrationChange) add(id string) {
 // all.
 // This is pinned by a mutation test (swap the diff for "reject if non-empty" → test case 3 must go
 // red).
+func agentCredentialsOf(a apimodel.Agent) apimodel.AgentCredentialIDs {
+	return apimodel.AgentCredentialIDs{
+		apimodel.IntegrationCodebaseApp:    strings.TrimSpace(a.CodebaseAppCredentialID),
+		apimodel.IntegrationServiceAccount: strings.TrimSpace(a.ServiceAccountCredentialID),
+	}
+}
+
+func agentCredentialsOfDraft(d apimodel.AgentDraft) apimodel.AgentCredentialIDs {
+	return apimodel.AgentCredentialIDs{
+		apimodel.IntegrationCodebaseApp:    strings.TrimSpace(d.CodebaseAppCredentialID),
+		apimodel.IntegrationServiceAccount: strings.TrimSpace(d.ServiceAccountCredentialID),
+	}
+}
+
 func (s *Service) ensureIntegrationsAllowed(
 	ctx context.Context, current apimodel.Agent, workspaceID string,
-	incoming []string,
+	incoming []string, incomingCreds apimodel.AgentCredentialIDs,
 ) error {
 	change := diffIntegrationIDs(
 		normalizeIntegrationIDs(incoming),
 		normalizeIntegrationIDs(current.IntegrationIDs),
 	)
+	serviceChanged := len(change.service) > 0
+	for providerID, currentID := range agentCredentialsOf(current) {
+		if strings.TrimSpace(incomingCreds[providerID]) != currentID {
+			serviceChanged = true
+		}
+	}
+	if serviceChanged {
+		incomingAgent := current
+		incomingAgent.IntegrationIDs = append([]string(nil), incoming...)
+		incomingAgent.CodebaseAppCredentialID = incomingCreds[apimodel.IntegrationCodebaseApp]
+		incomingAgent.ServiceAccountCredentialID = incomingCreds[apimodel.IntegrationServiceAccount]
+		if err := s.allowServiceCredentials(ctx, current, incomingAgent, incomingCreds); err != nil {
+			return err
+		}
+	}
 	// Nothing changed, so let it through. **This branch is the implementation of "a non-creator
 	// changing the title gets no error"**.
 	if !change.changed() {
@@ -715,6 +752,21 @@ func (s *Service) ensureIntegrationsAllowed(
 func (s *Service) SetAgentIntegrations(
 	ctx context.Context, id string, ids []string,
 ) (apimodel.Agent, error) {
+	return s.setAgentIntegrations(ctx, id, ids, nil)
+}
+
+// SetAgentCredentials changes both selected providers and named credential references.
+// The policy sees the complete target state, so changing only a named credential cannot
+// bypass the workspace binding check.
+func (s *Service) SetAgentCredentials(
+	ctx context.Context, id string, ids []string, creds apimodel.AgentCredentialIDs,
+) (apimodel.Agent, error) {
+	return s.setAgentIntegrations(ctx, id, ids, creds)
+}
+
+func (s *Service) setAgentIntegrations(
+	ctx context.Context, id string, ids []string, creds apimodel.AgentCredentialIDs,
+) (apimodel.Agent, error) {
 	a, err := s.store.GetAgent(ctx, id)
 	if err != nil {
 		return apimodel.Agent{}, fmt.Errorf("%w: Agent 不存在", persistmodel.ErrNotFound)
@@ -733,10 +785,17 @@ func (s *Service) SetAgentIntegrations(
 	// specifically for changing authorizations**
 	// is wide open; a zero-error hole, worse than before (before, both paths were equally strict).
 	// The wiring test TestSetAgentIntegrationsRouteEnforcesCreator pins it.
-	if err := s.ensureIntegrationsAllowed(ctx, a, a.WorkspaceID, ids); err != nil {
+	if creds == nil {
+		creds = agentCredentialsOf(a)
+	}
+	if err := s.ensureIntegrationsAllowed(ctx, a, a.WorkspaceID, ids, creds); err != nil {
 		return apimodel.Agent{}, err
 	}
 	a.IntegrationIDs = normalizeIntegrationIDs(ids)
+	if creds != nil {
+		a.CodebaseAppCredentialID = strings.TrimSpace(creds[apimodel.IntegrationCodebaseApp])
+		a.ServiceAccountCredentialID = strings.TrimSpace(creds[apimodel.IntegrationServiceAccount])
+	}
 	a.Version++
 	a.UpdatedAt = apimodel.NowISO()
 	// Same as UpdateAgent: changing authorizations is also a real change, and must leave a trail.

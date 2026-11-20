@@ -1098,6 +1098,13 @@ type Agent struct {
 	// so the order read back must be stable. The write side sorts it in normalize (see core/agent.go).
 	IntegrationIDs []string `json:"integrationIds"`
 
+	// CodebaseAppCredentialID selects one named credential for a provider that supports
+	// several service-account credentials. It is only an opaque reference, never a secret.
+	CodebaseAppCredentialID string `json:"codebaseAppCredentialId,omitempty"`
+	// ServiceAccountCredentialID selects a named service-account credential for the
+	// corresponding provider. Its authorization is checked by the downstream policy.
+	ServiceAccountCredentialID string `json:"serviceAccountCredentialId,omitempty"`
+
 	// ExecutorType is the tool executor type: empty string (default) = Docker container, "host" = a host
 	// registered by the user (see the three tables hosts / workspace_hosts / host_dispatches).
 	// Written together with HostID into the executor_type / host_id columns of the agents table; an empty string is written as NULL.
@@ -1197,6 +1204,10 @@ type AgentDraft struct {
 	// in opposite directions**, and falling back would silently turn "the user explicitly removed all authorizations" back into injection.
 	// Existing data is filled by a one-off migration, not by a read-path fallback: a fallback would mean you could never see whether the migration missed anything.
 	IntegrationIDs []string `json:"integrationIds"`
+
+	// These optional fields select named credentials, not plaintext secrets. See Agent.
+	CodebaseAppCredentialID    string `json:"codebaseAppCredentialId,omitempty"`
+	ServiceAccountCredentialID string `json:"serviceAccountCredentialId,omitempty"`
 
 	// Envs: see the field of the same name on Agent.
 	//

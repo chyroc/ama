@@ -196,6 +196,10 @@ type Config struct {
 	// saves carrying executorType=host are rejected explicitly.
 	HostBindings HostBindings
 
+	// Credentials optionally enforces service-account binding and named-credential rules.
+	// Nil preserves the original personal-authorization-only behavior.
+	Credentials CredentialPolicy
+
 	// Logger may be nil; when empty slog.Default() is used.
 	//
 	// ⚠️ This domain has one **fail-open** degrade (when the AgentDisabled lookup fails it is not
@@ -211,6 +215,7 @@ type Service struct {
 	revisions    Revisions
 	members      Members
 	integrations Integrations
+	credentials  CredentialPolicy
 	syncs        Syncs
 	console      Console
 	hosts        HostBindings
@@ -246,6 +251,7 @@ func New(cfg Config) (*Service, error) {
 		revisions:    cfg.Revisions,
 		members:      cfg.Members,
 		integrations: cfg.Integrations,
+		credentials:  cfg.Credentials,
 		syncs:        cfg.Syncs,
 		console:      cfg.Console,
 		hosts:        cfg.HostBindings,
