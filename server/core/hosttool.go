@@ -60,7 +60,8 @@ type HostToolProvider struct {
 	exec   HostExecutor
 	store  HostToolStore
 	skills HostSkillLoader
-	envs   shelltools.SessionEnvSource
+	execEnvs shelltools.ExecEnvSource
+	envs     shelltools.SessionEnvSource
 	log    *slog.Logger
 
 	mu       sync.Mutex
@@ -77,6 +78,15 @@ func NewHostToolProvider(
 	exec HostExecutor, store HostToolStore, skills HostSkillLoader,
 	envs shelltools.SessionEnvSource, log *slog.Logger,
 ) *HostToolProvider {
+	return NewHostToolProviderWithCredentials(exec, store, skills, nil, envs, log)
+}
+
+// NewHostToolProviderWithCredentials also injects a downstream execution-scoped source.
+// A nil source preserves the behavior of NewHostToolProvider.
+func NewHostToolProviderWithCredentials(
+	exec HostExecutor, store HostToolStore, skills HostSkillLoader,
+	execEnvs shelltools.ExecEnvSource, envs shelltools.SessionEnvSource, log *slog.Logger,
+) *HostToolProvider {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -84,6 +94,7 @@ func NewHostToolProvider(
 		exec:     exec,
 		store:    store,
 		skills:   skills,
+		execEnvs: execEnvs,
 		envs:     envs,
 		log:      log,
 		injected: make(map[string]bool),
@@ -120,7 +131,8 @@ func (p *HostToolProvider) toolsFor(
 		hostID:    run.HostID,
 		sessionID: arkSessionID,
 	}
-	injector := shelltools.NewSessionInjector(arkSessionID, p.envs,
+	injector := shelltools.NewSessionInjectorWithEnvs(arkSessionID,
+		p.envs, p.execEnvs,
 		p.log.With(slog.String("ark_session", arkSessionID), slog.String("host", run.HostID)))
 
 	// First-time skill injection. The in-memory flag only saves repeated writes within this
