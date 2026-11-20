@@ -43,11 +43,13 @@ WARN 以下字段被环境变量覆盖了 —— 改配置文件对它们无效�
 
 ## 下游模块替换配置来源
 
-`Provider` 返回按顺序叠加的 YAML 文档；`LoadFromProvider` 负责后续的环境变量覆盖与校验。
-默认文件来源只是 `FileProvider`，下游可以提供自己的配置中心实现，不需要 fork 配置结构：
+`configsource.Provider` 返回按顺序叠加的 YAML 文档；`config.LoadFromProvider` 负责后续的
+环境变量覆盖与校验。默认文件来源只是 `FileProvider`，下游可以提供自己的配置中心实现，
+不需要 fork 配置结构。`configsource` 是独立的轻量包：下游若有自己的完整配置结构，只需
+读取 layers 后交给自己的解析器，不会连带引入 AMA 的存储与登录依赖。
 
 ```go
-provider := config.ProviderFunc("company-config", func(ctx context.Context) ([][]byte, error) {
+provider := configsource.ProviderFunc("company-config", func(ctx context.Context) ([][]byte, error) {
     public, secret, err := loadCompanyConfig(ctx)
     if err != nil {
         return nil, err
