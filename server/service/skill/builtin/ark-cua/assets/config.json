@@ -1,0 +1,4 @@
+{
+  "_comment": "AgentPlan CUA Skill Gateway configuration. Set via --api-base-url or AP_CUA_SKILL_API_BASE_URL (injected by AMA when cua.enabled is true).",
+  "api_base_url": ""
+}

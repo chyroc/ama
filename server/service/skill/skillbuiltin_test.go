@@ -45,8 +45,129 @@ func TestBuiltinSkillsAreWellFormed(t *testing.T) {
 		if sk.WorkspaceID != "" {
 			t.Errorf("%s 不该属于任何空间，实际 %q", sk.ID, sk.WorkspaceID)
 		}
-		if _, err := BuildSkillZip(sk, nil); err != nil {
+		files := BuiltinSkillFiles(sk.ID)
+		for _, f := range files {
+			if shouldSkipEmbeddedPath(f.Path) {
+				t.Errorf("%s 内嵌了不该打包的文件 %q（如 .pyc / __pycache__ / 隐藏文件）", sk.ID, f.Path)
+			}
+			bodyStr := string(f.Content)
+			for _, forbidden := range []string{"/home/", "/private/var/", "C:\\Users\\"} {
+				if strings.Contains(bodyStr, forbidden) || strings.Contains(bodyStr, "/Users"+"/") {
+					t.Errorf("%s 内嵌文件 %q 含本机目录路径 %q", sk.ID, f.Path, forbidden)
+				}
+			}
+		}
+		if _, err := BuildSkillZip(sk, files); err != nil {
 			t.Errorf("%s 打包失败：%v", sk.ID, err)
+		}
+	}
+}
+
+// TestBuiltinCUASkillHasEmbeddedFiles checks that the CUA built-in skill embeds its Python
+// scripts, config, and reference docs, and that its metadata matches the embedded contents.
+func TestBuiltinCUASkillHasEmbeddedFiles(t *testing.T) {
+	sk, ok := BuiltinSkill(BuiltinSkillIDCUA)
+	if !ok {
+		t.Fatalf("找不到内置 CUA 技能 %s", BuiltinSkillIDCUA)
+	}
+	files := BuiltinSkillFiles(BuiltinSkillIDCUA)
+	if len(files) == 0 {
+		t.Fatal("内置 CUA 技能必须带内嵌脚本和配置附件，实际为空")
+	}
+	if len(sk.Files) != len(files) {
+		t.Fatalf("Skill.Files 元数据数量 (%d) 与实际内嵌文件数 (%d) 不一致", len(sk.Files), len(files))
+	}
+
+	seen := make(map[string]int, len(files))
+	for _, f := range files {
+		if len(f.Content) == 0 {
+			t.Errorf("内嵌文件 %s 内容为空", f.Path)
+		}
+		if f.Size != len(f.Content) {
+			t.Errorf("内嵌文件 %s Size=%d，实际字节数=%d", f.Path, f.Size, len(f.Content))
+		}
+		seen[f.Path] = len(f.Content)
+	}
+	for _, want := range []string{
+		"assets/config.json",
+		"scripts/cua.py",
+		"scripts/cua_auth.py",
+		"scripts/cua_http.py",
+		"scripts/cua_state.py",
+		"scripts/cua_util.py",
+		"references/commands.md",
+		"references/outcomes.md",
+	} {
+		if seen[want] == 0 {
+			t.Errorf("内置 CUA 技能缺少关键文件 %s", want)
+		}
+	}
+}
+
+func TestBuiltinSeedanceMASkillHasEmbeddedFiles(t *testing.T) {
+	sk, ok := BuiltinSkill(BuiltinSkillIDSeedanceMA)
+	if !ok {
+		t.Fatalf("找不到内置 Seedance MA 技能 %s", BuiltinSkillIDSeedanceMA)
+	}
+	files := BuiltinSkillFiles(BuiltinSkillIDSeedanceMA)
+	if len(files) == 0 {
+		t.Fatal("内置 Seedance MA 技能必须带内嵌脚本和配置附件，实际为空")
+	}
+	if len(sk.Files) != len(files) {
+		t.Fatalf("Skill.Files 元数据数量 (%d) 与实际内嵌文件数 (%d) 不一致", len(sk.Files), len(files))
+	}
+
+	seen := make(map[string]int, len(files))
+	for _, f := range files {
+		if len(f.Content) == 0 {
+			t.Errorf("内嵌文件 %s 内容为空", f.Path)
+		}
+		if f.Size != len(f.Content) {
+			t.Errorf("内嵌文件 %s Size=%d，实际字节数=%d", f.Path, f.Size, len(f.Content))
+		}
+		seen[f.Path] = len(f.Content)
+	}
+	for _, want := range []string{
+		"assets/config.json",
+		"scripts/seedance_ma.py",
+		"references/guide.md",
+	} {
+		if seen[want] == 0 {
+			t.Errorf("内置 Seedance MA 技能缺少关键文件 %s", want)
+		}
+	}
+}
+
+func TestBuiltinOpenVikingMemorySkillHasEmbeddedFiles(t *testing.T) {
+	sk, ok := BuiltinSkill(BuiltinSkillIDOpenVikingMemory)
+	if !ok {
+		t.Fatalf("找不到内置 OpenViking Memory 技能 %s", BuiltinSkillIDOpenVikingMemory)
+	}
+	files := BuiltinSkillFiles(BuiltinSkillIDOpenVikingMemory)
+	if len(files) == 0 {
+		t.Fatal("内置 OpenViking Memory 技能必须带内嵌脚本和配置附件，实际为空")
+	}
+	if len(sk.Files) != len(files) {
+		t.Fatalf("Skill.Files 元数据数量 (%d) 与实际内嵌文件数 (%d) 不一致", len(sk.Files), len(files))
+	}
+
+	seen := make(map[string]int, len(files))
+	for _, f := range files {
+		if len(f.Content) == 0 {
+			t.Errorf("内嵌文件 %s 内容为空", f.Path)
+		}
+		if f.Size != len(f.Content) {
+			t.Errorf("内嵌文件 %s Size=%d，实际字节数=%d", f.Path, f.Size, len(f.Content))
+		}
+		seen[f.Path] = len(f.Content)
+	}
+	for _, want := range []string{
+		"assets/config.json",
+		"scripts/ov_memory.py",
+		"references/commands.md",
+	} {
+		if seen[want] == 0 {
+			t.Errorf("内置 OpenViking Memory 技能缺少关键文件 %s", want)
 		}
 	}
 }

@@ -1,0 +1,8 @@
+{
+  "_comment": "Volcengine Ark Managed Agents Seedance MA configuration. Set target IDs and models via ARK_SEEDANCE_* environment variables or CLI flags.",
+  "api_base_url": "https://ark.cn-beijing.volces.com/api/v3",
+  "default_agent_id": "",
+  "default_environment_id": "",
+  "video_model": "",
+  "image_model": ""
+}

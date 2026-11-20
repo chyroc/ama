@@ -52,23 +52,175 @@
 // the skill library renders an Edit button, the detail page body and attachments become editable,
 // and the user only hits the backend's 403 at the moment they click save.
 //
-// # Why zero attachments
+// # Attachments on built-in skills
 //
-// The CLIs are already in the container, and the docs can be produced on demand by the CLIs
-// themselves (measured: `ama --help` exits 0; `lark-cli --help` includes an AGENT QUICKSTART
-// section). So the body is only an **entry guide** and does not copy the docs: a copy would go stale
-// as the CLI upgrades, while the CLI's own does not.
-//
-// This also sidesteps the three limits in skillpkg.go (2 MiB total / 256 KiB per file / 64 files):
-// with no files at all there is nothing over the limit, and nothing needs to be injected into the
-// container.
+// CLI-only built-in skills (lark-cli / ama) ship zero attachment files because the binaries are
+// already installed in the container and provide their own `--help`. Script-based built-in skills
+// (ark-cua / seedance-ma / openviking-memory) embed their Python entrypoints and reference docs via
+// go:embed without `all:` so dotfiles and `__pycache__` bytecode are never bundled into the binary.
 package skill
 
 import (
+	"embed"
+	"io/fs"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/chyroc/ama/server/model/apimodel"
 )
+
+//go:embed builtin/ark-cua
+var builtinCUAEmbedFS embed.FS
+
+//go:embed builtin/seedance-ma
+var builtinSeedanceMAEmbedFS embed.FS
+
+//go:embed builtin/openviking-memory
+var builtinOpenVikingMemoryEmbedFS embed.FS
+
+var (
+	builtinCUAFilesOnce    sync.Once
+	builtinCUAFileContents []apimodel.SkillFile
+	builtinCUAFileMeta     []apimodel.SkillFile
+
+	builtinSeedanceMAFilesOnce    sync.Once
+	builtinSeedanceMAFileContents []apimodel.SkillFile
+	builtinSeedanceMAFileMeta     []apimodel.SkillFile
+
+	builtinOpenVikingMemoryFilesOnce    sync.Once
+	builtinOpenVikingMemoryFileContents []apimodel.SkillFile
+	builtinOpenVikingMemoryFileMeta     []apimodel.SkillFile
+)
+
+func shouldSkipEmbeddedPath(rel string) bool {
+	lower := strings.ToLower(rel)
+	if strings.HasSuffix(lower, ".pyc") || strings.HasSuffix(lower, ".pyo") {
+		return true
+	}
+	for _, seg := range strings.Split(rel, "/") {
+		if strings.HasPrefix(seg, ".") || strings.HasPrefix(seg, "_") {
+			return true
+		}
+	}
+	return false
+}
+
+func walkEmbeddedSkillTree(efs embed.FS, rootDir string) ([]apimodel.SkillFile, []apimodel.SkillFile) {
+	prefix := rootDir + "/"
+	var contents []apimodel.SkillFile
+	_ = fs.WalkDir(efs, rootDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		rel := strings.TrimPrefix(p, prefix)
+		if rel == "" || rel == p || shouldSkipEmbeddedPath(rel) {
+			return nil
+		}
+		data, readErr := efs.ReadFile(p)
+		if readErr != nil {
+			return nil
+		}
+		contents = append(contents, apimodel.SkillFile{
+			Path:    rel,
+			Size:    len(data),
+			Content: data,
+		})
+		return nil
+	})
+	sort.Slice(contents, func(i, j int) bool {
+		return contents[i].Path < contents[j].Path
+	})
+	meta := make([]apimodel.SkillFile, len(contents))
+	for i, f := range contents {
+		meta[i] = apimodel.SkillFile{
+			Path: f.Path,
+			Size: f.Size,
+		}
+	}
+	return contents, meta
+}
+
+// loadBuiltinCUAFiles walks the embedded CUA skill tree once and caches both the full file contents
+// (for container injection / Ark upload / file preview) and metadata-only entries (for Skill.Files).
+func loadBuiltinCUAFiles() {
+	builtinCUAFilesOnce.Do(func() {
+		builtinCUAFileContents, builtinCUAFileMeta = walkEmbeddedSkillTree(builtinCUAEmbedFS, "builtin/ark-cua")
+	})
+}
+
+// loadBuiltinSeedanceMAFiles walks the embedded Seedance MA skill tree once and caches both the full
+// file contents and metadata-only entries.
+func loadBuiltinSeedanceMAFiles() {
+	builtinSeedanceMAFilesOnce.Do(func() {
+		builtinSeedanceMAFileContents, builtinSeedanceMAFileMeta = walkEmbeddedSkillTree(builtinSeedanceMAEmbedFS, "builtin/seedance-ma")
+	})
+}
+
+// loadBuiltinOpenVikingMemoryFiles walks the embedded OpenViking Memory skill tree once and caches both
+// the full file contents and metadata-only entries.
+func loadBuiltinOpenVikingMemoryFiles() {
+	builtinOpenVikingMemoryFilesOnce.Do(func() {
+		builtinOpenVikingMemoryFileContents, builtinOpenVikingMemoryFileMeta = walkEmbeddedSkillTree(builtinOpenVikingMemoryEmbedFS, "builtin/openviking-memory")
+	})
+}
+
+// cloneBuiltinCUAFileMeta returns a fresh slice of metadata-only SkillFile entries so callers
+// cannot mutate package-level state.
+func cloneBuiltinCUAFileMeta() []apimodel.SkillFile {
+	loadBuiltinCUAFiles()
+	out := make([]apimodel.SkillFile, len(builtinCUAFileMeta))
+	copy(out, builtinCUAFileMeta)
+	return out
+}
+
+// cloneBuiltinSeedanceMAFileMeta returns a fresh slice of metadata-only SkillFile entries for Seedance MA.
+func cloneBuiltinSeedanceMAFileMeta() []apimodel.SkillFile {
+	loadBuiltinSeedanceMAFiles()
+	out := make([]apimodel.SkillFile, len(builtinSeedanceMAFileMeta))
+	copy(out, builtinSeedanceMAFileMeta)
+	return out
+}
+
+// cloneBuiltinOpenVikingMemoryFileMeta returns a fresh slice of metadata-only SkillFile entries for OpenViking Memory.
+func cloneBuiltinOpenVikingMemoryFileMeta() []apimodel.SkillFile {
+	loadBuiltinOpenVikingMemoryFiles()
+	out := make([]apimodel.SkillFile, len(builtinOpenVikingMemoryFileMeta))
+	copy(out, builtinOpenVikingMemoryFileMeta)
+	return out
+}
+
+func cloneSkillFileContents(src []apimodel.SkillFile) []apimodel.SkillFile {
+	out := make([]apimodel.SkillFile, len(src))
+	for i, f := range src {
+		buf := make([]byte, len(f.Content))
+		copy(buf, f.Content)
+		out[i] = apimodel.SkillFile{
+			Path:    f.Path,
+			Size:    f.Size,
+			Content: buf,
+		}
+	}
+	return out
+}
+
+// BuiltinSkillFiles returns the embedded attachment files (with bytes) for a built-in skill, or nil
+// if the built-in skill has no attachments.
+func BuiltinSkillFiles(id string) []apimodel.SkillFile {
+	switch strings.TrimSpace(id) {
+	case BuiltinSkillIDCUA:
+		loadBuiltinCUAFiles()
+		return cloneSkillFileContents(builtinCUAFileContents)
+	case BuiltinSkillIDSeedanceMA:
+		loadBuiltinSeedanceMAFiles()
+		return cloneSkillFileContents(builtinSeedanceMAFileContents)
+	case BuiltinSkillIDOpenVikingMemory:
+		loadBuiltinOpenVikingMemoryFiles()
+		return cloneSkillFileContents(builtinOpenVikingMemoryFileContents)
+	default:
+		return nil
+	}
+}
 
 // BuiltinSkillPrefix is the fixed prefix of built-in skill ids.
 //
@@ -84,8 +236,11 @@ const BuiltinSkillPrefix = "skill-builtin-"
 // after a change, every binding users already checked becomes a dangling reference, and a dangling
 // reference only logs one Warn in skillark.go; the symptom is "the skill vanished by itself".
 const (
-	BuiltinSkillIDLarkCLI = BuiltinSkillPrefix + "lark-cli"
-	BuiltinSkillIDAMA     = BuiltinSkillPrefix + "ama"
+	BuiltinSkillIDLarkCLI          = BuiltinSkillPrefix + "lark-cli"
+	BuiltinSkillIDAMA              = BuiltinSkillPrefix + "ama"
+	BuiltinSkillIDCUA              = BuiltinSkillPrefix + "ark-cua"
+	BuiltinSkillIDSeedanceMA       = BuiltinSkillPrefix + "seedance-ma"
+	BuiltinSkillIDOpenVikingMemory = BuiltinSkillPrefix + "openviking-memory"
 )
 
 // builtinSkillTime is the creation/update time of built-in skills, **a fixed literal, not
@@ -144,14 +299,52 @@ func BuiltinSkills() []apimodel.Skill {
 			CreatedAt:     builtinSkillTime,
 			UpdatedAt:     builtinSkillTime,
 		},
+		{
+			ID:            BuiltinSkillIDCUA,
+			Name:          "ark-cua",
+			DisplayTitle:  "ark-cua（火山方舟 CUA 云电脑）",
+			Description:   "操作火山方舟 Agent Plan 云电脑（Computer Use Agent / CUA）：启动并访问云桌面、在 AMA 页面嵌入渲染实时桌面视图、将需要真实 GUI/浏览器交互的任务委派给云端桌面执行。",
+			Instructions:  builtinInstructionsCUA,
+			Source:        apimodel.SkillBuiltin,
+			LatestVersion: "1",
+			Tags:          []string{"内置", "CUA", "云电脑"},
+			Files:         cloneBuiltinCUAFileMeta(),
+			CreatedAt:     builtinSkillTime,
+			UpdatedAt:     builtinSkillTime,
+		},
+		{
+			ID:            BuiltinSkillIDSeedanceMA,
+			Name:          "seedance-ma",
+			DisplayTitle:  "seedance-ma（Seedance MA 视频与组图创作）",
+			Description:   "调用火山方舟线上托管的 Seedance MA 智能体进行视频分镜策划、文生/图生视频、多镜头合成，以及单图与系列组图生成。",
+			Instructions:  builtinInstructionsSeedanceMA,
+			Source:        apimodel.SkillBuiltin,
+			LatestVersion: "1",
+			Tags:          []string{"内置", "Seedance", "视频生成", "组图生成"},
+			Files:         cloneBuiltinSeedanceMAFileMeta(),
+			CreatedAt:     builtinSkillTime,
+			UpdatedAt:     builtinSkillTime,
+		},
+		{
+			ID:            BuiltinSkillIDOpenVikingMemory,
+			Name:          "openviking-memory",
+			DisplayTitle:  "openviking-memory（OpenViking 长期记忆）",
+			Description:   "基于火山引擎 VikingDB OpenViking 的跨会话长期记忆系统：支持每轮对话前自动召回相关历史记忆、每轮结束后自动归档提取记忆，并提供 remember / forget / search / read / list / tree 等主动记忆管理命令。",
+			Instructions:  builtinInstructionsOpenVikingMemory,
+			Source:        apimodel.SkillBuiltin,
+			LatestVersion: "1",
+			Tags:          []string{"内置", "OpenViking", "长期记忆"},
+			Files:         cloneBuiltinOpenVikingMemoryFileMeta(),
+			CreatedAt:     builtinSkillTime,
+			UpdatedAt:     builtinSkillTime,
+		},
 	}
 }
 
 // BuiltinSkill gets one built-in skill by id; the second return value tells whether it was found.
 //
-// A linear scan of two, no map: scanning two linearly is faster than a map lookup, and it avoids a
-// package-level mutable state (a package-level map would be shared indirectly by ListSkills'
-// callers, and changing it in one place would affect every workspace).
+// A short linear scan with no map: scanning five items linearly avoids package-level mutable map
+// state that could be shared across callers.
 func BuiltinSkill(id string) (apimodel.Skill, bool) {
 	for _, sk := range BuiltinSkills() {
 		if sk.ID == id {
@@ -235,6 +428,21 @@ lark-cli schema <服务>.<资源>.<方法>              # 某个方法的参数�
 判断成功看 ` + "`ok == true`" + ` 或退出码 0，**不要看 ` + "`code == 0`" + `**。
 
 文件路径要用**相对于当前目录**的路径，绝对路径会被拒（unsafe file path）。
+
+## 发送本地文件附件与视频到飞书群聊或私聊（` + "`im +messages-send`" + `）
+
+当会话来自飞书（如上下文包含 ` + "`<ContextSnapshot ...>`" + ` 或 ` + "`<harness:lark>`" + `，带有 ` + "`--chat-id oc_xxx`" + ` 或 ` + "`current_sender=\"ou_xxx\"`" + `），在生成报告（` + "`.pptx`" + ` / ` + "`.docx`" + ` / ` + "`.pdf`" + ` / ` + "`.html`" + `）或视频（` + "`.mp4`" + `）后，请先 ` + "`cd`" + ` 到产物目录，再用**当前目录下的相对路径**将产物直接发到飞书：
+
+` + "```bash" + `
+# 发普通文件附件
+lark-cli im +messages-send --as user --chat-id oc_xxx --file ./report.pdf
+
+# 发可在对话里播放的视频，必须带封面
+lark-cli im +messages-send --as user --chat-id oc_xxx \
+  --video ./demo.mp4 --video-cover ./cover.png
+` + "```" + `
+
+发私聊时，把 ` + "`--chat-id oc_xxx`" + ` 换成 ` + "`--user-id ou_xxx`" + `。本地文件要用当前目录下的相对路径。如果手头只有 MP4，也可以用 ` + "`--file ./demo.mp4`" + ` 作为附件发送。
 
 ## 取「所在群 / 所在话题」最近的消息
 
@@ -433,4 +641,203 @@ ama api POST /api/... '"'"'{"k":"v"}'"'"' --yes      # 写操作要加 --yes
 那一步就是让你停下来确认的。
 
 删除类操作请**格外谨慎**：删掉的东西找不回来。没有用户明确要求，不要删任何东西。
+`
+
+// builtinInstructionsCUA is the skill body for Volcengine Agent Plan CUA (Computer Use Agent).
+//
+// It preserves the CUA CLI instructions and adds AMA-specific rules:
+//   - Script location inside the session workspace (`./skills/ark-cua/scripts/cua.py`)
+//   - Non-interactive authentication (`ARK_CUA_API_KEY` / `AGENTPLAN_API_KEY`)
+//   - Emitting `desktop access` so AMA's web frontend can render the live CUA desktop inside the page
+//   - Avoiding long blocking `task result --timeout 120` loops that stall the chat turn.
+const builtinInstructionsCUA = `# ark-cua：火山方舟 Agent Plan CUA（云电脑）
+
+通过火山方舟 Agent Plan CUA（Computer Use Agent / 云电脑）控制云端 Linux 桌面环境，执行需要真实 GUI / 浏览器交互的任务，或在 AMA 页面内直接启动并渲染实时云电脑界面。
+
+## 工作区内的脚本位置与鉴权
+
+技能文件已注入到当前工作目录的 ` + "`./skills/ark-cua/`" + ` 下：
+
+- 主入口脚本：` + "`python3 ./skills/ark-cua/scripts/cua.py`" + `
+- 凭据来源：脚本自动读取环境变量 ` + "`ARK_CUA_API_KEY`" + ` 或 ` + "`AGENTPLAN_API_KEY`" + `（网关地址由 ` + "`AP_CUA_SKILL_API_BASE_URL`" + ` 提供），无需交互式输入。
+- ⚠️ **禁止交互式命令**：不要运行 ` + "`auth set-api-key --prompt-api-key`" + ` 等需要终端交互输入的命令。
+
+## 在 AMA 页面中启动并渲染 CUA 云电脑界面
+
+当用户要求「启动 CUA」「打开云电脑」或希望边看云桌面边执行任务时，按以下流程调用：
+
+1. **获取并输出云桌面实时访问链接**（优先调用 ` + "`desktop access`" + `，它会自动复用运行中的桌面；若报无可用桌面再执行 ` + "`desktop start --idempotency-key <唯一键>`" + `）：
+   ` + "```bash" + `
+   python3 ./skills/ark-cua/scripts/cua.py desktop access
+   ` + "```" + `
+   ` + "`desktop access`" + ` 会在 JSON 输出中返回：
+   - ` + "`full_interface_url`" + `：完整 CUA Web 界面（含对话与云桌面）
+   - ` + "`desktop_view_url`" + `：纯云桌面实时画面
+   - ` + "`access_url`" + `：带一次性 ticket 的基础访问地址
+2. **AMA 前端会自动识别工具输出中的 ` + "`full_interface_url`" + ` / ` + "`desktop_view_url`" + `，并在页面右侧分屏直接渲染出实时云电脑画面。**
+3. **避免长时间阻塞轮询**：
+   - 发送云桌面任务时使用 ` + "`--wait-ms 15000`" + `（最多等待 15 秒）：
+     ` + "```bash" + `
+     python3 ./skills/ark-cua/scripts/cua.py task run --desktop <desktop_id> --title "<短标题>" --objective "<要在云桌面完成的目标>" --wait-ms 15000
+     ` + "```" + `
+   - 不要连续多次调用 ` + "`task result --timeout 120`" + `，也不要在容器里安装额外截屏/OCR 工具反复轮询。
+   - **不要在回复正文中粘贴云桌面裸链接**：链接中的 ` + "`ticket`" + ` 是一次性凭据，AMA 前端已从工具输出中自动解析并展示云桌面；回复正文只汇报业务结论与操作说明。
+
+## 常用命令速查
+
+` + "```bash" + `
+# 1. 检查鉴权状态
+python3 ./skills/ark-cua/scripts/cua.py auth status
+
+# 2. 获取可嵌入 AMA 页面的实时访问链接
+python3 ./skills/ark-cua/scripts/cua.py desktop access
+
+# 3. 启动新云桌面（仅当没有运行中桌面时调用，必须带 --idempotency-key）
+python3 ./skills/ark-cua/scripts/cua.py desktop start --idempotency-key start-01
+
+# 4. 在指定云桌面下发任务（参数名是 --objective，限时等待 15 秒）
+python3 ./skills/ark-cua/scripts/cua.py task run --desktop <desktop_id> --title "<短标题>" --objective "<任务描述>" --wait-ms 15000
+
+# 5. 一键委派任务（自动选桌面并执行，限时等待 20 秒）
+python3 ./skills/ark-cua/scripts/cua.py delegate --objective "<任务描述>" --title "<短标题>" --wait-ms 20000
+
+# 6. 查看任务当前快照
+python3 ./skills/ark-cua/scripts/cua.py watch --invocation-id <task_id> --wait-ms 15000
+` + "```" + `
+
+## 结果状态（outcome）处理
+
+脚本返回的 JSON 中通过 ` + "`data.outcome`" + ` 标识状态：
+
+- ` + "`completed`" + `：任务已在云电脑中执行完成，直接读取结果向用户汇报结论（不要粘贴云桌面 URL）。
+- ` + "`in_progress`" + `：任务仍在云电脑后台执行中，不要死循环重试 ` + "`task result`" + `；调用一次 ` + "`desktop access --desktop <desktop_id>`" + ` 刷新画面状态后向用户说明进度。
+- ` + "`needs_input`" + `：云桌面遇到登录、验证码、2FA 等需要人工介入的步骤。执行 ` + "`desktop access --desktop <desktop_id>`" + `，并提示用户在右侧云桌面分屏中完成验证操作。
+- ` + "`failed`" + ` / ` + "`cancelled`" + `：向用户说明具体失败原因。
+`
+
+const builtinInstructionsSeedanceMA = `# seedance-ma：火山方舟 Seedance MA 视频与组图创作工具
+
+通过火山方舟线上托管的 **Seedance MA** 智能体完成视频分镜设计、文生视频、参考图生视频、多镜头成片拼接，以及单图与系列组图生成。
+
+## 工作区内的脚本位置与鉴权
+
+技能文件已注入到当前工作目录的 ` + "`./skills/seedance-ma/`" + ` 下：
+
+- 主入口脚本：` + "`python3 ./skills/seedance-ma/scripts/seedance_ma.py`" + `
+- 凭据与目标配置：通过环境变量 ` + "`ARK_SEEDANCE_API_KEY`" + `、` + "`ARK_SEEDANCE_AGENT_ID`" + `、` + "`ARK_SEEDANCE_ENVIRONMENT_ID`" + `、` + "`ARK_SEEDANCE_API_BASE_URL`" + ` 读取（也可通过命令行参数覆盖）。
+
+## 标准视频生成工作流（分段轮询防超时）
+
+渲染高清视频通常需要 **90~150 秒**，单次 Bash 工具调用有超时上限，因此脚本采用 **85 秒分段轮询（` + "`generate`" + ` → ` + "`watch`" + `）** 机制：
+
+### 第一步：发起视频创作任务（` + "`generate`" + `）
+
+` + "```bash" + `
+python3 ./skills/seedance-ma/scripts/seedance_ma.py generate \
+  --prompt "极具高级感的产品微距商业广告：晶莹剔透的玻璃瓶静置在水波纹石台上，暖金晨光斜射，微距镜头缓慢推进，浅景深，写实摄影质感" \
+  --title "产品微距广告" \
+  --ratio 16:9 \
+  --duration 5 \
+  --wait-seconds 85
+` + "```" + `
+
+参数说明：
+- ` + "`--prompt`" + `（必填）：视频画面内容、风格、主体动作、运镜与氛围描述。
+- ` + "`--title`" + `（可选）：视频短标题（用于在 AMA 页面视频卡片顶部展示）。
+- ` + "`--ratio`" + `（可选）：画幅比例，支持 ` + "`16:9`" + `（默认横屏）、` + "`9:16`" + `（竖屏短视频）、` + "`1:1`" + `、` + "`4:3`" + `、` + "`3:4`" + `、` + "`21:9`" + `。
+- ` + "`--duration`" + `（可选）：视频时长（秒），支持 ` + "`4`" + `~` + "`15`" + `，默认 ` + "`5`" + `。
+- ` + "`--reference-images`" + `（可选）：参考图 HTTPS URL（多张用逗号分隔），用于图生视频或商品外观保持。
+- ` + "`--multi-clip`" + `（可选）：仅当用户明确要求生成多镜头拼接成片时传入。
+
+### 第二步：当返回 ` + "`data.outcome == \"in_progress\"`" + ` 时继续执行 ` + "`watch`" + `
+
+如果 ` + "`generate`" + ` 返回的 JSON 中 ` + "`data.outcome`" + ` 为 ` + "`\"in_progress\"`" + `，说明任务正在后台渲染视频。立即执行返回 JSON 中的 ` + "`next.command`" + `：
+
+` + "```bash" + `
+python3 ./skills/seedance-ma/scripts/seedance_ma.py watch \
+  --session-id <sesn-...> \
+  --wait-seconds 85
+` + "```" + `
+
+- 通常连续执行 1~2 次 ` + "`watch`" + ` 即可拿到 ` + "`data.outcome == \"completed\"`" + ` 和 ` + "`data.video_url`" + `。
+- 不要在 ` + "`in_progress`" + ` 状态就结束本轮回复；继续调用 ` + "`watch`" + ` 直到拿到 ` + "`outcome == \"completed\"`" + ` 或 ` + "`failed`" + `。
+
+### 第三步：视频生成完成后的回复与飞书发送
+
+当 ` + "`data.outcome == \"completed\"`" + ` 时：
+1. **AMA 前端会自动从工具调用结果中提取 ` + "`video_url`" + `、` + "`storyboard_prompt`" + `、` + "`ratio`" + `、` + "`duration`" + `，并在对话流中直接渲染内嵌的视频播放器卡片**（同时脚本会将 MP4 下载到 ` + "`data.local_path`" + ` 并提取首帧封面 ` + "`cover.png`" + `）。
+2. **飞书会话发送视频**：若当前对话来自飞书（上下文中含 ` + "`<harness:lark>`" + `），进入视频输出目录（默认 ` + "`./outputs/videos`" + `），使用当前对话中的群 ID（` + "`--chat-id oc_example`" + `）或用户 ID（` + "`--user-id ou_example`" + `）配合 ` + "`lark-cli im +messages-send --as bot --video ./<mp4文件名> --video-cover ./cover.png`" + ` 发送给当前会话。
+3. 回复正文中简要介绍本次视频的创意定位与分镜时间轴设计即可，不需要把冗长的预签名 URL 裸贴在正文里。
+
+## 标准单图与组图生成工作流（` + "`generate-images`" + ` → ` + "`watch-images`" + `）
+
+当用户要求生图、海报设计或生成多张系列组图时，调用 ` + "`generate-images`" + `：
+
+` + "```bash" + `
+python3 ./skills/seedance-ma/scripts/seedance_ma.py generate-images \
+  --title "产品核心功能 4 张组图" \
+  --ratio 16:9 \
+  --count 4 \
+  --wait-seconds 85 \
+  --prompt "详细描述整套组图的统一版式与第 1..N 张图的标题、画面和文案要点"
+` + "```" + `
+
+- 若返回 ` + "`data.outcome == \"in_progress\"`" + `，执行返回 JSON 中的 ` + "`next.command`" + `（` + "`watch-images`" + `）继续轮询，直到 ` + "`data.outcome == \"completed\"`" + `。
+- 完成后，` + "`data.images`" + ` 数组按顺序返回全部图片的 ` + "`local_path`" + ` 与 ` + "`image_url`" + `，可在回复正文中以 Markdown 图片语法 ` + "`![图 1](<image_url>)`" + ` 展示。
+`
+
+const builtinInstructionsOpenVikingMemory = `# openviking-memory：OpenViking 跨会话长期记忆管理
+
+通过火山引擎 VikingDB **OpenViking**（` + "`viking://`" + ` 虚拟文件系统）管理跨会话长期记忆，支持自动召回、自动归档提取以及主动保存/更新/删除/检索记忆。
+
+## AMA 平台自动能力与容器内脚本位置
+
+1. **平台双向自动生命周期钩子（已由 AMA 服务端内置启用）**：
+   - **Auto-Recall（每轮对话前自动召回）**：用户发送消息时，AMA 后端会自动根据用户问题检索 OpenViking 长期记忆，并以 ` + "`<harness:openviking>...</harness:openviking>`" + ` 标签块注入到当前轮上下文中。当你在上下文中看到 ` + "`<harness:openviking>`" + ` 或 ` + "`<openviking-context>`" + ` 时，请直接结合其中的历史偏好、业务口径、实体信息回答，但**不要在回复正文中直接提及或暴露底层标签名**。
+   - **Auto-Capture & Commit（每轮对话结束自动归档）**：每轮对话完成时，AMA 后端会自动将本轮的 ` + "`user`" + ` 与 ` + "`assistant`" + ` 消息同步至当前会话对应的 OpenViking Session 并后台执行 ` + "`commit`" + ` 提取长期记忆。
+2. **容器内主动记忆管理脚本**：
+   - 技能脚本已注入到当前工作目录：` + "`python3 ./skills/openviking-memory/scripts/ov_memory.py`" + `
+   - 凭据环境变量（` + "`OPENVIKING_URL`" + `、` + "`OPENVIKING_API_KEY`" + `、` + "`OPENVIKING_RESOURCE_ID`" + `、` + "`OPENVIKING_SESSION_ID`" + `）已由平台自动注入，无需手动传入。
+
+## 何时主动调用 ` + "`ov_memory.py`" + `
+
+### 1. 主动保存记忆（` + "`remember`" + `）
+当用户明确表达「记住……」「以后默认按……」「保存这个口径/偏好/规则」，或在对话中确立了跨会话仍有价值的重要事实（如：品牌固定统计口径、常用账号/飞书群、架构决策、固定偏好）时，立即调用一次 ` + "`remember`" + `（返回 ` + "`Stored 1 message(s) and committed for memory extraction.`" + ` 即代表已成功入库，**无需再 ` + "`sleep`" + ` 或反复调用 ` + "`search`" + ` 二次验证**）：
+` + "```bash" + `
+python3 ./skills/openviking-memory/scripts/ov_memory.py remember --content "用户的核心事实或偏好描述（简洁、自包含）"
+` + "```" + `
+
+### 2. 删除或修正记忆（` + "`forget`" + `）
+当用户要求「忘掉……」「不再使用之前的规则」或某条旧记忆已经过期/错误时：
+- 删除匹配的记忆：
+  ` + "```bash" + `
+  python3 ./skills/openviking-memory/scripts/ov_memory.py forget --query "要删除的旧记忆关键词"
+  ` + "```" + `
+- 若需**更新/修正**已有记忆，先用 ` + "`forget --query \"...\"`" + ` 删除旧记忆，再用 ` + "`remember --content \"...\"`" + ` 写入新记忆。
+
+### 3. 深度检索与查看记忆（` + "`search`" + ` / ` + "`read`" + ` / ` + "`list`" + ` / ` + "`tree`" + `）
+当自动召回的摘要不足以回答细节问题，或用户询问「你记住了我哪些信息」「查一下之前存的某文档/口径」时：
+` + "```bash" + `
+# 语义搜索记忆、资源与技能
+python3 ./skills/openviking-memory/scripts/ov_memory.py search --query "<关键词或问题>" --limit 10
+
+# 指定 URI 范围搜索（例如只搜用户记忆或只搜资源库）
+python3 ./skills/openviking-memory/scripts/ov_memory.py search --query "<关键词>" --uri "viking://~/memories/"
+
+# 读取指定 viking:// URI 的完整内容（或 --level abstract / overview）
+python3 ./skills/openviking-memory/scripts/ov_memory.py read --uri "viking://user/default/memories/..." --level full
+
+# 浏览目录列表或树形结构
+python3 ./skills/openviking-memory/scripts/ov_memory.py list --uri "viking://~/memories/"
+python3 ./skills/openviking-memory/scripts/ov_memory.py tree --uri "viking://" --depth 3
+
+# 检查 OpenViking 服务状态
+python3 ./skills/openviking-memory/scripts/ov_memory.py status
+` + "```" + `
+
+## 记忆分层结构（` + "`viking://`" + `）
+
+- ` + "`viking://~/memories/`" + `（即 ` + "`viking://user/default/memories/`" + `）：用户偏好（` + "`preferences`" + `）、实体（` + "`entities`" + `）、事件（` + "`events`" + `）
+- ` + "`viking://agent/default/memories/`" + `：案例经验（` + "`cases`" + `）、方法模式（` + "`patterns`" + `）
+- ` + "`viking://resources/`" + `：已导入的知识库文档与外部资源
 `

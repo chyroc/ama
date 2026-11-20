@@ -371,11 +371,10 @@ func (s *Service) rollbackCreatedSkill(ctx context.Context, skillID string, caus
 // degrades silently and nobody reports an error. Fetching bytes, filling in Size, and concurrent
 // fetching are all in hydrateSkillFiles.
 func (s *Service) SkillFiles(ctx context.Context, skillID string) ([]apimodel.SkillFile, error) {
-	// Built-in skills have no attachments (the CLIs are already in the container; no files need to
-	// be written there) and are not in the database; querying would only give empty, at the cost of a
-	// wasted database call.
+	// Built-in skills are not in the database; return their embedded attachments directly (nil for
+	// CLI-only built-in skills, embedded files for script-based built-in skills).
 	if IsBuiltinSkill(skillID) {
-		return nil, nil
+		return BuiltinSkillFiles(skillID), nil
 	}
 	files, err := s.store.SkillFiles(ctx, skillID)
 	if err != nil {
@@ -432,12 +431,35 @@ func (s *Service) SkillFileContent(
 		return apimodel.SkillFileContent{}, fmt.Errorf("%w: 要给一个合法的文件路径", persistmodel.ErrInvalidArgument)
 	}
 
-	// **Built-in skills short-circuit before the database query.** They have zero attachments (see
-	// the top of skillbuiltin.go), so querying would only be wasted; more importantly they are not in
-	// the skills table, and continuing would give "skill does not exist", which is wrong; it is right
-	// there in the list.
+	// **Built-in skills short-circuit before the database query.** They are not in the skills table,
+	// so continuing would give "skill does not exist", which is wrong; it is right there in the list.
 	if IsBuiltinSkill(skillID) {
-		return apimodel.SkillFileContent{}, fmt.Errorf("%w: 平台内置技能没有附件", persistmodel.ErrNotFound)
+		if _, exists := BuiltinSkill(skillID); !exists {
+			return apimodel.SkillFileContent{}, fmt.Errorf("%w: 技能不存在", persistmodel.ErrNotFound)
+		}
+		files := BuiltinSkillFiles(skillID)
+		if len(files) == 0 {
+			return apimodel.SkillFileContent{}, fmt.Errorf("%w: 平台内置技能没有附件", persistmodel.ErrNotFound)
+		}
+		for _, f := range files {
+			if f.Path != clean {
+				continue
+			}
+			out := apimodel.SkillFileContent{Path: f.Path, Size: len(f.Content)}
+			data := f.Content
+			if len(data) > skillFileMaxBytes {
+				data = data[:skillFileMaxBytes]
+				out.Size = skillFileMaxBytes
+				out.Truncated = true
+			}
+			if isBinary(data) {
+				out.Binary = true
+				return out, nil
+			}
+			out.Content = string(data)
+			return out, nil
+		}
+		return apimodel.SkillFileContent{}, fmt.Errorf("%w: 技能里没有这个文件", persistmodel.ErrNotFound)
 	}
 
 	// First confirm the skill itself exists, so "the skill is gone" and "the skill exists, this file
@@ -530,7 +552,7 @@ func (s *Service) SkillFileContent(
 func (s *Service) UpdateSkillFile(
 	ctx context.Context, skillID, filePath string, content []byte,
 ) (apimodel.Skill, error) {
-	// Built-in skills: zero attachments and not in the database. **Blocked before the database
+	// Built-in skills are read-only and not in the database. **Blocked before the database
 	// query**, for the same reason as UpdateSkill (continuing would turn into "skill does not
 	// exist", which is wrong). It also stops a real piece of dirty data: writing with a
 	// skill-builtin-* id would insert an orphan row with an empty workspace_id into skill_files.
