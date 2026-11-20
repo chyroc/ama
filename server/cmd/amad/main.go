@@ -42,16 +42,15 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/signal"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	wx "github.com/chyroc/ama/server/shared/infra/weixin"
 	"github.com/chyroc/ama/server/weixin"
 
 	"github.com/chyroc/ama/server/apihandler"
+	"github.com/chyroc/ama/server/app"
 	"github.com/chyroc/ama/server/auth"
 	"github.com/chyroc/ama/server/authz"
 	"github.com/chyroc/ama/server/channel"
@@ -80,31 +79,26 @@ import (
 	"github.com/chyroc/ama/server/shared/infra/s3"
 	"github.com/chyroc/ama/server/shared/infra/secret"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"golang.org/x/sync/errgroup"
 )
 
+var runProcessMain = app.Main
+
 func main() {
-	log := newLogger()
-	slog.SetDefault(log)
-
-	// Receive SIGINT / SIGTERM and hand them to Server.Run for graceful shutdown.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	if err := run(ctx, log); err != nil {
-		log.Error("服务退出", slog.String("error", err.Error()))
-		os.Exit(1)
-	}
+	newLogger()
+	runProcessMain(func(process *app.App) error {
+		process.AddModule(app.ModuleFunc("amad", run))
+		return nil
+	})
 }
 
 // newLogger builds the global logger: writes to stderr, wrapped in xlog.NewHandler,
 // so every *Context log line automatically carries the request id and the fields put into ctx by xlog.With.
-func newLogger() *slog.Logger {
+func newLogger() {
 	// xlog's unified redaction hook: every xlog message and string KV value goes through secret.Redact before being emitted.
 	xlog.SetRedactor(secret.Redact)
 
 	stderr := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})
-	return slog.New(xlog.NewHandler(stderr))
+	slog.SetDefault(slog.New(xlog.NewHandler(stderr)))
 }
 
 // envOr reads an env var, giving a placeholder when empty.
@@ -135,7 +129,8 @@ func startupPhase(log *slog.Logger, n int, what string) {
 	log.Info("启动阶段", slog.Int("step", n), slog.String("phase", what))
 }
 
-func run(ctx context.Context, log *slog.Logger) error {
+func run(ctx context.Context, runtime *app.Runtime) error {
+	log := runtime.Logger()
 	// First print "who I am and which port I listen on".
 	//
 	// A wrong port shows as "the process is fine, the health check always fails", with errors not pointing to the port at all,
@@ -158,7 +153,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer st.close()
+	runtime.OnClose("stores", func(context.Context) error { st.close(); return nil })
 	coreStore, feishuStore, authStore := st.core, st.feishu, st.auth
 	termRelay, workerWakes, mqDB, pgDSN := st.termRelay, st.workerWakes, st.mqDB, st.pgDSN
 
@@ -180,7 +175,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer closeDataSources()
+	runtime.OnClose("data sources", func(context.Context) error { closeDataSources(); return nil })
 
 	// Login methods: local accounts (email + password) and generic OIDC, each turned on or off by auth.local / auth.oidc.
 	//
@@ -636,7 +631,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer closeRedis()
+	runtime.OnClose("redis", func(context.Context) error { closeRedis(); return nil })
 
 	// WeChat pollers: one long poll per connected bot, each on exactly one instance (Redis lease). Without
 	// Redis two instances would race on the same bot's cursor and each answer part of the messages, so the
@@ -653,8 +648,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// so seeing it means the stuck point is not in startup (go check the health check/port); not seeing it means
 	// it is stuck in some startupPhase above, and the last phase is the stuck point.
 	startupPhase(log, 11, "启动各常驻 goroutine（HTTP / worker / 飞书长连接）")
-	g, runCtx := errgroup.WithContext(ctx)
-	g.Go(func() error { return srv.Run(runCtx) })
+	runtime.Go(srv.Run)
 	if workerPool != nil {
 		// Install poll leader election: **only one pod polls an environment at a time**,
 		// saving N-1 copies of idle RPM (measured in production: 5 pods × 7 environments = 35 loops, ~1050 RPM all idle).
@@ -673,7 +667,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// Leader lock for the Docker reclaim sweep: only one instance scans the same daemon. When rdb is nil it falls back to
 		// "every instance scans" (deletion is idempotent, the result is correct). **It also must be installed before Run.**
 		workerPool.SetReaperLeases(schedulerLeases(rdb))
-		g.Go(func() error { return workerPool.Run(runCtx) })
+		runtime.Go(workerPool.Run)
 	} else {
 		log.Warn("Docker 执行端与宿主机执行端都没启用，self_hosted worker 不启动 —— " +
 			"对话可以发消息，但 agent 一调工具就会卡在 requires_action。" +
@@ -694,7 +688,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		Logger: log,
 	})
 	if scheduler != nil {
-		g.Go(func() error { return scheduler.Run(runCtx) })
+		runtime.Go(scheduler.Run)
 		if rdb == nil {
 			log.Warn("未配置 Redis，定时任务调度器不做选主 —— " +
 				"每个实例都会扫一遍，重复触发由 PostgreSQL 的原子认领兜住" +
@@ -716,7 +710,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		Logger:  log,
 	})
 	if agentSyncer != nil {
-		g.Go(func() error { return agentSyncer.Run(runCtx) })
+		runtime.Go(agentSyncer.Run)
 		if rdb == nil {
 			log.Warn("未配置 Redis，agent 方舟同步执行器不做选主 —— " +
 				"每个实例都会扫一遍，重复同步由 PostgreSQL 的原子认领兜住" +
@@ -733,17 +727,17 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// then every instance scans, and duplicates are covered by PG claiming.
 	// Host offline sweep: machines without a heartbeat for 90s are set offline, their in-flight exec calls are failed, and waiters are woken.
 	hostWatcher := core.NewHostWatcher(hostSvc, hostWakes, schedulerLeases(rdb), log)
-	g.Go(func() error { return hostWatcher.Run(runCtx) })
+	runtime.Go(hostWatcher.Run)
 
 	// PG LISTEN wake-up loop: fans out ama_host_wake notifications to this instance's heartbeat/exec waiters.
 	// Only started in the PG tier (the mem tier has no DSN; then plain tickers are the fallback, and a single process needs no cross-instance wake-up).
 	if pgDSN != "" {
-		listenPool, lerr := pgxpool.New(runCtx, pgDSN)
+		listenPool, lerr := pgxpool.New(ctx, pgDSN)
 		if lerr != nil {
 			return lerr
 		}
-		g.Go(func() error {
-			runHostWakeListener(runCtx, listenPool, hostWakes, log)
+		runtime.Go(func(ctx context.Context) error {
+			runHostWakeListener(ctx, listenPool, hostWakes, log)
 			listenPool.Close()
 			return nil
 		})
@@ -755,7 +749,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		Logger:  log,
 	})
 	if runWatcher != nil {
-		g.Go(func() error { return runWatcher.Run(runCtx) })
+		runtime.Go(runWatcher.Run)
 	} else {
 		// The same convention as the workerPool / scheduler parts: **if it does not start, state the consequence**,
 		// otherwise the gap "sessions nobody watches do not store events" comes back with nothing in the log.
@@ -777,7 +771,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		Leases: purgeLeases(rdb),
 		Log:    log,
 	}); purger != nil {
-		g.Go(func() error { return purger.Run(runCtx) })
+		runtime.Go(purger.Run)
 	}
 
 	// Cleanup of excess history versions.
@@ -794,16 +788,16 @@ func run(ctx context.Context, log *slog.Logger) error {
 		Leases:  schedulerLeases(rdb),
 		Logger:  log,
 	}); rp != nil {
-		g.Go(func() error { return rp.Run(runCtx) })
+		runtime.Go(rp.Run)
 	}
 
 	if feishuSupervisor != nil {
-		g.Go(func() error { return feishuSupervisor.Run(runCtx) })
+		runtime.Go(feishuSupervisor.Run)
 	}
 	if weixinPoller != nil {
-		g.Go(func() error { return weixinPoller.Run(runCtx) })
+		runtime.Go(weixinPoller.Run)
 	}
-	return g.Wait()
+	return nil
 }
 
 // channelConversations adapts *core.Service to the Conversations interfaces of the chat channels
