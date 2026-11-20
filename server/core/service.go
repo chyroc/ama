@@ -320,6 +320,7 @@ func (s *Service) ownerFrom(ctx context.Context) Owner {
 // Service is this package's business entry point. It is safe to share across goroutines.
 type Service struct {
 	*AccountService
+	*FeedbackService
 	store  Store
 	runner ArkRunner
 	logger *slog.Logger
@@ -592,6 +593,7 @@ func New(cfg Config) (*Service, error) {
 	}
 	s.idSeq.Store(uint64(time.Now().UnixMilli()))
 	s.AccountService = NewAccountService(cfg.Store)
+	s.FeedbackService = NewFeedbackServiceWithReader(cfg.Store, s.nextID, func() FeedbackReaders { return s.feedbackReaders }, cfg.Logger)
 
 	// Wire the workspace domain (workspaces + members). **It must come after idSeq**, for the same
 	// reason as the domains below: the NextID closure captures s, and nextID depends on idSeq's initial value.

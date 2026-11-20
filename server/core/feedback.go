@@ -155,7 +155,7 @@ type FeedbackReaders interface {
 // The return value is **only an error** on purpose: the caller (the browser) does not need
 // the stored id, and returning an id would make "reporting" look like it created a resource
 // the user can act on again. Nobody looks at the return value for level one anyway.
-func (s *Service) SubmitFeedback(ctx context.Context, in FeedbackInput) error {
+func (s *FeedbackService) SubmitFeedback(ctx context.Context, in FeedbackInput) error {
 	actor, err := feedbackActor(ctx)
 	if err != nil {
 		return err
@@ -251,7 +251,7 @@ func (s *Service) SubmitFeedback(ctx context.Context, in FeedbackInput) error {
 // When readers is nil (not wired), **nobody can read**, rather than everybody. Same reason as
 // the feishu side, where an empty Authorizer denies: with an allow fallback, "forgot to wire
 // it" means the gate does not exist, with zero errors.
-func (s *Service) ListFeedback(ctx context.Context, q persistmodel.FeedbackQuery) (FeedbackPage, error) {
+func (s *FeedbackService) ListFeedback(ctx context.Context, q persistmodel.FeedbackQuery) (FeedbackPage, error) {
 	actor, err := feedbackActor(ctx)
 	if err != nil {
 		return FeedbackPage{}, err
@@ -259,16 +259,17 @@ func (s *Service) ListFeedback(ctx context.Context, q persistmodel.FeedbackQuery
 	// The nil check is separate from CanRead so that "not wired" and "not on the list" can be
 	// told apart in logs. To the user both mean the same thing (cannot read), but for
 	// debugging they are two different things.
-	if s.feedbackReaders == nil {
-		s.log().WarnContext(ctx, "有人尝试读反馈列表，但读取白名单没有装配——一律拒绝",
+	readers := s.readers()
+	if readers == nil {
+		s.logWarn(ctx, "有人尝试读反馈列表，但读取白名单没有装配——一律拒绝",
 			"actor", actor)
 		return FeedbackPage{}, fmt.Errorf("%w: 只有开发团队可以查看问题反馈", ErrAccessDenied)
 	}
-	if !s.feedbackReaders.CanRead(actor) {
+	if !readers.CanRead(actor) {
 		// Log a Warn and name the caller: this endpoint "should not be hit by anyone", so it is
 		// worth knowing when it is. Not an Error: a regular user trying it by hand is not an
 		// outage.
-		s.log().WarnContext(ctx, "非开发团队成员尝试读反馈列表，已拒绝", "actor", actor)
+		s.logWarn(ctx, "非开发团队成员尝试读反馈列表，已拒绝", "actor", actor)
 		return FeedbackPage{}, fmt.Errorf("%w: 只有开发团队可以查看问题反馈", ErrAccessDenied)
 	}
 
