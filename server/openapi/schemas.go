@@ -6,6 +6,8 @@
 
 package openapi
 
+import "github.com/chyroc/ama/server/authz"
+
 // ---------------------------------------------------------------------------
 // helper
 // ---------------------------------------------------------------------------
@@ -135,11 +137,13 @@ func sortedKeys(m map[string]any) []string {
 // components
 // ---------------------------------------------------------------------------
 
-func componentsObject() *orderedMap {
+func componentsObject() *orderedMap { return componentsObjectFor(allRoutes()) }
+
+func componentsObjectFor(routes []authz.RouteDecl) *orderedMap {
 	comp := newOrderedMap()
 	comp.set("securitySchemes", securitySchemes())
 	// Query parameters are extracted as reusable definitions (the MA shape); see collectQueryParams in requests.go.
-	if params := collectQueryParams(); params.len() > 0 {
+	if params := collectQueryParams(routes); params.len() > 0 {
 		comp.set("parameters", params)
 	}
 	schemas := newOrderedMap()

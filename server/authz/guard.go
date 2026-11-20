@@ -40,6 +40,7 @@ type Guard struct {
 	inner  Mux
 	member Membership
 	log    *slog.Logger
+	routes *RouteTable
 
 	// registered records every pattern registered through this Guard, so Verify can find missing declarations.
 	registered map[string]bool
@@ -49,6 +50,8 @@ type Guard struct {
 type Config struct {
 	// Membership is required: looks up roles and resolves resource ownership.
 	Membership Membership
+	// Routes optionally adds downstream route declarations. Built-in routes cannot be replaced.
+	Routes *RouteTable
 	// Logger empty means slog's default logger.
 	Logger *slog.Logger
 }
@@ -62,7 +65,15 @@ func New(cfg Config) (*Guard, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Guard{member: cfg.Membership, log: log, registered: map[string]bool{}}, nil
+	table := cfg.Routes
+	if table == nil {
+		var err error
+		table, err = NewRouteTable(nil)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &Guard{member: cfg.Membership, log: log, routes: table, registered: map[string]bool{}}, nil
 }
 
 // Wrap returns a Mux wrapped with authorization, on which business modules register routes.
@@ -84,7 +95,7 @@ type guardedMux struct {
 // **The lookup happens at registration time**: an undeclared pattern panics immediately, instead of being found only when someone requests it.
 func (m *guardedMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
 	g := m.guard
-	perm, ok := routePermissions[pattern]
+	perm, ok := g.routes.permission(pattern)
 	if !ok {
 		// A new route was added without declaring permissions in matrix.go. **This is the most dangerous kind of miss**:
 		// without the panic it would silently allow; any logged-in user could call this endpoint, with no error at all.
@@ -105,6 +116,10 @@ func (m *guardedMux) HandleFunc(pattern string, handler func(http.ResponseWriter
 	})
 }
 
+// Routes returns the declarations from this Guard's immutable table, including downstream routes.
+// The returned slice is independent of the table and suitable for OpenAPI generation.
+func (g *Guard) Routes() []RouteDecl { return g.routes.Routes() }
+
 // Verify checks that declarations and registrations match one to one, returning an error if not.
 //
 // **Both directions must be checked**:
@@ -118,8 +133,8 @@ func (m *guardedMux) HandleFunc(pattern string, handler func(http.ResponseWriter
 // Called by httpd.New after both modules are wired up.
 func (g *Guard) Verify() error {
 	var missing []string
-	for pattern := range routePermissions {
-		if g.registered[pattern] || optionalRoutes[pattern] {
+	for pattern := range g.routes.permissions {
+		if g.registered[pattern] || g.routes.optionalRoute(pattern) {
 			continue
 		}
 		missing = append(missing, pattern)

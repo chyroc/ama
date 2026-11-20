@@ -77,6 +77,30 @@ mux 路由 → auth.Protect（认证）→ authz.Guard（授权）→ 业务 han
 `protectedMux`，也就不在 Guard 视野里，写了会触发反向 panic。
 `_debug` 那两条在 `optionalRoutes` 里豁免（只在 `DevRoutes` 开时注册，线上不开）。
 
+## 下游模块的路由声明
+
+下游不需要修改内置 `matrix.go`，也不能通过包级可写 map 降低内置路由权限。
+用 `NewRouteTable` 创建内置表的快照并追加新路由，然后传给 `authz.Config.Routes`：
+
+```go
+table, err := authz.NewRouteTable([]authz.Route{{
+    Method:  http.MethodGet,
+    Pattern: "/api/workspaces/{workspaceId}/company",
+    Action:  authz.ActionRead,
+}})
+if err != nil {
+    return err
+}
+guard, err := authz.New(authz.Config{Membership: membership, Routes: table})
+```
+
+重复路由（包括与内置路由冲突）在启动时返回错误，不能覆盖。空间级权限要求 pattern 带
+`{workspaceId}`；按资源 id 反解的路由要写 `Kind` 与 `IDParam`，与内置表同一套规则。
+`Optional` 只用于确实可以未注册的路由，不要拿它绕过完整性检查。
+
+`guard.Routes()` 返回包含扩展路由的独立声明副本，交给 `openapi.GenerateWithRoutes` 即可生成
+同一张表对应的 OpenAPI。未声明的路由仍在注册时 panic，声明了未注册的路由仍由 `Verify` 报错。
+
 ## 新增路由还要归进「角色权限说明表」，否则测试红
 
 除了上面那条 panic，新增路由还有**第二道门**：`capability.go` 把全部要权限的路由按

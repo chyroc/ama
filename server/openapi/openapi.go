@@ -101,13 +101,19 @@ API Key 继承**创建者本人**的权限，不是一套独立的作用域—�
 //
 // Determinism relies on two things: authz.Routes() is already sorted, and every map below uses orderedMap to output in order.
 func Generate() ([]byte, error) {
+	return GenerateWithRoutes(authz.Routes())
+}
+
+// GenerateWithRoutes produces a spec from the caller's immutable route table. Use the same
+// table as authz.Guard so extension endpoints and their permissions cannot diverge from the spec.
+func GenerateWithRoutes(routes []authz.RouteDecl) ([]byte, error) {
 	doc := newOrderedMap()
 	doc.set("openapi", "3.1.0")
 	doc.set("info", infoObject())
 	doc.set("servers", serversArray())
 	doc.set("tags", tagsArray())
-	doc.set("paths", pathsObject(allRoutes()))
-	doc.set("components", componentsObject())
+	doc.set("paths", pathsObject(allRoutesFor(routes)))
+	doc.set("components", componentsObjectFor(routes))
 
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -171,8 +177,10 @@ func filterOutInternal(in []authz.RouteDecl) []authz.RouteDecl {
 // and the cost is covered by httpd's TestPublicRoutesRegistered: it hits these two paths with the real wiring,
 // asserting 200 even without credentials. So "written here but not registered" is still caught;
 // only what catches it is that test, not Guard.
-func allRoutes() []authz.RouteDecl {
-	routes := filterOutInternal(authz.Routes())
+func allRoutes() []authz.RouteDecl { return allRoutesFor(authz.Routes()) }
+
+func allRoutesFor(input []authz.RouteDecl) []authz.RouteDecl {
+	routes := filterOutInternal(input)
 	// action is "none" rather than empty: permissionLine picks its text by it, and isPublic sends
 	// those two down the "no auth" branch.
 	public := []authz.RouteDecl{

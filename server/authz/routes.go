@@ -49,15 +49,19 @@ type RouteDecl struct {
 // **Sorting keeps the generated spec stable**: Go's map iteration order is random; without sorting, each
 // generation gives different bytes, and the "is the spec up to date" check would always fail.
 func Routes() []RouteDecl {
-	out := make([]RouteDecl, 0, len(routePermissions))
-	for pattern, perm := range routePermissions {
+	return routeDeclarations(routePermissions, optionalRoutes)
+}
+
+func routeDeclarations(permissions map[string]permission, optional map[string]bool) []RouteDecl {
+	out := make([]RouteDecl, 0, len(permissions))
+	for pattern, perm := range permissions {
 		decl := RouteDecl{
 			Action:       ActionName(perm.action),
 			MinRole:      minRoleName(perm.action),
 			ResourceKind: kindName(perm.kind),
 			IDParam:      perm.idParam,
 			AllowMissing: perm.allowMissing,
-			Optional:     optionalRoutes[pattern],
+			Optional:     optional[pattern],
 		}
 		// The fallback route "/api/" has no method prefix; splitting it would treat the whole path as the method.
 		if method, path, ok := splitPattern(pattern); ok {

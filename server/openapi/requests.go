@@ -361,9 +361,9 @@ func schemaParamRef(key string) *orderedMap {
 // It runs a separate walk instead of accumulating while generating paths: the output order of paths and components is separate,
 // and orderedMap keeps order, so collecting in allRoutes() order here gives stable output;
 // an unstable order would make TestSpecFileIsUpToDate fail forever, with an error saying "the spec is outdated".
-func collectQueryParams() *orderedMap {
+func collectQueryParams(routes []authz.RouteDecl) *orderedMap {
 	defs := newOrderedMap()
-	for _, r := range allRoutes() {
+	for _, r := range allRoutesFor(routes) {
 		if r.Method == "" {
 			continue
 		}
