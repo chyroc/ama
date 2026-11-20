@@ -61,8 +61,12 @@ const (
 
 // RevisionPurgerConfig configures the purger.
 type RevisionPurgerConfig struct {
-	// Service is required; cleanup goes through its Store.
+	// Service is required unless Purge is supplied; cleanup goes through its Store.
 	Service *Service
+	// Purge optionally performs one cleanup round. If nil, Service's revision service is used.
+	// Downstream deployments can inject their own store without constructing the full core Service.
+	Purge func(ctx context.Context, keep int) (int64, error)
+
 	// Leases may be nil: then there is no leader election and every instance cleans.
 	//
 	// That is normal in local development and has no correctness problem (delete is
@@ -78,7 +82,7 @@ type RevisionPurgerConfig struct {
 
 // RevisionPurger periodically deletes each entity's history revisions over the limit.
 type RevisionPurger struct {
-	svc    *Service
+	purge  func(context.Context, int) (int64, error)
 	leases Leases
 	keep   int
 	every  time.Duration
@@ -92,7 +96,7 @@ type RevisionPurger struct {
 // start in mem mode", and letting it check in the same shape
 // (`if p := New...(); p != nil`) is clearer than one more error path.
 func NewRevisionPurger(cfg RevisionPurgerConfig) *RevisionPurger {
-	if cfg.Service == nil {
+	if cfg.Service == nil && cfg.Purge == nil {
 		return nil
 	}
 	keep := cfg.Keep
@@ -105,9 +109,17 @@ func NewRevisionPurger(cfg RevisionPurgerConfig) *RevisionPurger {
 	}
 	log := cfg.Logger
 	if log == nil {
-		log = cfg.Service.log()
+		if cfg.Service != nil {
+			log = cfg.Service.log()
+		} else {
+			log = slog.Default()
+		}
 	}
-	return &RevisionPurger{svc: cfg.Service, leases: cfg.Leases, keep: keep, every: every, log: log}
+	purge := cfg.Purge
+	if purge == nil {
+		purge = cfg.Service.revisions.Purge
+	}
+	return &RevisionPurger{purge: purge, leases: cfg.Leases, keep: keep, every: every, log: log}
 }
 
 // Run cleans until ctx ends; it returns nil on a normal end.
@@ -173,7 +185,7 @@ func (p *RevisionPurger) tick(ctx context.Context) {
 	// path compiles (same package), but it bypasses service/revision and opens another
 	// entry point outside the domain. The cleanup rules (keep<=0 deletes nothing, group by
 	// entity) should live in only one place.
-	n, err := p.svc.revisions.Purge(ctx, p.keep)
+	n, err := p.purge(ctx, p.keep)
 	if err != nil {
 		if ctx.Err() != nil {
 			return // shutting down, not a failure
