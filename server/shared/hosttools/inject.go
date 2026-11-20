@@ -52,6 +52,15 @@ type SkillBundle struct {
 	CacheKey string
 }
 
+// WriteFilesInput is the input of OpWriteFiles.
+type WriteFilesInput = writeFilesInput
+
+// FetchArchiveInput is the input of OpFetchArchive.
+type FetchArchiveInput = fetchArchiveInput
+
+// CacheHitMarker marks a cached archive result.
+const CacheHitMarker = cacheHitMarker
+
 // writeFilesInput is the input of OpWriteFiles.
 type writeFilesInput struct {
 	// Dir is the skill root directory (absolute, or relative to the daemon cwd); files land at
