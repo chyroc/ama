@@ -37,6 +37,12 @@ import (
 	"unicode"
 )
 
+// MaxTitleRunes is the title length limit, in runes.
+const MaxTitleRunes = maxTitleRunes
+
+// UntitledTitle is the non-empty fallback when a body has no readable title.
+const UntitledTitle = untitledTitle
+
 // maxTitleRunes is the title length limit, **in runes, not bytes**.
 //
 // Cutting by byte splits a Chinese character in half (one Chinese character is 3 bytes in UTF-8),
