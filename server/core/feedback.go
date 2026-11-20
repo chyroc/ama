@@ -70,6 +70,9 @@ import (
 // look for a field that does not exist.
 // No part of the original value is kept (not even its length), because length is itself
 // information.
+// CredentialRedacted is the marker left after sensitive text is scrubbed.
+const CredentialRedacted = credentialRedacted
+
 const credentialRedacted = "[已抹除]"
 
 // Regexes that recognize credentials by shape. **Compiled once** (package-level vars); do not
@@ -107,6 +110,35 @@ var (
 )
 
 // FeedbackLevel and FeedbackAuto / FeedbackUser have moved to model/persistmodel.
+
+// MaxFeedbackReasonLen bounds short error and identifier fields.
+const MaxFeedbackReasonLen = maxFeedbackReasonLen
+
+// FeedbackActor resolves the current caller for feedback-related guarded operations.
+func FeedbackActor(ctx context.Context) (string, error) { return feedbackActor(ctx) }
+
+// FeedbackDedupKey computes the automatic-record deduplication key.
+func FeedbackDedupKey(rec persistmodel.FeedbackRecord, now time.Time) string {
+	return feedbackDedupKey(rec, now)
+}
+
+// SanitizeAuto constructs the minimal automatic-feedback payload.
+func SanitizeAuto(in FeedbackInput) map[string]any { return sanitizeAuto(in) }
+
+// SanitizeUser constructs the explicit user-submitted payload.
+func SanitizeUser(in FeedbackInput) map[string]any { return sanitizeUser(in) }
+
+// FeedbackReportOf converts a stored record without exposing internal fields.
+func FeedbackReportOf(rec persistmodel.FeedbackRecord) FeedbackReport { return feedbackReportOf(rec) }
+
+// ScrubText removes credential-shaped values from diagnostic text.
+func ScrubText(s string) string { return scrubText(s) }
+
+// StripRouteIDs removes resource identifiers and query parameters from a route.
+func StripRouteIDs(p string) string { return stripRouteIDs(p) }
+
+// TruncateText bounds diagnostic text by rune count without splitting UTF-8.
+func TruncateText(s string, max int) string { return truncate(s, max) }
 
 // feedbackDedupWindow is the dedup time bucket size for level-one automatic records.
 //
