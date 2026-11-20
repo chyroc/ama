@@ -164,6 +164,14 @@ func formatISO(t time.Time) string { return t.UTC().Format(isoLayout) }
 //
 // It reuses newToken's 32 random bytes (256 bits): the same strength as session tokens; see the
 // comment on tokenBytes for why.
+// NewAPIKey creates a fresh plaintext key and its display prefix.
+// It is exported for downstream credential tests and provisioning code; storage
+// still goes through APIKeyManager.CreateAPIKey.
+func NewAPIKey() (plaintext, prefix string, err error) { return newAPIKey() }
+
+// PrefixDisplayLen is the number of plaintext characters visible in a key view.
+const PrefixDisplayLen = prefixDisplayLen
+
 func newAPIKey() (plaintext, prefix string, err error) {
 	raw, err := newToken()
 	if err != nil {
@@ -184,6 +192,10 @@ func newAPIKey() (plaintext, prefix string, err error) {
 // Same algorithm as hashToken, but **deliberately two functions**: they hash two different kinds
 // of credentials, stored in two different tables. With one function, adding a salt / changing the
 // algorithm for one later would silently affect the other.
+// HashAPIKey returns the sha256 hex digest stored for a plaintext key.
+// Downstream resolvers must use the same hash as the manager.
+func HashAPIKey(plaintext string) string { return hashAPIKey(plaintext) }
+
 func hashAPIKey(plaintext string) string {
 	sum := sha256.Sum256([]byte(plaintext))
 	return hex.EncodeToString(sum[:])
@@ -195,6 +207,10 @@ func hashAPIKey(plaintext string) string {
 // has no amak_ prefix, so there is no need to look it up in the api_keys table.
 //
 // ⚠️ **This is not a check**, only a quick rule-out. The real decision is the database lookup.
+// LooksLikeAPIKey is the cheap prefix check used before a database lookup.
+// It does not authenticate a credential; only the stored hash decides that.
+func LooksLikeAPIKey(cred string) bool { return looksLikeAPIKey(cred) }
+
 func looksLikeAPIKey(cred string) bool {
 	return strings.HasPrefix(cred, KeyPrefix)
 }
