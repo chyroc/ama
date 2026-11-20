@@ -178,7 +178,11 @@ type Option func(*options)
 // It deliberately does not store []arkruntime.ConfigOption directly: those are opaque closures.
 // Storing named fields lets configOptions decide per field "was it set" before passing it on,
 // so a zero value is not mistaken for the user's explicit intent.
-type options struct {
+type options = Options
+
+// Options is the resolved client configuration. Its exported conversion methods
+// preserve unset fields and explicit zero retry settings.
+type Options struct {
 	region     string
 	baseURL    string
 	timeout    time.Duration
@@ -208,7 +212,7 @@ func (o options) StreamConfigOptions() []arkruntime.ConfigOption { return o.stre
 func (o options) HasRetry() bool { return o.hasRetry }
 
 // NewOptions collects client options without losing explicit zero values.
-func NewOptions(opts ...Option) options { return newOptions(opts...) }
+func NewOptions(opts ...Option) Options { return newOptions(opts...) }
 
 // configOptions translates this package's options into the SDK's ConfigOption.
 // Unset items are not passed on at all, so the SDK's own defaults apply.
