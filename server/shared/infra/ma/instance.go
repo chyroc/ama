@@ -197,6 +197,19 @@ func newOptions(opts ...Option) options {
 	return o
 }
 
+// ConfigOptions reports the SDK options represented by this package's settings.
+// It lets downstream wrappers verify that unset fields remain unset.
+func (o options) ConfigOptions() []arkruntime.ConfigOption { return o.configOptions() }
+
+// StreamConfigOptions reports the SDK options used for long-lived event streams.
+func (o options) StreamConfigOptions() []arkruntime.ConfigOption { return o.streamConfigOptions() }
+
+// HasRetry reports whether retryTimes was explicitly set, including an explicit zero.
+func (o options) HasRetry() bool { return o.hasRetry }
+
+// NewOptions collects client options without losing explicit zero values.
+func NewOptions(opts ...Option) options { return newOptions(opts...) }
+
 // configOptions translates this package's options into the SDK's ConfigOption.
 // Unset items are not passed on at all, so the SDK's own defaults apply.
 func (o options) configOptions() []arkruntime.ConfigOption {

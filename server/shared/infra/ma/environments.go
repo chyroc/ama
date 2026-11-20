@@ -38,6 +38,9 @@ type EnvironmentSpec struct {
 }
 
 // toRequest turns the convenience input into the SDK request body.
+// ToRequest converts the convenient EnvironmentSpec into the SDK create request.
+func (s EnvironmentSpec) ToRequest() *environment.CreateEnvironmentRequest { return s.toRequest() }
+
 func (s EnvironmentSpec) toRequest() *environment.CreateEnvironmentRequest {
 	envType := s.Type
 	if envType == "" {

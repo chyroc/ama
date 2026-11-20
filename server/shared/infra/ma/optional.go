@@ -46,6 +46,12 @@ const (
 // Why empty means unset: these fields are all optional on the wire, and sending an explicit
 // empty string means something different from not sending it (some fields reject an empty
 // string as invalid). Callers that want to clear a field explicitly should use the *Raw methods.
+// OptAgentString returns the SDK optional string with the same empty-means-unset behavior.
+func OptAgentString(s string) agent.OptString { return optAgentString(s) }
+
+// OptAgentInt32 returns the SDK optional int32 with the same zero-means-unset behavior.
+func OptAgentInt32(v int32) agent.OptInt32 { return optAgentInt32(v) }
+
 func optAgentString(s string) agent.OptString {
 	if s == "" {
 		return agent.OptString{}

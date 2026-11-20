@@ -77,6 +77,9 @@ func (s SessionSpec) buildMetadata() map[string]string {
 // string to OptString: the environment is now optional (if not sent, Ark picks the default
 // environment). So this goes through optSessionString, and an empty string becomes "field not
 // sent" instead of an empty string being sent.
+// ToRequest converts the convenient SessionSpec into the SDK create request.
+func (s SessionSpec) ToRequest() *session.CreateSessionRequest { return s.toRequest() }
+
 func (s SessionSpec) toRequest() *session.CreateSessionRequest {
 	return &session.CreateSessionRequest{
 		Agent:         session.NewStringAgentIdentifier(s.AgentID),

@@ -158,6 +158,9 @@ type CustomToolSpec struct {
 }
 
 // toRequest turns the convenience input into the SDK request body.
+// ToRequest converts the convenient AgentSpec into the SDK create request.
+func (s AgentSpec) ToRequest() *agent.CreateAgentRequest { return s.toRequest() }
+
 func (s AgentSpec) toRequest() *agent.CreateAgentRequest {
 	req := &agent.CreateAgentRequest{
 		Name:        s.Name,
@@ -421,6 +424,9 @@ func (s *AgentService) Update(
 }
 
 // toRequest turns the update input into the SDK request body.
+// ToRequest converts the update into the SDK request without losing explicit clears.
+func (u AgentUpdate) ToRequest() *agent.UpdateAgentRequest { return u.toRequest() }
+
 func (u AgentUpdate) toRequest() *agent.UpdateAgentRequest {
 	req := &agent.UpdateAgentRequest{
 		Version:     u.Version,
