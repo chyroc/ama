@@ -107,7 +107,7 @@ func TestWebSocketProbeUpgrades(t *testing.T) {
 //
 // This one can use a recorder: it does not need Hijack (it never gets to the upgrade step).
 func TestWebSocketProbeIsBackendPath(t *testing.T) {
-	if !isBackendPath(PathWebSocketProbe) {
+	if !isBackendPath(PathWebSocketProbe, false) {
 		t.Fatalf("isBackendPath(%q) 是 false —— 请求会落到 SPA 拿到 200 HTML，"+
 			"而网关期待 101，于是线上回 500。见 wsprobe.go 的文件头。",
 			PathWebSocketProbe)

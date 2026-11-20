@@ -34,29 +34,31 @@
 -- │        cd server && go run ./cmd/gen-doc-outline -w
 -- │    Source of truth: model/apimodel/apimodel.go, type Agent
 -- │
--- │ id              string
--- │ workspaceId     string
--- │ name            string
--- │ description     string
--- │ system          string
--- │ model           ModelConfig
--- │ version         int
--- │ builtin_tools   []string
--- │ skillIds        []string
--- │ feishuAppIds    []string
--- │ status          AgentStatus
--- │ integrationIds  []string
--- │ executorType    string   ← omitempty, the key may be missing entirely
--- │ hostId          string   ← omitempty, the key may be missing entirely
--- │ hostSource      string   ← omitempty, the key may be missing entirely
--- │ envs            []AgentEnv
--- │ envAliases      []AgentEnvAlias
--- │ followUp        FollowUpMode
--- │ progressDetail  ProgressDetail
--- │ createdAt       string
--- │ updatedAt       string
--- │ createdBy       string   ← omitempty, the key may be missing entirely
--- │ updatedBy       string   ← omitempty, the key may be missing entirely
+-- │ id                 string
+-- │ workspaceId        string
+-- │ name               string
+-- │ description        string
+-- │ system             string
+-- │ model              ModelConfig
+-- │ baseAgent          string   ← omitempty, the key may be missing entirely
+-- │ openVikingEnabled  bool   ← omitempty, the key may be missing entirely
+-- │ version            int
+-- │ builtin_tools      []string
+-- │ skillIds           []string
+-- │ feishuAppIds       []string
+-- │ status             AgentStatus
+-- │ integrationIds     []string
+-- │ executorType       string   ← omitempty, the key may be missing entirely
+-- │ hostId             string   ← omitempty, the key may be missing entirely
+-- │ hostSource         string   ← omitempty, the key may be missing entirely
+-- │ envs               []AgentEnv
+-- │ envAliases         []AgentEnvAlias
+-- │ followUp           FollowUpMode
+-- │ progressDetail     ProgressDetail
+-- │ createdAt          string
+-- │ updatedAt          string
+-- │ createdBy          string   ← omitempty, the key may be missing entirely
+-- │ updatedBy          string   ← omitempty, the key may be missing entirely
 -- ┤──────────────────────────────────────────────────────────────────────────
 
 -- # Split between columns and doc

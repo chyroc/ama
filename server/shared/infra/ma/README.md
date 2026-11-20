@@ -305,7 +305,11 @@ SDK 不管（少个可选字段而已）、方舟不管（返回 200 建成功�
 - **Skill** 当前 SDK 只提供创建（multipart 上传）与查询详情，没有列表/删除接口。
 - **凭证的 `Auth`** 是 union（API Key / OAuth 等多种形态），构造差异大，故不做
   便捷封装，统一走原生请求体。
-- **自定义工具** 方舟本期暂不支持，只支持 MCP 工具与内置工具集。
+- **自定义工具** 支持，走 `ma.AgentSpec.CustomTools`（`ma.CustomToolSpec`，`toolItems` 负责
+  转成方舟的 `{type:"custom",…}`）。当前的使用方是 worker 侧数据源工具
+  `query_sql` / `read_object`（`shared/infra/datasources` + `core/customtools.go`）。
+  ⚠️ 声明与执行是两件事：这里只负责声明，worker 侧必须按同名实现，否则 work 会卡在
+  `requires_action`。
 
 ## 测试
 

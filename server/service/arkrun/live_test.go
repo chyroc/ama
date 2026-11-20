@@ -256,6 +256,9 @@ func TestArkAgentSpecMapsEveryFieldToMA(t *testing.T) {
 		"Skills": {func(s *AgentSpec) {
 			s.Skills = []persistmodel.ArkSkillRef{{ArkSkillID: "probe-skill-id"}}
 		}, "probe-skill-id"},
+		"BaseAgent": {func(s *AgentSpec) {
+			s.BaseAgent = "probe-base-agent"
+		}, "probe-base-agent"},
 	}
 
 	// Reconcile first: are all AgentSpec fields in the table?

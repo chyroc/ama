@@ -331,6 +331,14 @@ func (w *RunWatcher) tick(ctx context.Context) {
 		// reference count). Whether other instances have subscribers is invisible here; the PG
 		// claim below decides that.
 		if w.cfg.Service.hasActiveStream(run.ID) {
+			// Even while the browser SSE stream is open, if a session has been stuck in
+			// requires_action for >= rescueAfter (e.g. its Ark work item stopped), run
+			// rescueStoppedWork so the user watching the page does not wait forever.
+			if run.Status == apimodel.RunRequiresAction {
+				if age := ageSinceActivity(run); age >= rescueAfter {
+					w.rescueStoppedWork(ctx, run, age)
+				}
+			}
 			continue
 		}
 		if started >= watchMaxConcurrent {

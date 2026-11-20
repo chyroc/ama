@@ -594,7 +594,7 @@ func arkSyncShortfall(
 	s *Service, ctx context.Context, key ArkBindingKey,
 	agent apimodel.Agent, b persistmodel.ArkBinding,
 ) (apimodel.AgentSyncStage, bool) {
-	if b.SpecFingerprint != ArkSpecFingerprint(arkSpecFor(agent)) {
+	if b.SpecFingerprint != ArkSpecFingerprint(arkSpecFor(agent, s.customToolDecls())) {
 		return apimodel.AgentSyncStageSpec, false
 	}
 	// The skills side needs the expected fingerprint computed again. A failure (for example

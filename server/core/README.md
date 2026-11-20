@@ -1079,8 +1079,10 @@ Agent 那一刻写死的……连更新路径都不碰 System」，读着像既�
   而方舟照样返回 200。`model` 同理是个对象（`{id,speed}`）
   整体替换，只填 `id` 会让 fast 档悄悄退回默认。`shared/infra/ma` 里已抽出共享的
   `modelConfig` / `toolItems`，让建与更新两条路**不可能漂移**。
-  ⚠️ **当前一个自定义工具都没有**（唯一那个自唤醒已删除），所以这条约束眼下没有
-  实际载体——但 `CustomTools` 的整条链路留着，再加自定义工具时它立刻重新生效。
+  ⚠️ **现在有实际载体了**：`query_sql` / `read_object` 两个 worker 侧数据源工具走的就是
+  这条路（`core.Config.CustomTools`）。只发 `Tools` 不发 `CustomTools`，等于每次都把这两个
+  工具从方舟 Agent 上删掉，而方舟返回 200 —— 模型突然"不会查数据了"，零报错。
+  细节见 `shared/infra/datasources/README.md` 与下面「自定义工具：声明与实现是两件事」。
 - **两条追平各自独立，不要合并成一次 `UpdateAgent`**。指纹分开算，合并会让「改技能」
   顺带重发一遍 system；更要紧的是一次调用失败会把两件事一起拖下水，
   于是「技能没同步」与「提示词没同步」再也分不开。
@@ -1227,23 +1229,45 @@ COMMITTED 下的 EvalPlanQual 重检只看**外层** WHERE，而 `id in (已经�
 
 ### 自定义工具：声明与实现是两件事
 
-**当前一个自定义工具都没有**（唯一那个自唤醒已删除），但整条链路留着，
-再加时这条约束立刻重新生效：
+**当前有两个自定义工具：`query_sql` 和 `read_object`**（worker 侧数据源工具，凭证只在 amad
+进程里，实现在 `shared/infra/datasources`，设计与配置见那个包的 README）。
+链路在 2026-11 重新启用，所以下面这条约束重新生效，而且**这次是活的**：
 
 **内置工具集是固定的 8 个。** 在 worker 侧的 `toolset.Set` 里 Register 一个新名字，
 方舟**根本不会把它告诉模型**——模型不知道有这个工具，永远不会调，**且不报任何错**。
-必须两步：建 Agent 时声明 `{type:"custom",...}`（`arkSpecFor` →
-`ma.AgentSpec.CustomTools`），worker 侧按同名注册实现（`worker.go` 的 `CustomTools`）。
+必须两步，缺一步的症状各不相同：
 
-**工具拿不到 session id**：SDK 给 custom tool 的签名里没有它，而 `CustomTools`
-是进程级共享的 map（不像 `ToolsFunc` 按 session 建）。那六个容器工具能知道自己属于哪个
-会话，靠的是 `ToolsFunc` 回调带的 workdir，这条路在 custom tool 上不存在。
-自唤醒当年的解法是让 agent 把 `run_id` 当必填入参自己报出来。
+| 缺了哪半步 | 症状 |
+| --- | --- |
+| 只实现、没声明 | 模型永远不调，**零报错** |
+| 只声明、没实现 | 方舟推 `agent.custom_tool_use`，runner 在 `CustomTools` 里找不到这个名字，当成"不属于本 runner 的工具"跳过，work 卡在 `requires_action` |
+
+现在的接线是**一条路**，三个调用点共用同一份声明：
+
+- 声明：`core.Config.CustomTools`（消费方接口 `CustomToolProvider`）→ `Service` 字段 →
+  `arkSpecFor(a, s.customToolDecls())`，三条路径（`ensureBinding` 建 Agent / `syncBindingSpec`
+  追平 / `arkSyncShortfall` 校验追平）取的是同一份；`ArkSpecFingerprint` 已经把
+  `CustomTools` 算进去，所以声明变化会自动触发一次 `UpdateAgentSpec`。
+- 执行：`core/workerhandle.go` 构造 `selfhosted.SessionToolRunner` 时传
+  `CustomTools: p.svc.customToolsForWork(sessionID, item.ID, logger)`。
+
+**工具拿不到 session id 这件事，绕过去了。** SDK 给 custom tool 的签名里没有 session id，
+而且 SDK 的 `EnvironmentWorkerOptions.CustomTools` 是**进程级** map（不像 `ToolsFunc` 按
+session 建），所以自唤醒当年只能让 agent 把 `run_id` 当必填入参自己报出来。
+我们不走 `EnvironmentWorker`（见 `workerhandle.go` 顶部注释）：每次 work 自己
+`NewSessionToolRunner` 并**新建一份 map**，工具闭包里带着 `sessionID` / `workID`，审计日志
+就能落到具体会话。`CustomToolProvider.ToolsFor(sessionID, workID, logger)` 就是为这个设计的。
 
 **试过「每轮注入一条带 run id 的 system.message」，撤掉了**：`chat_test.go` 有一条
 「上行事件要原样转给方舟，不做二次加工」的断言，那不是过时的测试——前端 `sendMessage`
 取 `accepted[0]` 当作刚发出的用户消息画到界面上，多一条就会把那句提示显示成用户自己
 说的话。当时改成了写进 Agent 的 system 提示词。
+
+**未配置数据源时（`dataSources` 全关，默认）** 这条链路是透明的：`customToolDecls()` 返回
+nil，`arkSpecFor` 不设置 `spec.CustomTools`，runner 的 `CustomTools` 也是 nil——Ark Agent 与
+工具执行和加这个功能之前逐字节一致。**注意别把 typed-nil 塞进 `core.Config.CustomTools`**：
+接口里的 `(*Registry)(nil)` 不等于 nil，方法会打在 nil 接收者上；`cmd/amad` 的
+`openDataSources` 在未启用时直接返回裸 nil 就是为这个。
 
 ### 错误文案别把库的原始错误放在末尾
 

@@ -296,7 +296,12 @@ func (s *Service) createConversation(
 		HostSource: hostSourceForRun,
 		EventCount: 0,
 	}
-	return s.store.CreateRun(ctx, run)
+	createdRun, err := s.store.CreateRun(ctx, run)
+	if err != nil {
+		return apimodel.Run{}, err
+	}
+	s.triggerOpenVikingSessionCreate(createdRun, agent, binding.ArkEnvironmentID)
+	return createdRun, nil
 }
 
 // healMissingArkResource self-heals when CreateSession hits 404 (the Ark resource the
@@ -471,7 +476,11 @@ func (s *Service) ensureBinding(
 	var envFromAgent string
 	if siblings, err := s.store.ListArkBindings(ctx, key.WorkspaceID); err == nil {
 		for _, b := range siblings {
-			if b.ArkEnvironmentID != "" && sameArkKey(b, keyFP) {
+			// Codex agents cannot reuse workspace sibling environments: those are self_hosted, and Ark
+			// explicitly rejects codex + self_hosted ("not implemented yet"). Skip reuse here so a
+			// dedicated cloud environment is created below.
+			if b.ArkEnvironmentID != "" && sameArkKey(b, keyFP) &&
+				agent.BaseAgent != apimodel.BaseAgentCodex {
 				envID = b.ArkEnvironmentID
 				envFromAgent = b.AgentID
 				break
@@ -500,7 +509,18 @@ func (s *Service) ensureBinding(
 		// The suffix is a timestamp, not an in-process counter: the latter starts over on restart,
 		// collides across restarts, and leads back to the 409 path.
 		envName := fmt.Sprintf("ama-%s-%d", key.WorkspaceID, time.Now().UnixNano())
-		envID, err = s.runner.EnsureEnvironment(ctx, key, envName)
+		if agent.BaseAgent == apimodel.BaseAgentCodex {
+			// Codex runs only in an Ark cloud environment: tools execute inside Ark's sandbox rather
+			// than AMA's worker.
+			cloud, ok := s.runner.(CloudEnvironmentEnsurer)
+			if !ok {
+				return persistmodel.ArkBinding{}, arkFailure("准备方舟运行环境失败",
+					errors.New("当前 ArkRunner 不支持 cloud 环境，Codex 类型无法运行"))
+			}
+			envID, err = cloud.EnsureCloudEnvironment(ctx, key, envName)
+		} else {
+			envID, err = s.runner.EnsureEnvironment(ctx, key, envName)
+		}
 		if err != nil {
 			return persistmodel.ArkBinding{}, arkFailure("准备方舟运行环境失败", err)
 		}
@@ -516,14 +536,20 @@ func (s *Service) ensureBinding(
 	//
 	// Failure does not block: empty refs just means "the model does not know about skills this
 	// round", and the chat opens as usual (reason in the file header of skillark.go).
-	refs, fingerprint, err := s.arkSkillsFor(ctx, key, agent)
-	if err != nil {
-		// Only "too many bound, over the limit" gets here (that is ErrPrecondition, and the user
-		// must see it). A single skill failing to sync is already downgraded to Warn in arkSkillsFor.
-		return persistmodel.ArkBinding{}, err
+	// Codex agents do not attach AMA skills: skill file injection runs on AMA's self_hosted worker,
+	// which does not apply to cloud environments, and Ark rejects unsupported tool/skill shapes on codex.
+	var refs []persistmodel.ArkSkillRef
+	var fingerprint string
+	if agent.BaseAgent != apimodel.BaseAgentCodex {
+		refs, fingerprint, err = s.arkSkillsFor(ctx, key, agent)
+		if err != nil {
+			// Only "too many bound, over the limit" gets here (that is ErrPrecondition, and the user
+			// must see it). A single skill failing to sync is already downgraded to Warn in arkSkillsFor.
+			return persistmodel.ArkBinding{}, err
+		}
 	}
 
-	spec := arkSpecFor(agent)
+	spec := arkSpecFor(agent, s.customToolDecls())
 	spec.Skills = refs
 	created, err := s.runner.CreateAgent(ctx, key, spec)
 	if err != nil {
@@ -618,6 +644,12 @@ func (s *Service) syncBindingSkills(
 ) persistmodel.ArkBinding {
 	log := s.log().With(
 		slog.String("workspace", key.WorkspaceID), slog.String("agent", key.AgentID))
+
+	// Codex agents do not attach skills; skip skill fingerprint checks so opening a chat does not
+	// send a redundant UpdateAgent call on every conversation.
+	if agent.BaseAgent == apimodel.BaseAgentCodex {
+		return b
+	}
 
 	refs, fingerprint, err := s.arkSkillsFor(ctx, key, agent)
 	if err != nil {
@@ -718,7 +750,7 @@ func (s *Service) syncBindingSpec(
 	// Skills is deliberately left empty: that is the job of syncBindingSkills, and the ma layer
 	// treats Skills as "nil means do not change", so leaving it empty says exactly "do not touch
 	// skills this time".
-	spec := arkSpecFor(agent)
+	spec := arkSpecFor(agent, s.customToolDecls())
 	fingerprint := ArkSpecFingerprint(spec)
 	if fingerprint == b.SpecFingerprint {
 		// Almost every case goes here: **zero extra network calls**.
@@ -796,10 +828,12 @@ func ArkSpecFingerprint(spec ArkAgentSpec) string {
 			_, _ = fmt.Fprintf(h, "%d:%s", len(p), p)
 		}
 	}
-	write(spec.Name, spec.Description, spec.System, spec.Model, spec.Speed)
+	write(spec.Name, spec.Description, spec.System, spec.Model, spec.Speed, spec.BaseAgent)
 	// Tools and CustomTools must be in the fingerprint too: they are also sent by
 	// UpdateAgentSpec (tools are replaced as a whole), and leaving them out would make "turn a
-	// built-in tool on/off for the agent" not take effect.
+	// built-in tool on/off for the agent" not take effect. For the worker-side datasource tools
+	// that means: enable a datasource, start a chat, and the existing Ark Agent gets the new
+	// declaration through syncBindingSpec instead of staying without it forever, with no error.
 	write(spec.Tools...)
 	for _, ct := range spec.CustomTools {
 		write(ct.Name, ct.Description)
@@ -907,6 +941,7 @@ func (s *Service) AppendRunEvents(ctx context.Context, runID string, raw []json.
 			// fail-open, same reason as markAgentDeleted: a database hiccup should not look like "your agent was deleted".
 			s.log().Warn("查 agent 失败，本次发送不做冻结判断", "run", runID, "error", aerr.Error())
 		}
+		raw = s.injectOpenVikingRecall(ctx, run, agent, raw)
 	}
 
 	key, err := s.arkKey(ctx, run.WorkspaceID, run.AgentID)
@@ -942,6 +977,8 @@ func (s *Service) AppendRunEvents(ctx context.Context, runID string, raw []json.
 	}
 	if !isInterruptOnly(raw) {
 		run.Status = apimodel.RunRunning
+		run.EndedAt = ""
+		run.DurationMs = nil
 	}
 	// The user just said something, so this session counts as active right away, without waiting
 	// for Ark to send frames back.
@@ -1461,6 +1498,8 @@ func (s *Service) applyEventToRun(
 	switch ev.Type {
 	case "session.status_running":
 		run.Status = apimodel.RunRunning
+		run.EndedAt = ""
+		run.DurationMs = nil
 	case "session.status_idle":
 		// When stop_reason is requires_action the Ark side is still idle, but "stuck waiting for
 		// confirmation" and "normal idle" are different things to the user; the frontend treats it as
@@ -1489,6 +1528,9 @@ func (s *Service) applyEventToRun(
 		}
 		run.Status = apimodel.RunIdle
 		s.closeRun(&run)
+		if created {
+			s.triggerOpenVikingCapture(run, ev.Sequence)
+		}
 	case "session.status_terminated":
 		run.Status = apimodel.RunTerminated
 		s.closeRun(&run)
@@ -1785,7 +1827,7 @@ func (e *arkUserError) Unwrap() error { return e.cause }
 //
 // An empty builtin_tools means this agent needs no tools, so it really gets none: attaching a
 // full set of file system tools to a chat-only agent has side effects.
-func arkSpecFor(a apimodel.Agent) ArkAgentSpec {
+func arkSpecFor(a apimodel.Agent, customTools []ma.CustomToolSpec) ArkAgentSpec {
 	spec := ArkAgentSpec{
 		Name:        arkAgentName(a),
 		Description: a.Description,
@@ -1800,6 +1842,17 @@ func arkSpecFor(a apimodel.Agent) ArkAgentSpec {
 		// <harness:env></harness:env>, see envprompt.go.
 		System: a.System + renderEnvPrompt(a.Envs, nil),
 		Model:  a.Model.ID,
+		// BaseAgent selects the Ark runtime. See the codex branch below for what it changes.
+		BaseAgent: a.BaseAgent,
+	}
+	// Codex agents: Ark accepts only ToolsetCodex (web_search / web_fetch), while bash /
+	// apply_patch come from the harness itself. Custom tools, skills, and credential injection
+	// rely on AMA's self_hosted worker and do not run in cloud environments, so leave them unset.
+	if a.BaseAgent == apimodel.BaseAgentCodex {
+		if len(a.BuiltinTools) > 0 {
+			spec.Tools = []string{ma.ToolsetCodex}
+		}
+		return spec
 	}
 	// service_tier "fast" maps to Ark's model.speed fast; default / auto use the model default.
 	if a.Model.ServiceTier == "fast" {
@@ -1808,14 +1861,21 @@ func arkSpecFor(a apimodel.Agent) ArkAgentSpec {
 	if len(a.BuiltinTools) > 0 {
 		spec.Tools = []string{ma.ToolsetDefault}
 	}
-	// ⚠️ **spec.CustomTools is always empty now, but that does not mean this path can be dropped.**
+	// Custom tools come from core.Config.CustomTools (the worker-side datasource tools today:
+	// query_sql / read_object). This line is the **declaration** half; the execution half is
+	// selfhosted.SessionToolRunnerOptions.CustomTools in core/workerhandle.go.
 	//
-	// Self-wakeup (schedule_wakeup) used to be the only custom tool, and it was removed with
-	// that feature. When custom tools are added again, **their declarations must come back
-	// here**: the built-in toolset is a fixed 8 tools, and Ark does not tell the model about a
-	// tool that was never declared, so the model never calls it, and no error is reported. The
-	// executor side is EnvironmentWorkerOptions.CustomTools in core/worker.go; both sides are
-	// needed.
+	// Both halves are needed, and each fails differently:
+	//   - declared but not implemented: Ark sends agent.custom_tool_use, the runner does not find
+	//     the name in its CustomTools map, treats it as "not mine" and skips it, and the work
+	//     hangs on requires_action;
+	//   - implemented but not declared: the built-in toolset is a fixed 8 tools, Ark never tells
+	//     the model this tool exists, it never calls it, **and no error is reported at all**.
+	//
+	// customTools is nil when no datasource is configured, which keeps the spec byte-for-byte the
+	// same as before this feature (an empty slice would be "clear the tools" on update, a
+	// different meaning).
+	spec.CustomTools = customTools
 	return spec
 }
 

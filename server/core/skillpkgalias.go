@@ -102,8 +102,11 @@ const BuiltinSkillPrefix = skillsvc.BuiltinSkillPrefix
 // The ids of the built-in skills. **These strings are stored in agent.SkillIDs**, so they can
 // never change.
 const (
-	BuiltinSkillIDLarkCLI = skillsvc.BuiltinSkillIDLarkCLI
-	BuiltinSkillIDAMA     = skillsvc.BuiltinSkillIDAMA
+	BuiltinSkillIDLarkCLI          = skillsvc.BuiltinSkillIDLarkCLI
+	BuiltinSkillIDAMA              = skillsvc.BuiltinSkillIDAMA
+	BuiltinSkillIDCUA              = skillsvc.BuiltinSkillIDCUA
+	BuiltinSkillIDSeedanceMA       = skillsvc.BuiltinSkillIDSeedanceMA
+	BuiltinSkillIDOpenVikingMemory = skillsvc.BuiltinSkillIDOpenVikingMemory
 )
 
 // IsBuiltinSkill reports whether a skill id is a platform built-in.
@@ -119,6 +122,9 @@ var BuiltinSkills = skillsvc.BuiltinSkills
 
 // BuiltinSkill gets one built-in skill by id; the second return value says whether it was found.
 var BuiltinSkill = skillsvc.BuiltinSkill
+
+// BuiltinSkillFiles returns the embedded attachment files for a built-in skill.
+var BuiltinSkillFiles = skillsvc.BuiltinSkillFiles
 
 // -- Unexported aliases: keep those files in core unchanged --------------------
 //

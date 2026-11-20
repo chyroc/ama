@@ -117,7 +117,7 @@ func TestArkSpecSyncedWhenBindingAlreadyExists(t *testing.T) {
 // And it is very hard to notice: the system does contain the user's text, so it looks like "the
 // update worked".
 //
-// Mutation check: replace `arkSpecFor(agent)` in syncBindingSpec with
+// Mutation check: replace `arkSpecFor(agent, s.customToolDecls())` in syncBindingSpec with
 // `ArkAgentSpec{System: agent.System, Model: agent.Model.ID, Name: arkAgentName(agent)}`
 // → this test fails (that mutation compiles cleanly).
 func TestArkSpecSyncCarriesFullSystemNotJustUserText(t *testing.T) {
@@ -318,6 +318,9 @@ func TestArkSpecFingerprintChangesWithEveryField(t *testing.T) {
 		"Model":       func(s *ArkAgentSpec) { s.Model = "m2" },
 		"Speed":       func(s *ArkAgentSpec) { s.Speed = "fast" },
 		"Tools":       func(s *ArkAgentSpec) { s.Tools = []string{"toolset-b"} },
+		// BaseAgent picks between the built-in loop and the Codex harness on Ark; omitting it from
+		// the fingerprint would reuse the old Ark Agent when BaseAgent changes, with zero errors.
+		"BaseAgent": func(s *ArkAgentSpec) { s.BaseAgent = "codex" },
 		"CustomTools": func(s *ArkAgentSpec) {
 			s.CustomTools = []ma.CustomToolSpec{{Name: "ct2", Description: "ctd2"}}
 		},

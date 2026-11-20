@@ -311,6 +311,14 @@ func TestPasswordHandlersEndToEnd(t *testing.T) {
 	if user, _ := decode(t, me)["user"].(map[string]any); user["email"] != "root@example.com" {
 		t.Errorf("me = %s", me.Body.String())
 	}
+	// The first account is the platform admin; me says so, so the UI offers "create account".
+	req = httptest.NewRequest(http.MethodGet, PathMe, nil)
+	req.AddCookie(cookie)
+	me = httptest.NewRecorder()
+	mux.ServeHTTP(me, req)
+	if decode(t, me)["platformAdmin"] != true {
+		t.Errorf("首个账号的 me 应带 platformAdmin=true: %s", me.Body.String())
+	}
 	// Logout revokes: the same cookie on me now gives 401.
 	if rec := postJSON(mux, PathLogout, ``, cookie); rec.Code != http.StatusOK {
 		t.Fatalf("登出: %d", rec.Code)

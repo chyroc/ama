@@ -23,6 +23,12 @@ import (
 // to update the constant.
 const ToolsetDefault = "agent_toolset_20260401"
 
+// ToolsetCodex is the **only** toolset a base_agent "codex" Agent accepts: it exposes
+// web_search / web_fetch. The harness's own tools (bash / apply_patch / view_image …) are not
+// configurable through tools — Ark rejects any other toolset with 400 InvalidParameter and points
+// at base_agent_runtime, which this wrapper does not model yet.
+const ToolsetCodex = "agent_toolset_20261001"
+
 // Environment types: cloud is the Ark-hosted sandbox, self_hosted is a self-hosted Worker.
 const (
 	EnvCloud      = string(environment.EnvConfigTypeCloud)

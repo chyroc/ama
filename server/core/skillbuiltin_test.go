@@ -51,7 +51,7 @@ func TestBuiltinSkillsVisibleInEveryWorkspace(t *testing.T) {
 		if err != nil {
 			t.Fatalf("列 %s 的技能失败：%v", ws, err)
 		}
-		for _, want := range []string{BuiltinSkillIDLarkCLI, BuiltinSkillIDAMA} {
+		for _, want := range []string{BuiltinSkillIDLarkCLI, BuiltinSkillIDAMA, BuiltinSkillIDCUA, BuiltinSkillIDSeedanceMA, BuiltinSkillIDOpenVikingMemory} {
 			if !hasSkillID(list, want) {
 				t.Errorf("空间 %s 的技能列表里应当有内置技能 %s，实际只有 %v",
 					ws, want, skillIDsOf(list))
@@ -333,4 +333,60 @@ func editableSkills(t *testing.T, list []apimodel.Skill) []apimodel.Skill {
 func firstEditableSkill(t *testing.T, list []apimodel.Skill) apimodel.Skill {
 	t.Helper()
 	return editableSkills(t, list)[0]
+}
+
+// TestBuiltinCUASkillLandsInContainerAndPreview verifies that the built-in CUA skill
+// attaches its embedded scripts to both the Ark zip and the session container, and that
+// SkillFileContent serves embedded files for the detail page preview.
+func TestBuiltinCUASkillLandsInContainerAndPreview(t *testing.T) {
+	ctx := context.Background()
+	svc, store, runner := newChatService(t)
+	bindSkills(t, store, seedChatAgent, BuiltinSkillIDCUA)
+
+	run, err := svc.CreateConversation(ctx, seedWS, seedChatAgent)
+	if err != nil {
+		t.Fatalf("开对话失败：%v", err)
+	}
+
+	if len(runner.uploadedSkills) != 1 {
+		t.Fatalf("应当上传 1 个 CUA 技能包到方舟，实际 %d 个", len(runner.uploadedSkills))
+	}
+	pkg, err := ParseSkillPackage(runner.uploadedSkills[0].fileName, runner.uploadedSkills[0].zip)
+	if err != nil {
+		t.Fatalf("方舟技能包解析失败：%v", err)
+	}
+	if pkg.Name != "ark-cua" {
+		t.Errorf("技能包名应当是 ark-cua，实际 %q", pkg.Name)
+	}
+	if len(pkg.Files) == 0 {
+		t.Fatal("上传到方舟的 CUA 技能包应当包含内嵌脚本附件，实际为空")
+	}
+
+	bundles, err := NewSkillFileLoader(svc, nil).SkillsFor(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("SkillsFor 失败：%v", err)
+	}
+	if len(bundles) != 1 || bundles[0].Name != "ark-cua" {
+		t.Fatalf("容器注入包应当是 ark-cua，实际 %+v", bundles)
+	}
+	var hasSkillMD, hasCUAPy bool
+	for _, f := range bundles[0].Files {
+		if f.Path == "SKILL.md" && len(f.Content) > 0 {
+			hasSkillMD = true
+		}
+		if f.Path == "scripts/cua.py" && len(f.Content) > 0 {
+			hasCUAPy = true
+		}
+	}
+	if !hasSkillMD || !hasCUAPy {
+		t.Errorf("容器注入应当同时包含 SKILL.md (%v) 与 scripts/cua.py (%v)", hasSkillMD, hasCUAPy)
+	}
+
+	preview, err := svc.SkillFileContent(ctx, BuiltinSkillIDCUA, "scripts/cua.py")
+	if err != nil {
+		t.Fatalf("预览内置 CUA 技能附件 scripts/cua.py 失败：%v", err)
+	}
+	if !strings.Contains(preview.Content, "desktop") {
+		t.Errorf("预览内容异常，未包含 desktop 子命令定义")
+	}
 }

@@ -206,6 +206,10 @@ func agentProps(full bool) map[string]any {
 		"description": stringField("描述。"),
 		"system":      stringField("系统提示词（方舟字段名就是 `system`）。每个 Agent 独立。"),
 		"model":       refField("ModelConfig", "绑定的模型及参数。"),
+		"baseAgent": enumField("底层 Agent 循环类型。缺省（空）使用方舟内置循环（工具由 AMA worker 执行）；"+
+			"`codex` 使用 Codex harness（仅在方舟云端环境运行，不支持本地容器、技能或数据源工具）。",
+			"", "codex"),
+		"openVikingEnabled": boolField("是否启用 OpenViking 长期记忆（需服务端同时开启 `openViking.enabled`）。默认 false。"),
 		"builtin_tools": stringArrayField("启用的内置工具。六个：`bash` / `read` / `write` / " +
 			"`edit` / `glob` / `grep`。\n\n" +
 			"**它们全部在同一个容器里执行、共享一个文件系统**——所以 bash 写的文件 read 读得到。" +

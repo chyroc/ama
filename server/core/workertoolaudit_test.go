@@ -186,6 +186,37 @@ func TestAuditPostsResultForEveryParallelToolUse(t *testing.T) {
 	}
 }
 
+func TestAuditIgnoresAgentAnsweredSkillAndMCPTools(t *testing.T) {
+	api := &auditAPI{
+		events: []selfhosted.Event{
+			toolUseEvent("call_skill", "skill"),
+			{
+				ID:        "evtr-call_skill",
+				Type:      "agent.tool_result",
+				ToolUseID: "call_skill",
+			},
+			toolUseEvent("call_mcp", "mcp_tool"),
+			{
+				ID:        "evtr-call_mcp",
+				Type:      "agent.mcp_tool_result",
+				ToolUseID: "call_mcp",
+			},
+			toolUseEvent("call_bash_orphan", "bash"),
+		},
+	}
+
+	orphans, used, answered, err := listOrphanToolCalls(context.Background(), api, "sesn-test")
+	if err != nil {
+		t.Fatalf("listOrphanToolCalls 失败: %v", err)
+	}
+	if used != 3 || answered != 2 || len(orphans) != 1 {
+		t.Fatalf("used=%d answered=%d orphans=%d，期望 3/2/1", used, answered, len(orphans))
+	}
+	if got := toolCallID(orphans[0]); got != "call_bash_orphan" {
+		t.Fatalf("孤儿调用 = %q，期望 call_bash_orphan", got)
+	}
+}
+
 // TestAuditPostsErrorResultNotSilentDrop is the pair of the test above:
 // **what is posted must be a clear error result, not a silent drop, and not a fake success result.**
 //

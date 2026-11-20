@@ -53,7 +53,7 @@ func TestEnvAliasNeverEntersSystemPrompt(t *testing.T) {
 		t.Fatalf("建 agent 失败: %v", err)
 	}
 
-	spec := arkSpecFor(a)
+	spec := arkSpecFor(a, nil)
 
 	// Normal envs still go in (proves prompt rendering itself works, so this is not a false pass).
 	if !strings.Contains(spec.System, "DEPLOY_REGION=cn-east") {

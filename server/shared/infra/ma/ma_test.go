@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -225,6 +227,40 @@ func TestSessionSpecToRequest(t *testing.T) {
 	}
 	if len(req.VaultIds) != 1 || req.VaultIds[0] != "vault_z" {
 		t.Errorf("VaultIds = %+v", req.VaultIds)
+	}
+}
+
+func TestSessionCreateCarriesMetadata(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"sesn-123","type":"session","status":"idle","environment_id":"env-example","agent":{"id":"agent-1","type":"agent","version":1,"name":"a","model":{"id":"m"},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`))
+	}))
+	defer srv.Close()
+
+	ins, err := New("dummy-key", WithBaseURL(srv.URL))
+	if err != nil {
+		t.Fatalf("New 失败: %v", err)
+	}
+	_, err = ins.Sessions().Create(context.Background(), SessionSpec{
+		AgentID:       "agent-1",
+		EnvironmentID: "env-example",
+		VaultIDs:      []string{"v_1", "v_2"},
+	})
+	if err != nil {
+		t.Fatalf("Sessions().Create 失败: %v", err)
+	}
+	meta, ok := gotBody["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("请求体缺少 metadata 对象: %+v", gotBody)
+	}
+	if meta["env_id"] != "env-example" {
+		t.Errorf("metadata.env_id = %v", meta["env_id"])
+	}
+	if meta["vault_ids"] != `["v_1","v_2"]` {
+		t.Errorf("metadata.vault_ids = %v", meta["vault_ids"])
 	}
 }
 

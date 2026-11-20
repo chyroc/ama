@@ -277,7 +277,7 @@ func TestAgentSyncFailureKeepsRetryChannelOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("取绑定失败：%v", err)
 	}
-	if binding.SpecFingerprint == ArkSpecFingerprint(arkSpecFor(mustAgent(t, store, seedChatAgent))) {
+	if binding.SpecFingerprint == ArkSpecFingerprint(arkSpecFor(mustAgent(t, store, seedChatAgent), nil)) {
 		t.Fatal("同步失败却回写了 spec 指纹——这会让下次比对直接命中，" +
 			"那个 agent 从此永远不再追平，且零报错")
 	}

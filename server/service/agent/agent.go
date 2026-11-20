@@ -139,7 +139,12 @@ func (s *Service) CreateAgent(ctx context.Context, workspaceID string, draft api
 		Description: draft.Description,
 		System:      draft.System,
 		Model:       draft.Model,
-		Version:     1,
+		// BaseAgent is written only here; UpdateAgent refuses to change it (Ark's base_agent is
+		// immutable after creation, and the Ark binding was created for one type).
+		BaseAgent: strings.TrimSpace(draft.BaseAgent),
+		// Long-term memory is opt-in per agent; default false (see apimodel.Agent).
+		OpenVikingEnabled: draft.OpenVikingEnabled,
+		Version:           1,
 		// Slices are always non-nil, otherwise they encode as null and the frontend blows up
 		BuiltinTools: nonNil(draft.BuiltinTools),
 		SkillIDs:     nonNil(draft.SkillIDs),
@@ -188,6 +193,11 @@ func (s *Service) CreateAgent(ctx context.Context, workspaceID string, draft api
 	// cannot be used".
 	if a.Status == "" {
 		a.Status = apimodel.StatusActive
+	}
+	// Codex agents execute tools inside Ark's cloud sandbox rather than AMA's executor, so normalize
+	// executor fields to their default values to prevent a silent no-op host binding.
+	if a.BaseAgent == apimodel.BaseAgentCodex {
+		a.ExecutorType, a.HostID, a.HostSource = "", "", ""
 	}
 	created, err := s.store.CreateAgent(ctx, a)
 	if err != nil {
@@ -277,6 +287,20 @@ func (s *Service) UpdateAgentWithReason(
 	a.Description = draft.Description
 	a.System = draft.System
 	a.Model = draft.Model
+	// BaseAgent cannot change after creation: Ark's base_agent is immutable, and the Ark binding
+	// (environment + harness) was built for the old type. Reject instead of silently ignoring —
+	// silently ignoring would show "saved", then the agent keeps running on the old harness with
+	// no error anywhere.
+	//
+	// An empty draft value means "old frontend did not send the key", not "clear it", so only a
+	// non-empty difference is an error.
+	if next := strings.TrimSpace(draft.BaseAgent); next != "" && next != a.BaseAgent {
+		return apimodel.Agent{}, fmt.Errorf(
+			"%w: 基础 Agent 类型创建后不能修改（当前 %q）", persistmodel.ErrInvalidArgument, a.BaseAgent)
+	}
+	// Memory stays opt-in: this assignment is unconditional so unchecking it really turns recall
+	// and capture off (the same rule as integrationIds: an absent/false value is meaningful).
+	a.OpenVikingEnabled = draft.OpenVikingEnabled
 	a.BuiltinTools = nonNil(draft.BuiltinTools)
 	a.SkillIDs = nonNil(draft.SkillIDs)
 	a.FeishuAppIDs = nonNil(draft.FeishuAppIDs)
@@ -334,6 +358,10 @@ func (s *Service) UpdateAgentWithReason(
 	a.ExecutorType = tri.ExecType
 	a.HostID = tri.HostID
 	a.HostSource = tri.Source
+	// Codex agents do not use AMA's executor (tools run in Ark's cloud sandbox); reset on update too.
+	if a.BaseAgent == apimodel.BaseAgentCodex {
+		a.ExecutorType, a.HostID, a.HostSource = "", "", ""
+	}
 	// Ark increments version on every update; mirror that behavior here
 	a.Version++
 	a.UpdatedAt = apimodel.NowISO()
@@ -589,7 +617,9 @@ func diffIntegrationIDs(want, have []string) integrationChange {
 
 // add records one changed id.
 func (c *integrationChange) add(id string) {
-	c.personal = append(c.personal, id)
+	if apimodel.IsPersonalIntegration(id) {
+		c.personal = append(c.personal, id)
+	}
 }
 
 // ensureIntegrationsAllowed is the single rule for "is this authorization change allowed".
@@ -956,6 +986,19 @@ func validateAgentDraft(d apimodel.AgentDraft) error {
 	// (see that `!= ""` below). Older frontends and internal calls may not carry this key.
 	if d.Status != "" && d.Status != apimodel.StatusActive && d.Status != apimodel.StatusDisabled {
 		return fmt.Errorf("%w: 状态只能是 active 或 disabled", persistmodel.ErrInvalidArgument)
+	}
+	// baseAgent: only the built-in loop (empty) and codex are known. An unknown value must be
+	// rejected here rather than reaching Ark, where the error is an English InvalidParameter that
+	// users cannot act on.
+	if base := strings.TrimSpace(d.BaseAgent); base != "" && base != apimodel.BaseAgentCodex {
+		return fmt.Errorf("%w: 基础 Agent 类型只支持 codex", persistmodel.ErrInvalidArgument)
+	}
+	// codex runs in Ark's cloud sandbox and executes its own tools; AMA's host executor would
+	// never see a tool call, so the combination is a silent no-op and is rejected instead.
+	if strings.TrimSpace(d.BaseAgent) == apimodel.BaseAgentCodex &&
+		strings.TrimSpace(d.ExecutorType) == "host" {
+		return fmt.Errorf(
+			"%w: Codex 类型的工具在方舟云端沙箱执行，不能绑定自建机器执行器", persistmodel.ErrInvalidArgument)
 	}
 	if err := validateAgentEnvs(d.Envs); err != nil {
 		return err

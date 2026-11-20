@@ -268,6 +268,12 @@ func queryParameters(r authz.RouteDecl) []any {
 				"凭据的逃生口，给**不能带自定义请求头**的 SSE 客户端用（浏览器的 `EventSource` 就是）。\n\n"+
 					"⚠️ 只接受 API Key，**不接受会话 token**：query 参数会进访问日志与浏览器历史。"),
 		}
+	case "GET /api/runs/{runId}/sandbox/file":
+		return []any{
+			queryParam("path", true, "容器内文件路径（如 `/workspace/output.txt`）。"),
+			queryParam("raw", false, "传 `1` 时直接流式返回文件原始字节（支持 HTTP Range 分段请求，用于视频/图片/音频预览或下载；非媒体与 HTML/SVG 强制 attachment 下载）。"),
+			queryParam("download", false, "配合 `raw=1` 使用；传 `1` 时强制返回 `Content-Disposition: attachment` 触发浏览器下载。"),
+		}
 	default:
 		return nil
 	}

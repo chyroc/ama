@@ -92,6 +92,8 @@ func (in *Instance) configureRaw(apiKey string, o options) {
 		http:    &http.Client{Timeout: rawCallTimeout},
 		stream:  &http.Client{Timeout: 0},
 	}
+	// The Agent service needs it for base agents the pinned SDK does not model (base_agent).
+	in.agents.rawDo = in.RawDo
 }
 
 // RawRequest is one byte-for-byte pass-through request.

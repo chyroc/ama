@@ -92,7 +92,9 @@ var allowedOmitEmpty = map[string]string{
 	"Schedule.RunNowRequested": "A：试跑请求是一次性的，认领时清空；true 的残留不会让任务多跑一轮",
 
 	// ---- B. Byte-for-byte seed comparison; keys must not appear out of nowhere ----
-	"Skill.Files": "B：seed.json 里没有这个键，且前端是 `files?: SkillFile[]`（`skill.files ?? []`）",
+	"Skill.Files":                  "B：seed.json 里没有这个键，且前端是 `files?: SkillFile[]`（`skill.files ?? []`）",
+	"Agent.OpenVikingEnabled":      "B：seed.json 与存量数据没有这个键，前端是 `openVikingEnabled?: boolean`，缺失与 false 完全等价",
+	"AgentDraft.OpenVikingEnabled": "B：同 Agent.OpenVikingEnabled，老前端不传时默认关闭",
 
 	// ---- C. Response size; list endpoints deliberately leave it out ----
 	"SkillFile.Content": "C：列表返回整个空间的技能，附件字节会让响应线性膨胀；前端是 `content?: string`",

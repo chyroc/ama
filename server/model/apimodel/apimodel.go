@@ -542,6 +542,21 @@ const (
 	StatusDisabled AgentStatus = "disabled"
 )
 
+// BaseAgent* are the Ark base agent types an AMA agent can run on.
+//
+// The empty string (the zero value) is the built-in Ark agent loop every existing agent uses.
+// `codex` is a third-party harness: its tools are the harness's own (bash / apply_patch /
+// view_image …) plus an Ark toolset for web_search / web_fetch, it runs **only** in an Ark cloud
+// environment, and Ark currently rejects codex + self_hosted explicitly. So an agent with this
+// type cannot use AMA's Docker/host executor, skills or datasource tools — the chat path must
+// create a cloud environment instead of the usual self_hosted one.
+const (
+	// BaseAgentBuiltin is the default: the built-in Ark agent loop (worker executes tools).
+	BaseAgentBuiltin = ""
+	// BaseAgentCodex runs the Codex harness inside an Ark cloud environment.
+	BaseAgentCodex = "codex"
+)
+
 // IsDisabled reports whether this agent has been disabled (= no new turn may be triggered).
 //
 // # Why `== disabled` instead of `!= active`
@@ -1040,6 +1055,26 @@ type Agent struct {
 	// System is the system prompt; Ark's field name is system. Each agent has its own.
 	System string      `json:"system"`
 	Model  ModelConfig `json:"model"`
+	// BaseAgent is the Ark base agent type this agent runs on; see BaseAgent* constants.
+	//
+	// Empty = the built-in Ark agent loop (all pre-existing agents). `codex` = the Codex harness,
+	// which Ark only supports on **cloud** environments, so ensureBinding branches on it (see
+	// core/chat.go) and the sandbox/skills/executor features do not apply.
+	//
+	// omitempty for the same reason as ExecutorType: an empty string means exactly "the field is
+	// not there" (the built-in loop), and old agents / old frontends do not carry the key.
+	BaseAgent string `json:"baseAgent,omitempty"`
+	// OpenVikingEnabled decides whether this agent participates in platform long-term memory:
+	// recall (a <harness:openviking> block appended to every user.message) and capture (the
+	// finished turn is written back to the memory store).
+	//
+	// **Default off and opt-in per agent**: only agents that explicitly select it participate in
+	// long-term memory, while server-level openViking.enabled acts as the global gate.
+	//
+	// omitempty (Reason B in jsontag_test.go): seed.json and pre-existing stored rows do not carry
+	// this key, and the frontend reads `Boolean(agent.openVikingEnabled)` where missing and false
+	// have identical meaning.
+	OpenVikingEnabled bool `json:"openVikingEnabled,omitempty"`
 	// Version is Ark's optimistic lock: an update must send back the current version. It goes up by one on each update.
 	Version int `json:"version"`
 	// None of the following three slices has omitempty, and they must be non-nil:
@@ -1142,14 +1177,19 @@ type Agent struct {
 // always passes the full object, so value types are used here instead of a bunch of pointers. Pointers would instead fall into the ModelConfig
 // null trap.
 type AgentDraft struct {
-	Name         string      `json:"name"`
-	Description  string      `json:"description"`
-	System       string      `json:"system"`
-	Model        ModelConfig `json:"model"`
-	BuiltinTools []string    `json:"builtin_tools"`
-	SkillIDs     []string    `json:"skillIds"`
-	FeishuAppIDs []string    `json:"feishuAppIds"`
-	Status       AgentStatus `json:"status"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	System      string      `json:"system"`
+	Model       ModelConfig `json:"model"`
+	// BaseAgent is only honoured at creation: Ark's base_agent cannot be changed after the Agent
+	// is created, so UpdateAgent rejects a different value (see service/agent/agent.go).
+	BaseAgent string `json:"baseAgent,omitempty"`
+	// OpenVikingEnabled opts this agent into platform long-term memory; see Agent.OpenVikingEnabled.
+	OpenVikingEnabled bool        `json:"openVikingEnabled,omitempty"`
+	BuiltinTools      []string    `json:"builtin_tools"`
+	SkillIDs          []string    `json:"skillIds"`
+	FeishuAppIDs      []string    `json:"feishuAppIds"`
+	Status            AgentStatus `json:"status"`
 	// IntegrationIDs: see the field of the same name on Agent.
 	//
 	// ⚠️ **Old frontends do not send this key**, and then it parses as nil. The core side must normalize nil to

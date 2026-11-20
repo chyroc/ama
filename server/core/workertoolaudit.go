@@ -68,6 +68,11 @@ const (
 	//
 	// 30 seconds is enough to list a few pages of events and post a few results; longer would hold up the worker's exit.
 	toolAuditTimeout = 30 * time.Second
+
+	// eventTypeAgentToolResult and eventTypeAgentMCPToolResult are Ark server-side tool results
+	// (e.g. for `skill` or hosted MCP tools) emitted directly by the agent runtime.
+	eventTypeAgentToolResult    = "agent.tool_result"
+	eventTypeAgentMCPToolResult = "agent.mcp_tool_result"
 )
 
 // orphanToolResultText is the body of the posted result.
@@ -211,7 +216,8 @@ func listOrphanToolCalls(
 				}
 				seen[id] = true
 				order = append(order, ev)
-			case selfhosted.EventTypeUserToolResult, selfhosted.EventTypeUserCustomToolResult:
+			case selfhosted.EventTypeUserToolResult, selfhosted.EventTypeUserCustomToolResult,
+				eventTypeAgentToolResult, eventTypeAgentMCPToolResult:
 				if id := toolResultCallID(ev); id != "" {
 					done[id] = true
 				}

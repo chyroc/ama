@@ -42,6 +42,9 @@ type Service interface {
 	IssueTerminalTicket(ctx context.Context, runID string) (string, error)
 	ListRunSandboxFiles(ctx context.Context, runID, path string) (apimodel.SandboxListing, error)
 	ReadRunSandboxFile(ctx context.Context, runID, path string) (apimodel.SandboxFileContent, error)
+	StreamRunSandboxFileRaw(
+		w http.ResponseWriter, r *http.Request, runID, path string, download bool,
+	) error
 	ResumeRunSandbox(ctx context.Context, runID string) (apimodel.SandboxState, error)
 	RunSandboxShell(ctx context.Context, runID, command string) (apimodel.SandboxShellResult, error)
 	RunSandboxState(ctx context.Context, runID string) (apimodel.SandboxState, error)

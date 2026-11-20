@@ -118,11 +118,19 @@ type AgentSpec struct {
 	Speed string
 	// Tools is the list of toolset types, usually []string{ma.ToolsetDefault}.
 	Tools []string
-	// CustomTools are custom tool declarations; currently only the self-wakeup one (see core/wakeup.go).
+	// BaseAgent is the Ark base agent type: "" (built-in agent loop) or "codex".
+	//
+	// codex is a third-party harness that Ark only runs on a **cloud** environment and that
+	// accepts exactly one toolset (ma.ToolsetCodex). Callers must therefore not attach custom
+	// tools or skills to it; see CloudEnvironmentEnsurer.
+	BaseAgent string
+	// CustomTools are custom tool declarations. They currently come from
+	// core.Config.CustomTools (the worker-side datasource tools query_sql / read_object; see
+	// shared/infra/datasources).
 	//
 	// **Declaring and executing are two things**: declaring here lets the model know the tool exists,
-	// and the worker side must also register an implementation with the same name (CustomTools in
-	// core/worker.go).
+	// and the worker side must also register an implementation with the same name (the per-work
+	// map passed to selfhosted.SessionToolRunnerOptions.CustomTools in core/workerhandle.go).
 	CustomTools []ma.CustomToolSpec
 
 	// Skills are the skills attached to this Agent, at most 20 (the Ark-side limit).
@@ -171,6 +179,17 @@ type CreatedAgent struct {
 // **Persisting bindings is not this layer's job.** This layer only "creates resources on the Ark
 // side"; remembering what was created is Service's job (through the Store). They are separate
 // because "remembering" must survive process restarts, while the runner is a stateless call wrapper.
+// CloudEnvironmentEnsurer is implemented by runners that can create an Ark **cloud** environment.
+//
+// Third-party base agents (codex) need one: their tools execute inside Ark's sandbox, so the
+// self_hosted worker AMA normally relies on never receives a tool call. It is a separate
+// interface instead of a Runner method so existing test doubles stay valid; callers type-assert
+// and fail loudly when it is missing — silently creating a self_hosted environment instead makes
+// Ark reject the session later with an English error.
+type CloudEnvironmentEnsurer interface {
+	EnsureCloudEnvironment(ctx context.Context, key BindingKey, name string) (string, error)
+}
+
 type Runner interface {
 	// CreateAgent creates an Agent on the Ark side.
 	//

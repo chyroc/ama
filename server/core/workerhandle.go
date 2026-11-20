@@ -22,6 +22,15 @@
 // The rest (GetSession, envinit.Setup, the tool set, heartbeat, StopWork cleanup, running
 // SessionToolRunner) matches SDK handleItem line by line and only uses exported SDK APIs; when
 // upgrading the SDK, just keep it in line with upstream lib/environments/worker.go.
+//
+// # Custom tools are wired here, not through EnvironmentWorker
+//
+// The SDK's EnvironmentWorkerOptions also has a CustomTools field, but it is a **process-level
+// map**: one entry shared by every session on the pod, so a tool implementation cannot know which
+// session it is serving. That is why the datasource audit lines would have no session id. We build
+// the SessionToolRunner directly (below), which lets us pass a **fresh map per work item** whose
+// closures carry sessionID + workID (see customToolsForWork). The declaration half of the same
+// tools is in arkSpecFor.
 package core
 
 import (
@@ -76,7 +85,7 @@ func (p *WorkerPool) handleWorkItem(
 	ledger ToolResultLedger,
 	logger *slog.Logger,
 	sdkLogger *log.Logger,
-) error {
+) (retErr error) {
 	if item.ID == "" {
 		return errors.New("work item id must not be empty")
 	}
@@ -100,16 +109,16 @@ func (p *WorkerPool) handleWorkItem(
 		})
 	}()
 
-	var retErr error
 	defer func() {
 		cancel()
 		<-heartbeatDone
 		causeStr, _ := heartbeatCause.Load().(string)
-		// Same as SDK shouldStopItem: only StopWork on lost lock / expired heartbeat / fatal;
-		// the failover wrapper swallows StopWork when it lets go (re-dispatch instead of terminate).
-		if causeStr == heartbeatCauseLeaseLost || causeStr == heartbeatCauseHeartbeatLost ||
-			causeStr == heartbeatCausePermanentFailure {
-			_ = stopWorkForItem(workCtx, api, item)
+		// Same as SDK shouldStopItem: settle the work item on normal completion / idle exit,
+		// and skip StopWork only on lost lock / expired heartbeat / permanent failure;
+		// shutdownSafeAPI and the failover wrapper swallow StopWork when letting go for re-dispatch.
+		if causeStr != heartbeatCauseLeaseLost && causeStr != heartbeatCauseHeartbeatLost &&
+			causeStr != heartbeatCausePermanentFailure {
+			_ = stopWorkForItem(context.Background(), api, item)
 		}
 		if causeStr == heartbeatCauseStopRequested && errors.Is(retErr, context.Canceled) {
 			retErr = nil
@@ -125,6 +134,18 @@ func (p *WorkerPool) handleWorkItem(
 	}
 	if session.ID == "" {
 		session.ID = sessionID
+	}
+	var svc *Service
+	if p != nil {
+		svc = p.svc
+		refs := session.SkillRefs()
+		skillIDs := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			if ref.SkillID != "" {
+				skillIDs = append(skillIDs, ref.SkillID)
+			}
+		}
+		p.ensureSessionRunForWork(workCtx, item.EnvironmentID, sessionID, skillIDs, logger)
 	}
 
 	// Skills are downloaded to the worker host (envinit). Warn-only, same as the SDK: failure is
@@ -159,6 +180,16 @@ func (p *WorkerPool) handleWorkItem(
 		Tools:       toolSet,
 		ResultStore: resultStore,
 		Logger:      sdkLogger,
+		// Use 1000-event pages and a 1.5s poll fallback interval so long CUA/multi-step sessions
+		// (hundreds of events) do not trigger a multi-page ListEvents storm every 500ms and hit
+		// Ark's account RPM rate limit (HTTP 429).
+		EventLimit:        toolAuditListLimit,
+		EventPollInterval: 1500 * time.Millisecond,
+		// Worker-side custom tools (query_sql / read_object). **A new map per work item**, not one
+		// built when the pool starts: the tools' closures carry this work's session/work id, so
+		// every audit line can say who queried what. customToolsForWork is nil-safe; with no
+		// datasource configured this is nil, i.e. exactly the previous behavior.
+		CustomTools: svc.customToolsForWork(sessionID, item.ID, logger),
 	})
 	defer func() { _ = runner.Close() }()
 	for runner.Next() {
@@ -166,12 +197,8 @@ func (p *WorkerPool) handleWorkItem(
 		// internally, so nothing else is needed.
 	}
 	retErr = runner.Err()
-	if retErr != nil &&
-		!errors.Is(retErr, selfhosted.ErrIdleTimeout) &&
-		!errors.Is(retErr, selfhosted.ErrSessionTerminated) &&
-		!errors.Is(retErr, context.Canceled) &&
-		!errors.Is(retErr, context.DeadlineExceeded) {
-		return retErr
+	if errors.Is(retErr, selfhosted.ErrIdleTimeout) || errors.Is(retErr, selfhosted.ErrSessionTerminated) {
+		return nil
 	}
 	return retErr
 }

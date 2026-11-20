@@ -120,6 +120,18 @@ type Config struct {
 
 	// Logger defaults to the slog default logger.
 	Logger *slog.Logger
+
+	// CUA configures the optional authenticated CUA cloud desktop reverse proxy. When Enabled is
+	// false, /desktops/ and /cua-app/ are not registered.
+	CUA CUAConfig
+}
+
+// CUAConfig configures the optional CUA cloud desktop reverse proxy.
+type CUAConfig struct {
+	Enabled     bool
+	UpstreamURL string
+	GatewayURL  string
+	APIKey      string
 }
 
 func (c Config) validate() error {
@@ -186,6 +198,9 @@ func New(cfg Config) (*Server, error) {
 	// from happening at all, and a 401 could not tell whether the gateway swallowed the upgrade
 	// header or we blocked it ourselves.
 	registerWebSocketProbe(mux, log)
+	if cfg.CUA.Enabled {
+		registerCUAProxy(mux, log, cfg.CUA, cfg.AuthHandler.Protect)
+	}
 
 	// The terminal WebSocket endpoint. **Registered on the bare mux, deliberately not through
 	// Protect/Guard.**
@@ -294,7 +309,7 @@ func New(cfg Config) (*Server, error) {
 		// it. So SSE / WebSocket (all under /api/) avoid compression through the routing structure,
 		// not through "the filter should let them through"; the latter was measured not to hold,
 		// see the file header of compress.go.
-		Handler:           srv.wrap(routeFrontend(mux, compressStatic(spaHandler(staticRoot())))),
+		Handler:           srv.wrap(routeFrontend(mux, compressStatic(spaHandler(staticRoot(), cfg.CUA.Enabled)), cfg.CUA.Enabled)),
 		ReadHeaderTimeout: readHeaderTimeout,
 		WriteTimeout:      writeTimeout,
 	}

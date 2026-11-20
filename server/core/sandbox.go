@@ -38,11 +38,14 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
+	"net/http"
 	gopath "path"
 	"strings"
 	"time"
@@ -886,4 +889,114 @@ func isBinary(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// sandboxRawFileMaxBytes is the maximum file size served by StreamRunSandboxFileRaw (64 MiB).
+const sandboxRawFileMaxBytes = 64 * 1024 * 1024
+
+func detectMediaContentType(filename string, data []byte) string {
+	ext := strings.ToLower(gopath.Ext(filename))
+	switch ext {
+	case ".mp4", ".m4v":
+		return "video/mp4"
+	case ".webm":
+		return "video/webm"
+	case ".mov":
+		return "video/quicktime"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".wav":
+		return "audio/wav"
+	case ".ogg":
+		return "audio/ogg"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".svg":
+		return "image/svg+xml"
+	case ".pdf":
+		return "application/pdf"
+	}
+	if ct := mime.TypeByExtension(ext); ct != "" {
+		return ct
+	}
+	return http.DetectContentType(data)
+}
+
+// isSafeInlineMediaMIME reports whether a MIME type is passive media safe to serve inline on AMA's
+// origin. Active document types such as text/html and image/svg+xml must always be forced to
+// attachment to prevent stored same-origin XSS.
+func isSafeInlineMediaMIME(contentType string) bool {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	switch mediaType {
+	case "video/mp4", "video/webm", "video/quicktime",
+		"audio/mpeg", "audio/wav", "audio/ogg",
+		"image/png", "image/jpeg", "image/gif", "image/webp":
+		return true
+	default:
+		return false
+	}
+}
+
+// StreamRunSandboxFileRaw streams a raw file from a Run's container using http.ServeContent so
+// HTML5 <video> / <audio> / <img> elements get same-origin Range (206 Partial Content) support,
+// while non-media / active file types are served exclusively as forced downloads.
+func (s *Service) StreamRunSandboxFileRaw(
+	w http.ResponseWriter, r *http.Request, runID, path string, download bool,
+) error {
+	ctx := r.Context()
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("%w: 要给一个文件路径", ErrInvalidArgument)
+	}
+	clean, err := cleanSandboxPath(path)
+	if err != nil {
+		return err
+	}
+	if clean == "/" {
+		return fmt.Errorf("%w: 要给一个文件路径", ErrInvalidArgument)
+	}
+
+	rec, err := s.store.GetRunSandbox(ctx, runID)
+	if err != nil {
+		return err
+	}
+	sess, err := s.attachSandbox(ctx, runID, rec.SandboxID)
+	if err != nil {
+		return err
+	}
+	rc, err := sess.Download(ctx, clean, sandboxRawFileMaxBytes)
+	if err != nil {
+		return err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(rc, sandboxRawFileMaxBytes))
+	_ = rc.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if len(data) == 0 {
+		return ErrNotFound
+	}
+
+	filename := gopath.Base(clean)
+	contentType := detectMediaContentType(filename, data)
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; media-src 'self'; img-src 'self'; sandbox")
+
+	safeName := strings.NewReplacer(`"`, "", "\r", "", "\n", "").Replace(filename)
+	if safeName == "" {
+		safeName = "download"
+	}
+	disposition := "attachment"
+	if !download && isSafeInlineMediaMIME(contentType) {
+		disposition = "inline"
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, safeName))
+	http.ServeContent(w, r, safeName, time.Time{}, bytes.NewReader(data))
+	return nil
 }

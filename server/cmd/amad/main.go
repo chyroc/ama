@@ -69,6 +69,7 @@ import (
 	"github.com/chyroc/ama/server/shared/gopkg/xlog"
 	"github.com/chyroc/ama/server/shared/infra/config"
 	"github.com/chyroc/ama/server/shared/infra/cryptobox"
+	"github.com/chyroc/ama/server/shared/infra/datasources"
 	"github.com/chyroc/ama/server/shared/infra/dockertools"
 	"github.com/chyroc/ama/server/shared/infra/github"
 	"github.com/chyroc/ama/server/shared/infra/lark"
@@ -167,11 +168,25 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
+	// Worker-side datasource tools (query_sql / read_object): the credentials live in this
+	// process, not in the agent's environment. Nothing enabled → nil, and the agent is exactly
+	// what it was before.
+	//
+	// It is built here, before core, because core.Config.CustomTools needs it. Startup probing
+	// (SHOW TABLES / ListObjectsV2) is warn-only: an unreachable RDS must not stop amad from
+	// serving everything else.
+	startupPhase(log, 3, "装配 worker 侧数据源工具（query_sql / read_object）")
+	customTools, closeDataSources, err := openDataSources(cfg, log)
+	if err != nil {
+		return err
+	}
+	defer closeDataSources()
+
 	// Login methods: local accounts (email + password) and generic OIDC, each turned on or off by auth.local / auth.oidc.
 	//
 	// ⚠️ **When neither is on, people cannot log in** (the fixed API Key and user API Keys still work). The service starts as usual:
 	// refusing to start would also block deployments that "only want to run CI with an API Key", but it must be said loudly in the startup log.
-	startupPhase(log, 3, "装配登录方式（本地账号 / OIDC / GitHub）")
+	startupPhase(log, 4, "装配登录方式（本地账号 / OIDC / GitHub）")
 	oidcClient := newOIDCClient(cfg, log)
 	githubClient := newGitHubClient(cfg, log)
 
@@ -179,7 +194,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	//
 	// **Build core before feishu**: feishu.DeleteApp relies on core to clean up dangling bindings on the agent side
 	// (Config.Unbinder), so the order cannot be reversed. core does not need feishu, so there is no cycle.
-	startupPhase(log, 4, "装配核心业务（core）")
+	startupPhase(log, 5, "装配核心业务（core）")
 	// Login and auth. **All endpoints except those five under /api/auth/ require login.**
 	//
 	// ⚠️ **It must be built before newIntegrationRegistry**: the AMA authorization provider uses it
@@ -271,6 +286,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// This registry does not depend on core, so building it early has no side effects.
 	integrations := newIntegrationRegistry(authSvc, log)
 
+	liveRunner := core.NewLiveArkRunner()
+	liveRunner.DefaultEnvironmentID = cfg.Ark.EnvironmentID
+	liveRunner.VaultIDs = cfg.Ark.VaultIDs
+
 	coreSvc, err := core.New(core.Config{
 		Store: coreStore,
 		// When saving an agent with the "host executor", validate host binding (host domain service).
@@ -279,7 +298,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		ArkVerifier: core.NewLiveArkVerifier(),
 		// The chat path also calls real Ark: creates the self_hosted environment + Agent + Session, and relays the event stream.
 		// It uses **each workspace's own configured key**, not a process-level env var.
-		ArkRunner: core.NewLiveArkRunner(),
+		ArkRunner: liveRunner,
 		// Who counts as "the dev team", for permission checks of the feedback read endpoint.
 		//
 		// ⚠️ **Not passing it means nobody can read** (core.ListFeedback rejects everything for nil).
@@ -306,7 +325,34 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// one RTT per character. In other words, missing this item **reports no error; those two bugs just come back unchanged**.
 		// The check is whether the terminal status bar has a "compatibility mode" badge. See config.Server.TerminalWSOrigins.
 		TerminalWSOrigins: cfg.Server.TerminalWSOrigins,
-		Logger:            log,
+		// Worker-side custom tools (query_sql / read_object). **A bare nil interface when nothing is
+		// configured** — openDataSources takes care of that; see the comment on core.Config.CustomTools
+		// for why a typed nil would be a trap.
+		CustomTools: customTools,
+		OpenViking: core.OpenVikingServerConfig{
+			Enabled:        cfg.OpenViking.Enabled,
+			URL:            cfg.OpenViking.URLOrDefault(),
+			APIKey:         cfg.OpenViking.APIKey,
+			ResourceID:     cfg.OpenViking.ResourceID,
+			RecallTimeout:  cfg.OpenViking.RecallTimeoutOrDefault(),
+			CaptureTimeout: cfg.OpenViking.CaptureTimeoutOrDefault(),
+		},
+		CUA: core.CUASkillConfig{
+			Enabled:         cfg.CUA.Enabled,
+			GatewayURL:      cfg.CUA.GatewayURL,
+			ArtifactBaseURL: cfg.CUA.ArtifactBaseURL,
+		},
+		Seedance: core.SeedanceSkillConfig{
+			Enabled:       cfg.Seedance.Enabled,
+			APIBaseURL:    cfg.Seedance.APIBaseURLOrDefault(),
+			APIKey:        cfg.Seedance.APIKey,
+			AgentID:       cfg.Seedance.AgentID,
+			EnvironmentID: cfg.Seedance.EnvironmentID,
+			VideoModel:    cfg.Seedance.VideoModel,
+			ImageModel:    cfg.Seedance.ImageModel,
+		},
+		ArkVaultIDs: cfg.Ark.VaultIDs,
+		Logger:      log,
 	})
 	if err != nil {
 		return err
@@ -332,13 +378,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// Both share the same role checks, otherwise "one layer allows, the other rejects" would happen,
 	// and the error could not point to the real cause.
 	membership := authzMembership{core: coreSvc, feishu: feishuStore}
-	startupPhase(log, 5, "装配授权矩阵（authz）")
+	startupPhase(log, 6, "装配授权矩阵（authz）")
 	guard, err := authz.New(authz.Config{Membership: membership, Logger: log})
 	if err != nil {
 		return err
 	}
 
-	startupPhase(log, 6, "装配飞书模块")
+	startupPhase(log, 7, "装配飞书模块")
 	svc, err := feishu.New(feishu.Config{
 		Store: feishuStore,
 		// The real authorizer. **Leaving it empty rejects everything** (denyAllAuthorizer), so it must be passed here;
@@ -469,6 +515,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	// The Cookie's Secure follows the deployment form: locally it is http://, and with Secure the browser would not store it at all,
 	// showing as "login succeeds but a refresh asks to log in again", with no error.
+	uiStarters := make([]auth.UIStarterPrompt, 0, len(cfg.UI.StarterPrompts))
+	for _, sp := range cfg.UI.StarterPrompts {
+		uiStarters = append(uiStarters, auth.UIStarterPrompt{Label: sp.Label, Prompt: sp.Prompt})
+	}
 	authHandler, err := auth.NewHandler(auth.HandlerConfig{
 		Service:      authSvc,
 		SecureCookie: cfg.Server.SecureCookie(),
@@ -476,7 +526,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// (selfurl.Callback only falls back for loopback addresses), so missing it in production means nobody can log in:
 		// the Warn below is the only clue for ops to know this in advance.
 		PublicURL: cfg.Server.PublicURL,
-		Logger:    log,
+		UI: auth.UIBranding{
+			BrandName:      cfg.UI.BrandName,
+			BrandBadge:     cfg.UI.BrandBadge,
+			Title:          cfg.UI.Title,
+			StarterPrompts: uiStarters,
+		},
+		Logger: log,
 	})
 	if err != nil {
 		return err
@@ -489,7 +545,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			"顺带它也决定 Cookie 要不要带 Secure。")
 	}
 
-	startupPhase(log, 7, "装配 HTTP 路由")
+	startupPhase(log, 8, "装配 HTTP 路由")
 	srv, err := httpd.New(httpd.Config{
 		Addr:          cfg.Server.AddrOrDefault(),
 		FeishuService: svc,
@@ -499,6 +555,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 		Authz:         guard,
 		AllowedOrigin: cfg.Server.AllowedOrigin,
 		Logger:        log,
+		CUA: httpd.CUAConfig{
+			Enabled:     cfg.CUA.Enabled,
+			UpstreamURL: cfg.CUA.UpstreamURLOrDefault(),
+			GatewayURL:  cfg.CUA.GatewayURL,
+			APIKey:      cfg.CUA.APIKey,
+		},
 	})
 	if err != nil {
 		return err
@@ -510,7 +572,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// where Ark only does model inference; tool calls rely on this worker to pick them up, run them, and return results. Without it,
 	// a session stops at requires_action as soon as the agent calls a tool and never moves again: users see "the reply stopped halfway"
 	// with no error at all. So when the config is incomplete, this must **say the consequence loudly**, instead of skipping silently.
-	startupPhase(log, 8, "装配 self_hosted worker 池")
+	startupPhase(log, 9, "装配 self_hosted worker 池")
 	// A wrong docker.memory **fails startup** instead of silently not limiting memory: it is a resource limit,
 	// and "thought it was limited but it was not" is harder to notice than failing to start.
 	dockerMemory, err := cfg.Docker.MemoryBytes()
@@ -558,6 +620,8 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// Host executor: tool calls go through hostSvc into the host_dispatches queue, picked up by the ama daemon on the user's machine
 		// with long polling. With it configured, the worker starts even without Docker configured.
 		HostExec: hostSvc,
+		// Opt-in adoption of external Ark sessions bound to the same environment.
+		AdoptExternalSessions: cfg.Worker.AdoptExternalSessions,
 	}, log)
 
 	// Feishu long connections: open one websocket for each connected app; @-mentioning the bot in a group drives the agent.
@@ -567,7 +631,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// showing as inbound messages randomly lost, so before connecting we must grab a lock, and not connect if we cannot.
 	// Without Redis configured the service starts as usual, it just receives no Feishu messages: say so clearly here, so nobody spends ages
 	// guessing at "the bot ignores me".
-	startupPhase(log, 9, "连接 Redis 并装配飞书长连接")
+	startupPhase(log, 10, "连接 Redis 并装配飞书长连接")
 	feishuSupervisor, rdb, closeRedis, err := newFeishuSupervisor(ctx, cfg, svc, feishuStore, coreSvc, log)
 	if err != nil {
 		return err
@@ -588,7 +652,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// **This line marks "all wiring is done"**: after it there is no more blocking initialization,
 	// so seeing it means the stuck point is not in startup (go check the health check/port); not seeing it means
 	// it is stuck in some startupPhase above, and the last phase is the stuck point.
-	startupPhase(log, 10, "启动各常驻 goroutine（HTTP / worker / 飞书长连接）")
+	startupPhase(log, 11, "启动各常驻 goroutine（HTTP / worker / 飞书长连接）")
 	g, runCtx := errgroup.WithContext(ctx)
 	g.Go(func() error { return srv.Run(runCtx) })
 	if workerPool != nil {
@@ -1105,11 +1169,27 @@ func dockerExecConfig(cfg *config.Config, memory int64) core.DockerExecConfig {
 			MemoryBytes:  memory,
 			PidsLimit:    d.PidsLimit,
 			Network:      d.Network,
+			Runtime:      d.Runtime,
+			CapDrop:      d.CapDrop,
+			DataMounts:   dockerDataMounts(d.DataMounts),
 			IdleAction:   d.IdleAction,
 			ContainerTTL: d.ContainerTTLOrDefault(),
 			WorkspaceTTL: d.WorkspaceTTLOrDefault(),
 		},
 	}
+}
+
+// dockerDataMounts translates docker.dataMounts (already validated when the config was loaded).
+func dockerDataMounts(in []config.DockerDataMount) []dockertools.DataMount {
+	out := make([]dockertools.DataMount, 0, len(in))
+	for _, m := range in {
+		out = append(out, dockertools.DataMount{
+			Source:   strings.TrimSpace(m.Source),
+			Target:   strings.TrimSpace(m.Target),
+			ReadOnly: m.ReadOnlyOrDefault(),
+		})
+	}
+	return out
 }
 
 // larkSender / larkTokens are the default implementations of sending messages and exchanging tokens, calling real Feishu directly.
@@ -1497,6 +1577,44 @@ func openBlobStore(ctx context.Context, cfg *config.Config, log *slog.Logger) (*
 	}
 	log.Warn("没配对象存储，文件字节放进程内存（server.store=mem），重启即丢")
 	return nil, coremem.NewMemBlobStore(), nil
+}
+
+// openDataSources builds the worker-side datasource tools (query_sql / read_object).
+//
+// Returns a **bare nil interface** when no datasource is enabled: a *datasources.Registry typed nil
+// stored in core.CustomToolProvider would compare != nil and then run methods on a nil receiver.
+// The returned close function is always safe to call.
+//
+// A wrong configuration (enabled but missing fields) is a startup error on purpose: "the model
+// silently has no tool" is the kind of zero-error failure this repo keeps guarding against. An
+// unreachable datasource only warns (inside datasources.New), so a broken RDS allowlist does not
+// take the whole service down with it.
+func openDataSources(cfg *config.Config, log *slog.Logger) (core.CustomToolProvider, func(), error) {
+	if !cfg.DataSources.Enabled() {
+		log.Info("未配置 dataSources：不向 agent 声明 query_sql / read_object（对话与工具行为与之前完全一致）")
+		return nil, func() {}, nil
+	}
+	registry, err := datasources.New(cfg.DataSources.ToConfig(), log)
+	if err != nil {
+		return nil, nil, fmt.Errorf("装配数据源工具失败: %w", err)
+	}
+	if registry == nil {
+		// Enabled() was true but New found nothing to build; treat it as "not configured".
+		return nil, func() {}, nil
+	}
+	names := make([]string, 0, 2)
+	for _, d := range registry.Declarations() {
+		names = append(names, d.Name)
+	}
+	log.Info("已装配 worker 侧数据源工具（凭证只在 amad 进程内，不进会话容器）",
+		slog.Any("工具", names),
+		slog.Bool("mysql", cfg.DataSources.MySQL.Enabled),
+		slog.Bool("tos", cfg.DataSources.TOS.Enabled))
+	return registry, func() {
+		if err := registry.Close(); err != nil {
+			log.Warn("关闭数据源连接失败", slog.Any("err", err))
+		}
+	}, nil
 }
 
 // userProfileLookup adapts auth.Store to core.UserProfileLookup.

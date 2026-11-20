@@ -40,6 +40,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -221,7 +222,78 @@ func (s *SessionEnvSource) SessionEnvs(
 		}
 	}
 
-	// -- Two: AMA CLI credentials -----------------------------------------------------------
+	// -- Two: Built-in skill server-managed configuration (CUA / Seedance MA / OpenViking) ---
+	if contains(agent.SkillIDs, BuiltinSkillIDCUA) && s.svc.cua.Enabled {
+		if strings.TrimSpace(envs["AP_CUA_SKILL_API_BASE_URL"]) == "" && strings.TrimSpace(s.svc.cua.GatewayURL) != "" {
+			envs["AP_CUA_SKILL_API_BASE_URL"] = strings.TrimRight(strings.TrimSpace(s.svc.cua.GatewayURL), "/")
+		}
+		if strings.TrimSpace(envs["CUA_CREDENTIAL_ARTIFACT_BASE_URL"]) == "" && strings.TrimSpace(s.svc.cua.ArtifactBaseURL) != "" {
+			envs["CUA_CREDENTIAL_ARTIFACT_BASE_URL"] = strings.TrimRight(strings.TrimSpace(s.svc.cua.ArtifactBaseURL), "/")
+		}
+	}
+
+	if contains(agent.SkillIDs, BuiltinSkillIDSeedanceMA) && s.svc.seedance.Enabled {
+		if strings.TrimSpace(envs["ARK_SEEDANCE_API_KEY"]) == "" && strings.TrimSpace(s.svc.seedance.APIKey) != "" {
+			envs["ARK_SEEDANCE_API_KEY"] = s.svc.seedance.APIKey
+			secretKeys = append(secretKeys, "ARK_SEEDANCE_API_KEY")
+		}
+		if strings.TrimSpace(envs["ARK_SEEDANCE_API_BASE_URL"]) == "" && strings.TrimSpace(s.svc.seedance.APIBaseURL) != "" {
+			envs["ARK_SEEDANCE_API_BASE_URL"] = strings.TrimRight(strings.TrimSpace(s.svc.seedance.APIBaseURL), "/")
+		}
+		if strings.TrimSpace(envs["ARK_SEEDANCE_AGENT_ID"]) == "" && strings.TrimSpace(s.svc.seedance.AgentID) != "" {
+			envs["ARK_SEEDANCE_AGENT_ID"] = strings.TrimSpace(s.svc.seedance.AgentID)
+		}
+		if strings.TrimSpace(envs["ARK_SEEDANCE_ENVIRONMENT_ID"]) == "" && strings.TrimSpace(s.svc.seedance.EnvironmentID) != "" {
+			envs["ARK_SEEDANCE_ENVIRONMENT_ID"] = strings.TrimSpace(s.svc.seedance.EnvironmentID)
+		}
+		if strings.TrimSpace(envs["ARK_SEEDANCE_VIDEO_MODEL"]) == "" && strings.TrimSpace(s.svc.seedance.VideoModel) != "" {
+			envs["ARK_SEEDANCE_VIDEO_MODEL"] = strings.TrimSpace(s.svc.seedance.VideoModel)
+		}
+		if strings.TrimSpace(envs["ARK_SEEDANCE_IMAGE_MODEL"]) == "" && strings.TrimSpace(s.svc.seedance.ImageModel) != "" {
+			envs["ARK_SEEDANCE_IMAGE_MODEL"] = strings.TrimSpace(s.svc.seedance.ImageModel)
+		}
+		if strings.TrimSpace(envs["ARK_SEEDANCE_VAULT_IDS"]) == "" && len(s.svc.arkVaultIDs) > 0 {
+			if raw, jErr := json.Marshal(s.svc.arkVaultIDs); jErr == nil {
+				envs["ARK_SEEDANCE_VAULT_IDS"] = string(raw)
+			}
+		}
+	}
+
+	if contains(agent.SkillIDs, BuiltinSkillIDOpenVikingMemory) {
+		if ovCfg := s.svc.resolveOpenVikingConfig(run.WorkspaceID, agent); ovCfg.Enabled {
+			if strings.TrimSpace(envs["OPENVIKING_URL"]) == "" {
+				envs["OPENVIKING_URL"] = ovCfg.URL
+			}
+			if strings.TrimSpace(envs["OPENVIKING_API_KEY"]) == "" {
+				envs["OPENVIKING_API_KEY"] = ovCfg.APIKey
+			}
+			secretKeys = append(secretKeys, "OPENVIKING_API_KEY")
+			if strings.TrimSpace(envs["OPENVIKING_RESOURCE_ID"]) == "" && ovCfg.ResourceID != "" {
+				envs["OPENVIKING_RESOURCE_ID"] = ovCfg.ResourceID
+			}
+			if strings.TrimSpace(envs["OPENVIKING_USER"]) == "" && ovCfg.User != "" {
+				envs["OPENVIKING_USER"] = ovCfg.User
+			}
+			if strings.TrimSpace(envs["OPENVIKING_AGENT_ID"]) == "" && ovCfg.AgentID != "" {
+				envs["OPENVIKING_AGENT_ID"] = ovCfg.AgentID
+			}
+			if strings.TrimSpace(envs["OPENVIKING_SESSION_ID"]) == "" && strings.TrimSpace(arkSessionID) != "" {
+				envs["OPENVIKING_SESSION_ID"] = strings.TrimSpace(arkSessionID)
+			}
+			if strings.TrimSpace(envs["ARK_ENVIRONMENT_ID"]) == "" {
+				if b, bErr := s.svc.store.GetArkBinding(ctx, run.WorkspaceID, agent.ID); bErr == nil && strings.TrimSpace(b.ArkEnvironmentID) != "" {
+					envs["ARK_ENVIRONMENT_ID"] = strings.TrimSpace(b.ArkEnvironmentID)
+				}
+			}
+			if strings.TrimSpace(envs["ARK_VAULT_IDS"]) == "" && len(s.svc.arkVaultIDs) > 0 {
+				if raw, jErr := json.Marshal(s.svc.arkVaultIDs); jErr == nil {
+					envs["ARK_VAULT_IDS"] = string(raw)
+				}
+			}
+		}
+	}
+
+	// -- Four: AMA CLI credentials -----------------------------------------------------------
 	//
 	// Only injected when AMA authorization is checked. **This step can't be skipped, or that checkbox
 	// is dead code**: the user thinks they didn't grant it, but the token still goes into the
@@ -258,7 +330,7 @@ func (s *SessionEnvSource) SessionEnvs(
 		}
 	}
 
-	// -- Three: Feishu user credentials (so lark-cli in the container can read group chat and thread history) --
+	// -- Five: Feishu user credentials (so lark-cli in the container can read group chat and thread history) --
 	//
 	// ⚠️ **The key difference from the sections above: the credential is read from our own store and
 	// may need renewing on the spot.** The other sources are deterministic derivations (ama), while

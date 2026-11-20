@@ -4781,6 +4781,17 @@
           "运行历史"
         ],
         "description": "**权限**：`read`——要求是该空间成员，最低角色 `viewer`。\n\n空间归属按路径参数 `runId`（run 的 id）反解。资源不存在返回 404 + `code=not_found`。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RunsSandboxFile_retrieveQuery.path"
+          },
+          {
+            "$ref": "#/components/parameters/RunsSandboxFile_retrieveQuery.raw"
+          },
+          {
+            "$ref": "#/components/parameters/RunsSandboxFile_retrieveQuery.download"
+          }
+        ],
         "responses": {
           "200": {
             "description": "成功。"
@@ -10791,6 +10802,33 @@
           "type": "string"
         }
       },
+      "RunsSandboxFile_retrieveQuery.path": {
+        "name": "path",
+        "in": "query",
+        "required": true,
+        "description": "容器内文件路径（如 `/workspace/output.txt`）。",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "RunsSandboxFile_retrieveQuery.raw": {
+        "name": "raw",
+        "in": "query",
+        "required": false,
+        "description": "传 `1` 时直接流式返回文件原始字节（支持 HTTP Range 分段请求，用于视频/图片/音频预览或下载；非媒体与 HTML/SVG 强制 attachment 下载）。",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "RunsSandboxFile_retrieveQuery.download": {
+        "name": "download",
+        "in": "query",
+        "required": false,
+        "description": "配合 `raw=1` 使用；传 `1` 时强制返回 `Content-Disposition: attachment` 触发浏览器下载。",
+        "schema": {
+          "type": "string"
+        }
+      },
       "SkillsFile_retrieveQuery.path": {
         "name": "path",
         "in": "query",
@@ -11094,6 +11132,14 @@
           "updatedAt"
         ],
         "properties": {
+          "baseAgent": {
+            "type": "string",
+            "description": "底层 Agent 循环类型。缺省（空）使用方舟内置循环（工具由 AMA worker 执行）；`codex` 使用 Codex harness（仅在方舟云端环境运行，不支持本地容器、技能或数据源工具）。",
+            "enum": [
+              "",
+              "codex"
+            ]
+          },
           "builtin_tools": {
             "type": "array",
             "description": "启用的内置工具。六个：`bash` / `read` / `write` / `edit` / `glob` / `grep`。\n\n**它们全部在同一个容器里执行、共享一个文件系统**——所以 bash 写的文件 read 读得到。空的时候是 `[]`。",
@@ -11131,6 +11177,10 @@
           "name": {
             "type": "string",
             "description": "Agent 名字。"
+          },
+          "openVikingEnabled": {
+            "type": "boolean",
+            "description": "是否启用 OpenViking 长期记忆（需服务端同时开启 `openViking.enabled`）。默认 false。"
           },
           "skillIds": {
             "type": "array",
@@ -11178,6 +11228,14 @@
           "model"
         ],
         "properties": {
+          "baseAgent": {
+            "type": "string",
+            "description": "底层 Agent 循环类型。缺省（空）使用方舟内置循环（工具由 AMA worker 执行）；`codex` 使用 Codex harness（仅在方舟云端环境运行，不支持本地容器、技能或数据源工具）。",
+            "enum": [
+              "",
+              "codex"
+            ]
+          },
           "builtin_tools": {
             "type": "array",
             "description": "启用的内置工具。六个：`bash` / `read` / `write` / `edit` / `glob` / `grep`。\n\n**它们全部在同一个容器里执行、共享一个文件系统**——所以 bash 写的文件 read 读得到。空的时候是 `[]`。",
@@ -11203,6 +11261,10 @@
           "name": {
             "type": "string",
             "description": "Agent 名字。"
+          },
+          "openVikingEnabled": {
+            "type": "boolean",
+            "description": "是否启用 OpenViking 长期记忆（需服务端同时开启 `openViking.enabled`）。默认 false。"
           },
           "skillIds": {
             "type": "array",

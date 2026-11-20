@@ -48,6 +48,14 @@ type LiveRunner struct {
 	// integration testing, same as LiveArkVerifier.
 	BaseURLOverride string
 
+	// DefaultEnvironmentID is an optional process-level environment ID recorded in agent/session
+	// metadata when configured (from ark.environmentID). Empty omits default env metadata.
+	DefaultEnvironmentID string
+
+	// VaultIDs lists optional Ark Vault IDs attached when creating sessions (from ark.vaultIDs).
+	// Empty attaches no Vaults.
+	VaultIDs []string
+
 	mu        sync.Mutex
 	instances map[string]*ma.Instance
 }
@@ -120,6 +128,26 @@ func (r *LiveRunner) instance(key BindingKey) (*ma.Instance, error) {
 // that should have self-healed (see ensureBinding in chat.go).
 // In practice Ark's create-Agent **response body includes skills** (verified with
 // probe-agent-skills -echo-check), so this confirmation costs zero extra round trips.
+func (r *LiveRunner) buildArkMetadata(envID string) map[string]string {
+	envID = strings.TrimSpace(envID)
+	if envID == "" {
+		envID = strings.TrimSpace(r.DefaultEnvironmentID)
+	}
+	meta := make(map[string]string, 2)
+	if envID != "" {
+		meta["env_id"] = envID
+	}
+	if len(r.VaultIDs) > 0 {
+		if vaultIDsJSON, err := json.Marshal(r.VaultIDs); err == nil {
+			meta["vault_ids"] = string(vaultIDsJSON)
+		}
+	}
+	if len(meta) == 0 {
+		return nil
+	}
+	return meta
+}
+
 func (r *LiveRunner) CreateAgent(
 	ctx context.Context, key BindingKey, spec AgentSpec,
 ) (CreatedAgent, error) {
@@ -138,9 +166,11 @@ func (r *LiveRunner) CreateAgent(
 		System:      spec.System,
 		Description: spec.Description,
 		Tools:       spec.Tools,
+		BaseAgent:   spec.BaseAgent,
 		CustomTools: spec.CustomTools,
 		// ⚠️ Do not miss it again. See the paragraph above.
-		Skills: toMASkillRefs(spec.Skills),
+		Skills:   toMASkillRefs(spec.Skills),
+		Metadata: r.buildArkMetadata(""),
 	})
 	if err != nil {
 		return CreatedAgent{}, fmt.Errorf("建方舟 Agent 失败: %w", err)
@@ -222,6 +252,52 @@ func (r *LiveRunner) EnsureEnvironment(
 	return env.ID, nil
 }
 
+// EnsureCloudEnvironment creates an Ark **cloud** environment and returns its ID.
+//
+// # Why cloud, when EnsureEnvironment insists on self_hosted
+//
+// Third-party base agents (codex) run their own harness inside Ark's sandbox; Ark rejects
+// "codex + self_hosted" explicitly ("not implemented yet"). So the agent's tools execute on the
+// Ark side and AMA's worker is not involved. That is a product trade-off, not an implementation
+// choice: such an agent loses AMA's container view, terminal, skills and datasource tools.
+//
+// Everything else matches EnsureEnvironment: unique name, read back to confirm the type (an empty
+// Type in ma.EnvironmentSpec defaults to cloud, so the read-back is what guards "it really is the
+// type we asked for").
+func (r *LiveRunner) EnsureCloudEnvironment(
+	ctx context.Context, key BindingKey, name string,
+) (string, error) {
+	ins, err := r.instance(key)
+	if err != nil {
+		return "", err
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	env, err := ins.Environments().Create(callCtx, ma.EnvironmentSpec{
+		Name: name,
+		Type: ma.EnvCloud,
+		// cloud accepts networking; unrestricted matches the execution model of AMA's own
+		// containers and keeps web access working for the harness.
+		Networking:  ma.NetworkUnrestricted,
+		Description: "AMA 空间 " + key.WorkspaceID + " 的 Codex 类型运行环境（cloud）",
+	})
+	if err != nil {
+		return "", fmt.Errorf("建方舟 cloud 运行环境失败: %w", err)
+	}
+	if got, err := ins.Environments().Get(callCtx, env.ID); err == nil {
+		if cfg, ok := got.Config.Get(); ok {
+			if t := string(cfg.Type); t != ma.EnvCloud {
+				return "", fmt.Errorf(
+					"方舟运行环境 %s 的类型是 %q，不是 cloud——Codex 类型必须跑在方舟云端沙箱",
+					env.ID, t)
+			}
+		}
+	}
+	return env.ID, nil
+}
+
 // CreateSession opens a session.
 func (r *LiveRunner) CreateSession(
 	ctx context.Context, key BindingKey, b persistmodel.ArkBinding, title string,
@@ -234,11 +310,27 @@ func (r *LiveRunner) CreateSession(
 	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 
+	var vaultIDs []string
+	if len(r.VaultIDs) > 0 {
+		vaultIDs = append([]string(nil), r.VaultIDs...)
+	}
+	meta := r.buildArkMetadata(b.ArkEnvironmentID)
+
 	sess, err := ins.Sessions().Create(callCtx, ma.SessionSpec{
 		AgentID:       b.ArkAgentID,
 		EnvironmentID: b.ArkEnvironmentID,
 		Title:         title,
+		VaultIDs:      vaultIDs,
+		Metadata:      meta,
 	})
+	if err != nil && len(vaultIDs) > 0 {
+		// Fall back cleanly if the workspace's Ark account does not own the configured Vault IDs.
+		sess, err = ins.Sessions().Create(callCtx, ma.SessionSpec{
+			AgentID:       b.ArkAgentID,
+			EnvironmentID: b.ArkEnvironmentID,
+			Title:         title,
+		})
+	}
 	if err != nil {
 		return "", err
 	}
@@ -565,7 +657,10 @@ func (r *LiveRunner) updateAgent(
 			return fmt.Errorf("方舟 Agent %s 不存在", arkAgentID)
 		}
 
-		upd := ma.AgentUpdate{Version: cur.Version}
+		upd := ma.AgentUpdate{
+			Version:  cur.Version,
+			Metadata: r.buildArkMetadata(""),
+		}
 		fill(&upd)
 
 		if _, err := ins.Agents().Update(callCtx, arkAgentID, upd); err != nil {

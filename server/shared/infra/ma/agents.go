@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 
 	"github.com/go-faster/jx"
 	"github.com/volcengine/ark-runtime-go/arkruntime"
@@ -17,6 +19,12 @@ import (
 // Instance.Agents().
 type AgentService struct {
 	client *arkruntime.Client
+	// rawDo is the byte-for-byte pass-through, set when the Instance is built by New (see
+	// configureRaw). It exists because the pinned SDK has no base_agent field, so third-party base
+	// agents are created through a raw request instead of the typed one. nil on NewWithClient
+	// instances, where base_agent creation therefore fails with ErrRawUnsupported instead of
+	// silently dropping the field.
+	rawDo func(ctx context.Context, req RawRequest) (*RawResponse, error)
 }
 
 // AgentSpec is the convenience input for creating an Agent and covers the most common fields.
@@ -38,6 +46,12 @@ type AgentSpec struct {
 	// Tools lists toolset types; usually pass []string{ma.ToolsetDefault} to enable the
 	// built-in tools.
 	Tools []string
+	// BaseAgent is the Ark base agent type: empty (the built-in agent loop) or "codex".
+	//
+	// codex is a third-party harness. Ark only runs it on a **cloud** environment and accepts
+	// exactly one toolset (ToolsetCodex), so callers must not attach custom tools or skills:
+	// Ark rejects them, and even if it did not, the harness executes its own tools.
+	BaseAgent string
 	// CustomTools are custom tool declarations (`type: "custom"`).
 	//
 	// **The built-in toolset is a fixed set of 8** (bash/read/write/edit/glob/grep/web_fetch/
@@ -56,6 +70,9 @@ type AgentSpec struct {
 	// even know it exists, so it never uses it, and nothing reports an error. The skill package
 	// itself must first be uploaded with Skills().Create to get a skill_id.
 	Skills []SkillRef
+
+	// Metadata carries extra key-value attributes attached to the Agent (e.g. env_id, vault_ids).
+	Metadata map[string]string
 }
 
 // SkillRef is one skill reference.
@@ -150,6 +167,9 @@ func (s AgentSpec) toRequest() *agent.CreateAgentRequest {
 	}
 	req.Tools = toolItems(s.Tools, s.CustomTools)
 	req.Skills = toSkillRefs(s.Skills)
+	if len(s.Metadata) > 0 {
+		req.Metadata = agent.NewOptCreateAgentRequestMetadata(agent.CreateAgentRequestMetadata(s.Metadata))
+	}
 	return req
 }
 
@@ -238,7 +258,62 @@ func (s *AgentService) Create(ctx context.Context, spec AgentSpec) (*agent.Agent
 	if spec.Model == "" {
 		return nil, errors.New("ma: AgentSpec.Model 必填")
 	}
+	if spec.BaseAgent != "" {
+		return s.createWithBaseAgent(ctx, spec)
+	}
 	return s.CreateRaw(ctx, spec.toRequest())
+}
+
+// createWithBaseAgent creates an Agent whose base_agent is a third-party harness (codex).
+//
+// # Why a raw request instead of CreateRaw
+//
+// The pinned ark-runtime-go SDK has no base_agent field on agent.CreateAgentRequest, so a typed
+// request would **silently drop it** — the exact "field lost in the translation layer" failure
+// this package's README warns about. So the SDK's own encoder produces the body (keeping its
+// field-omission rules), base_agent is injected into the resulting JSON object, and the bytes are
+// sent through RawDo. Nothing else is re-encoded by hand.
+func (s *AgentService) createWithBaseAgent(
+	ctx context.Context, spec AgentSpec,
+) (*agent.Agent, error) {
+	if s.rawDo == nil {
+		return nil, fmt.Errorf("%w: base_agent 需要 ma.New 创建的实例", ErrRawUnsupported)
+	}
+	payload, err := json.Marshal(spec.toRequest())
+	if err != nil {
+		return nil, fmt.Errorf("ma: 编码建 Agent 请求失败: %w", err)
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &obj); err != nil {
+		return nil, fmt.Errorf("ma: 解码建 Agent 请求失败: %w", err)
+	}
+	base, err := json.Marshal(spec.BaseAgent)
+	if err != nil {
+		return nil, err
+	}
+	obj["base_agent"] = base
+	body, err := json.Marshal(obj)
+	if err != nil {
+		return nil, fmt.Errorf("ma: 编码建 Agent 请求失败: %w", err)
+	}
+	resp, err := s.rawDo(ctx, RawRequest{Method: http.MethodPost, Path: "/agents", Body: body})
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("ma: 建 Agent 失败: HTTP %d: %s", resp.StatusCode, resp.Body)
+	}
+	var out struct {
+		ID     string                `json:"id"`
+		Skills []agent.AgentSkillRef `json:"skills"`
+	}
+	if err := json.Unmarshal(resp.Body, &out); err != nil {
+		return nil, fmt.Errorf("ma: 解码建 Agent 响应失败: %w", err)
+	}
+	if out.ID == "" {
+		return nil, fmt.Errorf("ma: 建 Agent 响应缺少 id: %s", resp.Body)
+	}
+	return &agent.Agent{ID: out.ID, Skills: out.Skills}, nil
 }
 
 // CreateRaw creates an Agent using the SDK's own request body, for fields that AgentSpec does
@@ -325,6 +400,9 @@ type AgentUpdate struct {
 	// easily turned into nil by append/copy along the way, and then the behavior is "keep the
 	// existing ones", a silent opposite action.
 	ClearSkills bool
+
+	// Metadata updates the Agent's metadata map when non-empty.
+	Metadata map[string]string
 }
 
 // Update updates an Agent; on success the version number goes up.
@@ -361,6 +439,9 @@ func (u AgentUpdate) toRequest() *agent.UpdateAgentRequest {
 		req.Skills = []agent.AgentSkillRef{}
 	} else {
 		req.Skills = toSkillRefs(u.Skills)
+	}
+	if len(u.Metadata) > 0 {
+		req.Metadata = agent.NewOptUpdateAgentRequestMetadata(agent.UpdateAgentRequestMetadata(u.Metadata))
 	}
 	return req
 }

@@ -186,6 +186,59 @@ type Config struct {
 	// workspace"). The real type is service/host.Service, built in cmd/amad before core.Service.
 	// **Optional**: saving an agent with the host executor is then explicitly rejected.
 	HostBindings agentsvc.HostBindings
+
+	// CustomTools declares worker-side custom tools (query_sql / read_object) to Ark and runs them
+	// with the datasource credentials held by this process. cmd/amad installs
+	// *datasources.Registry when config.dataSources has an enabled source.
+	//
+	// **nil = no datasource configured**: nothing is declared, nothing is registered, and the Ark
+	// Agent / tool executions are exactly what they were before this feature. That is the default.
+	//
+	// ⚠️ **Pass nil, not a typed nil pointer.** If cmd/amad wrapped a nil *datasources.Registry in
+	// this interface, `s.customTools != nil` would be true and Declarations() would be called on a
+	// nil receiver; openDataSources returns a bare nil interface for this reason.
+	CustomTools CustomToolProvider
+
+	// OpenViking configures optional server-side long-term memory recall and capture hooks.
+	OpenViking OpenVikingServerConfig
+
+	// CUA configures optional defaults injected for agents binding the ark-cua built-in skill.
+	CUA CUASkillConfig
+
+	// Seedance configures optional credentials and target IDs injected for agents binding the
+	// seedance-ma built-in skill.
+	Seedance SeedanceSkillConfig
+
+	// ArkVaultIDs lists optional Ark Vault IDs passed in session metadata when configured.
+	ArkVaultIDs []string
+}
+
+// OpenVikingServerConfig holds server-level OpenViking settings passed from cmd/amad.
+type OpenVikingServerConfig struct {
+	Enabled        bool
+	URL            string
+	APIKey         string
+	ResourceID     string
+	RecallTimeout  time.Duration
+	CaptureTimeout time.Duration
+}
+
+// CUASkillConfig holds server-level CUA gateway settings passed from cmd/amad.
+type CUASkillConfig struct {
+	Enabled         bool
+	GatewayURL      string
+	ArtifactBaseURL string
+}
+
+// SeedanceSkillConfig holds server-level Seedance MA settings passed from cmd/amad.
+type SeedanceSkillConfig struct {
+	Enabled       bool
+	APIBaseURL    string
+	APIKey        string
+	AgentID       string
+	EnvironmentID string
+	VideoModel    string
+	ImageModel    string
 }
 
 // TerminalRelay is the cross-instance delivery ability the terminal's upstream needs, provided by
@@ -281,6 +334,16 @@ type Service struct {
 	// blobs is the byte store for attachments and skill files. **May be nil** (when not wired in unit
 	// tests); see Config.BlobStore and core/blob.go.
 	blobs BlobStore
+
+	// customTools declares and runs the worker-side custom tools (query_sql / read_object).
+	// **May be nil**, and nil is the normal case: no datasource configured. All call sites go
+	// through customToolDecls / customToolsForWork, which are nil-safe; see core/customtools.go.
+	customTools CustomToolProvider
+
+	openViking  OpenVikingServerConfig
+	cua         CUASkillConfig
+	seedance    SeedanceSkillConfig
+	arkVaultIDs []string
 
 	// termRelay forwards terminal keystrokes to the instance holding the PTY connection. **May be nil** (not needed for a single instance).
 	// When nil, cross-instance keystrokes get a 404, i.e. the behavior before the fix; see Config.TerminalRelay.
@@ -515,6 +578,11 @@ func New(cfg Config) (*Service, error) {
 		chats:           cfg.ChatOrigins,
 		feedbackReaders: cfg.FeedbackReaders,
 		blobs:           cfg.BlobStore,
+		customTools:     cfg.CustomTools,
+		openViking:      cfg.OpenViking,
+		cua:             cfg.CUA,
+		seedance:        cfg.Seedance,
+		arkVaultIDs:     append([]string(nil), cfg.ArkVaultIDs...),
 		termRelay:       cfg.TerminalRelay,
 		workerWakeups:   cfg.WorkerWakeups,
 		wsOrigins:       cfg.TerminalWSOrigins,

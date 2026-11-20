@@ -82,7 +82,7 @@ func newSSEHandler(started chan<- struct{}) http.Handler {
 func TestSSEResponseIsNeverCompressed(t *testing.T) {
 	started := make(chan struct{})
 	// Hits an /api/ path, the same branch (backend branch) as the two SSE routes in production.
-	srv := httptest.NewServer(routeFrontend(newSSEHandler(started), compressStatic(placeholderFrontend())))
+	srv := httptest.NewServer(routeFrontend(newSSEHandler(started), compressStatic(placeholderFrontend()), false))
 	defer srv.Close()
 
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/runs/run_x/events/stream", nil)
@@ -237,7 +237,7 @@ func TestBackendRoutesBypassCompression(t *testing.T) {
 		// would certainly be compressed.
 		_, _ = w.Write([]byte(`{"items":[` + strings.Repeat(`"x",`, 500) + `"y"]}`))
 	})
-	srv := httptest.NewServer(routeFrontend(backend, compressStatic(placeholderFrontend())))
+	srv := httptest.NewServer(routeFrontend(backend, compressStatic(placeholderFrontend()), false))
 	defer srv.Close()
 
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/workspaces", nil)

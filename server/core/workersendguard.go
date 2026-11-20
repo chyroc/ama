@@ -379,7 +379,33 @@ func (g *workSendGuard) ListEvents(
 		}
 		return nil, err
 	}
-	return g.API.ListEvents(ctx, req)
+	resp, err := g.API.ListEvents(ctx, req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	// Ark's server answers built-in `skill` tool calls (`agent.tool_use{name:"skill"}`) with
+	// `agent.tool_result` (and hosted MCP tools with `agent.mcp_tool_result`). However, the
+	// SDK's SessionToolRunner only calls `markAnswered` on `user.tool_result` /
+	// `user.custom_tool_result`, leaving `s.externalTools` permanently non-empty (`hasIdleBlockers() == true`)
+	// so `MaxIdle` never fires after `end_turn`. Normalizing `agent.tool_result` and
+	// `agent.mcp_tool_result` to `user.tool_result` on the worker's view of ListEvents lets
+	// SessionToolRunner clear `s.externalTools` as soon as Ark answers its own server-side tool.
+	var cloned []selfhosted.Event
+	for i, ev := range resp.Events {
+		if ev.Type == eventTypeAgentToolResult || ev.Type == eventTypeAgentMCPToolResult {
+			if cloned == nil {
+				cloned = make([]selfhosted.Event, len(resp.Events))
+				copy(cloned, resp.Events)
+			}
+			cloned[i].Type = selfhosted.EventTypeUserToolResult
+		}
+	}
+	if cloned != nil {
+		cp := *resp
+		cp.Events = cloned
+		return &cp, nil
+	}
+	return resp, nil
 }
 
 // permanentErr returns "whether this session has already failed permanently".

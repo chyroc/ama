@@ -65,7 +65,7 @@ func staticRoot() fs.FS {
 // .css / .png) that are not found honestly get 404, not index.html. Otherwise a misspelled js path
 // would get an HTML page, and the browser reports "Unexpected token '<'", pointing far away from
 // the real cause.
-func spaHandler(root fs.FS) http.Handler {
+func spaHandler(root fs.FS, cuaEnabled bool) http.Handler {
 	files := http.FileServer(http.FS(root))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +73,7 @@ func spaHandler(root fs.FS) http.Handler {
 		// in case someone mounts spaHandler directly on "/" in the future: then /api requests would
 		// get HTML, the frontend fetch blows up at JSON.parse, and the error does not point to
 		// routing at all.
-		if isBackendPath(r.URL.Path) {
+		if isBackendPath(r.URL.Path, cuaEnabled) {
 			http.NotFound(w, r)
 			return
 		}
@@ -110,9 +110,9 @@ func spaHandler(root fs.FS) http.Handler {
 // standard library only returns 405 when "no pattern matches the path"; once the mux has a "/"
 // catch-all, a request with the wrong method hits the catch-all instead of getting 405 (measured:
 // it went from 405 to 200 + HTML).
-func routeFrontend(backend, frontend http.Handler) http.Handler {
+func routeFrontend(backend, frontend http.Handler, cuaEnabled bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isBackendPath(r.URL.Path) {
+		if isBackendPath(r.URL.Path, cuaEnabled) {
 			backend.ServeHTTP(w, r)
 			return
 		}
@@ -141,9 +141,15 @@ func routeFrontend(backend, frontend http.Handler) http.Handler {
 // Neither path **repeats the literal here**; each refers to the constant that defines it
 // (`/llms.txt` in the openapi package, `/websocket` in wsprobe.go of this package): one wrong
 // letter gives the 404/500 above, and both places would "look right".
-func isBackendPath(p string) bool {
-	return p == "/healthz" || p == "/api" || strings.HasPrefix(p, "/api/") ||
-		p == openapi.PathLLMsTxt || p == PathWebSocketProbe
+func isBackendPath(p string, cuaEnabled bool) bool {
+	if p == "/healthz" || p == "/api" || strings.HasPrefix(p, "/api/") ||
+		p == openapi.PathLLMsTxt || p == PathWebSocketProbe {
+		return true
+	}
+	if cuaEnabled && (strings.HasPrefix(p, PathCUAProxyPrefix) || strings.HasPrefix(p, PathCUAAppPrefix)) {
+		return true
+	}
+	return false
 }
 
 // serveIndex returns index.html with status 200, not 404.

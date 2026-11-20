@@ -46,6 +46,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chyroc/ama/server/model/apimodel"
+	"github.com/chyroc/ama/server/model/persistmodel"
 	"github.com/chyroc/ama/server/shared/gopkg/xlog"
 	"github.com/chyroc/ama/server/shared/infra/docker"
 	"github.com/chyroc/ama/server/shared/infra/dockertools"
@@ -85,6 +87,10 @@ type WorkerConfig struct {
 	// limit. Each running work item may hold its own container, so it also indirectly limits the
 	// number of containers running at once: set it lower on small machines.
 	Concurrency int
+
+	// AdoptExternalSessions registers a Run automatically when the self_hosted worker receives work
+	// for an Ark session created outside AMA whose agent ID matches a bound AMA agent.
+	AdoptExternalSessions bool
 
 	// ManagedKeys is the source of "AMA managed API keys per employee", used to inject AMA_TOKEN
 	// into the container (so the `ama` command preinstalled in the container works). It can be nil:
@@ -372,6 +378,107 @@ func (p *WorkerPool) Run(ctx context.Context) error {
 			p.cleanupToolResults(ctx)
 		}
 	}
+}
+
+// ensureSessionRunForWork revives an idle Run when a follow-up turn arrives on an existing session,
+// and optionally adopts sessions created outside AMA (when WorkerConfig.AdoptExternalSessions is
+// enabled) by matching the session's environment and attached skills against workspace bindings.
+func (p *WorkerPool) ensureSessionRunForWork(
+	ctx context.Context, envID, arkSessionID string, sessionSkillIDs []string, logger *slog.Logger,
+) {
+	if p == nil || p.svc == nil || p.svc.store == nil || arkSessionID == "" {
+		return
+	}
+	if existing, err := p.svc.store.GetRun(ctx, arkSessionID); err == nil {
+		// When a follow-up turn arrives on an existing session (e.g. Turn 2+ in a Feishu thread),
+		// revive the run from idle and clear endedAt so watchRunTerminated (idleRunAbandoned) does
+		// not mistake this new turn for a zombie work item left over from Turn 1.
+		if existing.Status == apimodel.RunIdle || existing.EndedAt != "" {
+			existing.Status = apimodel.RunRunning
+			existing.EndedAt = ""
+			existing.DurationMs = nil
+			existing.LastActivityAt = apimodel.NowISO()
+			_, _ = p.svc.store.SaveRun(ctx, existing)
+		}
+		return
+	}
+	if !p.cfg.AdoptExternalSessions || p.svc.workspaces == nil {
+		return
+	}
+	spaces, err := p.svc.workspaces.ListWorkspaces(ctx)
+	if err != nil {
+		return
+	}
+	skillSet := make(map[string]struct{}, len(sessionSkillIDs))
+	for _, id := range sessionSkillIDs {
+		if trimmed := strings.TrimSpace(id); trimmed != "" {
+			skillSet[trimmed] = struct{}{}
+		}
+	}
+	var matchedWorkspaceID string
+	var matchedBinding persistmodel.ArkBinding
+	found := false
+	bestOverlap := -1
+	for _, ws := range spaces {
+		bindings, berr := p.svc.store.ListArkBindings(ctx, ws.ID)
+		if berr != nil {
+			continue
+		}
+		for _, b := range bindings {
+			if b.ArkEnvironmentID != envID || b.AgentID == "" {
+				continue
+			}
+			overlap := 0
+			for _, skID := range b.ArkSkillIDs {
+				if _, ok := skillSet[skID]; ok {
+					overlap++
+				}
+			}
+			if !found || overlap > bestOverlap {
+				matchedWorkspaceID = ws.ID
+				matchedBinding = b
+				bestOverlap = overlap
+				found = true
+			}
+		}
+	}
+	if !found {
+		return
+	}
+	agent, err := p.svc.store.GetAgent(ctx, matchedBinding.AgentID)
+	if err != nil {
+		return
+	}
+	hostIDForRun, hostSourceForRun := hostOnRun(agent)
+	now := apimodel.NowISO()
+	run := apimodel.Run{
+		ID:             arkSessionID,
+		WorkspaceID:    matchedWorkspaceID,
+		AgentID:        agent.ID,
+		AgentName:      agent.Name,
+		Title:          "外部接入会话",
+		Status:         apimodel.RunRunning,
+		Trigger:        triggerManual,
+		TriggerDetail:  "外部会话自动挂载",
+		StartedAt:      now,
+		LastActivityAt: now,
+		Usage:          apimodel.TokenUsage{},
+		Threads:        []apimodel.RunThread{},
+		HostID:         hostIDForRun,
+		HostSource:     hostSourceForRun,
+		EventCount:     0,
+	}
+	createdRun, err := p.svc.store.CreateRun(ctx, run)
+	if err != nil {
+		return
+	}
+	if logger != nil {
+		logger.Info("自动登记外部创建的方舟会话并挂载技能与环境变量",
+			slog.String("ark_session", arkSessionID),
+			slog.String("workspace", matchedWorkspaceID),
+			slog.String("agent", agent.ID))
+	}
+	p.svc.triggerOpenVikingSessionCreate(createdRun, agent, matchedBinding.ArkEnvironmentID)
 }
 
 // toolResultCleanupInterval is how often the tool result ledger is cleaned; toolResultRetention is
@@ -680,15 +787,13 @@ func (p *WorkerPool) runOne(ctx context.Context, key ArkBindingKey, envID string
 	//
 	// But `EventPollInterval` only exists on `selfhosted.SessionToolRunnerOptions`;
 	// **`EnvironmentWorkerOptions` has no such field** (checked on v0.4.1-0.20260826085225; all its
-	// fields are the ten above), and the SDK in lib/environments/worker.go:214-221 forwards only
-	// six to the runner: WorkID/Tools/CustomTools/ResultStore/MaxIdle/Logger. That middle hop
-	// hardcodes it, so it cannot be passed in from our side.
+	// fields are the ten above), and the SDK's EnvironmentWorker forwards only six of its options
+	// to the runner: WorkID/Tools/CustomTools/ResultStore/MaxIdle/Logger.
 	//
-	// To really lower this frequency there are only three ways: upgrade the SDK (wait for it to
-	// expose the field), bypass EnvironmentWorker and use SessionToolRunner directly (we would have
-	// to take over the work lifecycle and heartbeat, which HandleItem does for us now), or get
-	// upstream to add it. None of these is a quick change, so this time only the rate-limit backoff
-	// is fixed (see arkbackoff.Gate.Observe).
+	// That middle hop is no longer on our path: handleWorkItem builds SessionToolRunner directly
+	// (PG tool-result ledger, and a **per-work** CustomTools map so the datasource audit lines know
+	// their session), and passes EventPollInterval=1500ms + EventLimit=1000 on
+	// SessionToolRunnerOptions to avoid multi-page ListEvents bursts at the SDK's 500ms default.
 	//
 	// The closure that "handles one work item" (p.processWork) is wired up once in Run, **not
 	// here**: see that comment in Run.

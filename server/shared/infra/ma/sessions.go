@@ -9,7 +9,9 @@ package ma
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/volcengine/ark-runtime-go/arkruntime"
 	"github.com/volcengine/ark-runtime-go/arkruntime/model/session"
@@ -46,6 +48,27 @@ type SessionSpec struct {
 	Title string
 	// VaultIDs lists the credential vault IDs this session may access.
 	VaultIDs []string
+	// Metadata carries key-value session metadata (e.g. env_id and JSON-encoded vault_ids).
+	Metadata map[string]string
+}
+
+// buildMetadata constructs the top-level "metadata" object sent on CreateSession.
+func (s SessionSpec) buildMetadata() map[string]string {
+	meta := make(map[string]string, len(s.Metadata)+2)
+	if s.EnvironmentID != "" {
+		meta["env_id"] = s.EnvironmentID
+	}
+	if len(s.VaultIDs) > 0 {
+		if raw, err := json.Marshal(s.VaultIDs); err == nil {
+			meta["vault_ids"] = string(raw)
+		}
+	}
+	for k, v := range s.Metadata {
+		if k != "" {
+			meta[k] = v
+		}
+	}
+	return meta
 }
 
 // toRequest turns the convenience input into the SDK request body.
@@ -76,7 +99,18 @@ func (s *SessionService) Create(ctx context.Context, spec SessionSpec) (*session
 	if spec.EnvironmentID == "" {
 		return nil, errors.New("ma: SessionSpec.EnvironmentID 必填")
 	}
-	return s.CreateRaw(ctx, spec.toRequest())
+	req := spec.toRequest()
+	meta := spec.buildMetadata()
+	if len(meta) == 0 {
+		return s.CreateRaw(ctx, req)
+	}
+	sess, err := s.client.CreateSession(ctx, req, arkruntime.WithExtraBody(map[string]any{
+		"metadata": meta,
+	}))
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "metadata") {
+		return s.CreateRaw(ctx, req)
+	}
+	return sess, err
 }
 
 // CreateRaw creates a Session using the SDK's own request body, for fields that SessionSpec does

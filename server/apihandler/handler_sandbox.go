@@ -123,9 +123,22 @@ func (h *Handler) writeSandboxTerminal(w http.ResponseWriter, r *http.Request) {
 }
 
 // readRunSandboxFile reads the content of a file in the container, for the file detail view on the page.
+// When raw=1 is passed in the query, it streams the raw file bytes with HTTP Range support so
+// media files (such as MP4 videos or images generated in the container) can be played or downloaded directly.
 func (h *Handler) readRunSandboxFile(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if q.Get("raw") == "1" {
+		if err := h.sandbox.StreamRunSandboxFileRaw(
+			w, r, r.PathValue("runId"),
+			q.Get("path"),
+			q.Get("download") == "1",
+		); err != nil {
+			h.fail(w, r, err)
+		}
+		return
+	}
 	out, err := h.sandbox.ReadRunSandboxFile(
-		r.Context(), r.PathValue("runId"), r.URL.Query().Get("path"))
+		r.Context(), r.PathValue("runId"), q.Get("path"))
 	if err != nil {
 		h.fail(w, r, err)
 		return

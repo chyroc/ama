@@ -145,6 +145,42 @@ type Handler struct {
 	// (account takeover). When empty, only requests from this machine can log in; see
 	// selfurl.Callback.
 	publicURL string
+
+	ui *UIBranding
+}
+
+// UIBranding holds optional white-label branding and empty-chat starter prompts exposed to the
+// frontend through GET /api/auth/providers. When all fields are empty it is omitted from JSON.
+type UIBranding struct {
+	BrandName      string            `json:"brandName,omitempty"`
+	BrandBadge     string            `json:"brandBadge,omitempty"`
+	Title          string            `json:"title,omitempty"`
+	StarterPrompts []UIStarterPrompt `json:"starterPrompts,omitempty"`
+}
+
+// UIStarterPrompt is one starter prompt card shown on the empty chat screen.
+type UIStarterPrompt struct {
+	Label  string `json:"label"`
+	Prompt string `json:"prompt"`
+}
+
+func normalizeUIBranding(in UIBranding) *UIBranding {
+	out := UIBranding{
+		BrandName:  strings.TrimSpace(in.BrandName),
+		BrandBadge: strings.TrimSpace(in.BrandBadge),
+		Title:      strings.TrimSpace(in.Title),
+	}
+	for _, sp := range in.StarterPrompts {
+		label := strings.TrimSpace(sp.Label)
+		prompt := strings.TrimSpace(sp.Prompt)
+		if label != "" && prompt != "" {
+			out.StarterPrompts = append(out.StarterPrompts, UIStarterPrompt{Label: label, Prompt: prompt})
+		}
+	}
+	if out.BrandName == "" && out.BrandBadge == "" && out.Title == "" && len(out.StarterPrompts) == 0 {
+		return nil
+	}
+	return &out
 }
 
 // HandlerConfig is the configuration needed to build a Handler.
@@ -161,6 +197,9 @@ type HandlerConfig struct {
 	// for loopback addresses); empty in production means nobody can log in. The wiring code must
 	// say this clearly in the startup log.
 	PublicURL string
+
+	// UI holds optional branding and empty-chat starter prompts returned on GET /api/auth/providers.
+	UI UIBranding
 
 	// Logger defaults to the slog default logger.
 	Logger *slog.Logger
@@ -180,6 +219,7 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 		log:          log,
 		secureCookie: cfg.SecureCookie,
 		publicURL:    strings.TrimRight(strings.TrimSpace(cfg.PublicURL), "/"),
+		ui:           normalizeUIBranding(cfg.UI),
 	}, nil
 }
 
@@ -265,10 +305,18 @@ func credentialFrom(r *http.Request) string {
 // Endpoints
 // ---------------------------------------------------------------------------
 
-// providers tells the frontend how this deployment can log in.
+type providersResponse struct {
+	Providers
+	UI *UIBranding `json:"ui,omitempty"`
+}
+
+// providers tells the frontend how this deployment can log in (plus optional UI branding).
 func (h *Handler) providers(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, h.svc.Providers(r.Context()))
+	writeJSON(w, http.StatusOK, providersResponse{
+		Providers: h.svc.Providers(r.Context()),
+		UI:        h.ui,
+	})
 }
 
 // maxAuthBody is the size limit of login/sign-up request bodies. A few hundred bytes are enough;
@@ -606,7 +654,14 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"user": identity})
+	// platformAdmin tells the frontend whether to offer "create a login account" when inviting
+	// members. It is only a UI hint; CreateLocalUser checks again. A lookup failure only hides the
+	// field, it must not fail "who am I".
+	admin, err := h.svc.IsPlatformAdmin(r.Context(), identity.Email)
+	if err != nil {
+		h.log.WarnContext(r.Context(), "查是否平台管理员失败，按非管理员处理", slog.String("error", err.Error()))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"user": identity, "platformAdmin": admin})
 }
 
 // logout ends the current session and clears the cookie.
