@@ -111,6 +111,15 @@ var (
 
 // FeedbackLevel and FeedbackAuto / FeedbackUser have moved to model/persistmodel.
 
+// MaxFeedbackPageSize is the hard page-size limit for staff reads.
+const MaxFeedbackPageSize = maxFeedbackPageSize
+
+// FeedbackDefaultLimit is the default staff-read page size.
+const FeedbackDefaultLimit = feedbackDefaultLimit
+
+// MaxFeedbackTextLen bounds free diagnostic text.
+const MaxFeedbackTextLen = maxFeedbackTextLen
+
 // MaxFeedbackReasonLen bounds short error and identifier fields.
 const MaxFeedbackReasonLen = maxFeedbackReasonLen
 
