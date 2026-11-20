@@ -66,7 +66,12 @@ func Generate() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return GenerateWith(caps, authz.RoleOrder())
+}
 
+// GenerateWith renders the supplied capability snapshot. Downstream route tables use this
+// so their generated documentation reflects the modules actually installed.
+func GenerateWith(caps []authz.Capability, roles []string) ([]byte, error) {
 	var b bytes.Buffer
 	b.WriteString(header)
 	b.WriteString("\nimport type { WorkspaceRole } from \"@/types/domain\";\n")
@@ -108,7 +113,7 @@ export interface RoleCapability {
 	// Role column order.
 	b.WriteString(`/** Role order in the table header, from most to least permission. Matches authz.RoleOrder() on the server. */
 export const ROLE_COLUMNS: readonly WorkspaceRole[] = [`)
-	for i, r := range authz.RoleOrder() {
+	for i, r := range roles {
 		if i > 0 {
 			b.WriteString(", ")
 		}
