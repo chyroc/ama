@@ -54,6 +54,26 @@ cd server && cp config.example.yaml config.yaml
 go run ./cmd/amad                     # 启动日志里有「已连上 PostgreSQL」即通
 ```
 
+## 下游模块替换连接方式
+
+`Connector` 是连接实现的扩展点。下游模块可以注入自己的驱动、凭据来源和连接池，
+同时继续复用本包的 `Client` 查询、事务和 SQLSTATE 判别；不需要复制这些逻辑。
+
+```go
+connector := pg.ConnectorFunc(func(ctx context.Context, cfg pg.StdConfig) (*pg.Client, error) {
+    pool, err := openCompanyPool(ctx, cfg)
+    if err != nil {
+        return nil, err
+    }
+    return pg.NewWithDB(pool)
+})
+client, err := pg.NewStandardWith(ctx, cfg, connector)
+```
+
+`NewStandard` 与传入 nil connector 都走默认的 pgx 实现。已有 `*sql.DB` 可以直接用
+`NewWithDB` 接入；它保留调用方自己的池配置。若 connector 持有私有资源，其关闭责任由
+实现方明确管理，不要让一次失败的 Ping 留下半开的连接池。
+
 ## 坑一：IPv6 在 key=value DSN 里不能加方括号
 
 不少文档说「连接字符串中的 IPv6 地址必须使用方括号包裹」——**那条只适用于 URI 形式的 DSN**

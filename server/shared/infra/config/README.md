@@ -41,6 +41,25 @@ WARN 以下字段被环境变量覆盖了 —— 改配置文件对它们无效�
 
 只打字段名不打值——密钥不能进日志。
 
+## 下游模块替换配置来源
+
+`Provider` 返回按顺序叠加的 YAML 文档；`LoadFromProvider` 负责后续的环境变量覆盖与校验。
+默认文件来源只是 `FileProvider`，下游可以提供自己的配置中心实现，不需要 fork 配置结构：
+
+```go
+provider := config.ProviderFunc("company-config", func(ctx context.Context) ([][]byte, error) {
+    public, secret, err := loadCompanyConfig(ctx)
+    if err != nil {
+        return nil, err
+    }
+    return [][]byte{public, secret}, nil
+})
+res, err := config.LoadFromProvider(ctx, provider)
+```
+
+来源名称只能用于启动日志，不能带凭据。来源失败后不会自动回退到本地文件，避免进程带着
+另一套配置看似正常地启动。默认值与环境变量优先级对两种来源完全相同。
+
 ## 配置启动时加载一次，不热替换
 
 候选的四个「看起来能热更新」的字段，在现有代码里一个都不是动态读的——

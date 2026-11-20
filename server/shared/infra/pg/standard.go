@@ -382,6 +382,10 @@ func (c StdConfig) toStdDSN() (string, error) {
 // password). The most common reasons for "cannot connect" are wrong parameters or the network
 // not allowing it, and printing the parameters saves a round of debugging.
 func NewStandard(ctx context.Context, cfg StdConfig) (*Client, error) {
+	return StandardConnector{}.Connect(ctx, cfg)
+}
+
+func newStandard(ctx context.Context, cfg StdConfig) (*Client, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
