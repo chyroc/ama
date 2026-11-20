@@ -13,6 +13,7 @@ require (
 	github.com/creack/pty v1.1.21
 	github.com/go-faster/jx v1.2.0
 	github.com/go-jose/go-jose/v4 v4.1.3
+	github.com/go-sql-driver/mysql v1.9.3
 	github.com/gorilla/websocket v1.5.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/klauspost/compress v1.17.11
@@ -28,6 +29,7 @@ require (
 )
 
 require (
+	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.25 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.8 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.8 // indirect
