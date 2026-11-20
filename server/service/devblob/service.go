@@ -78,6 +78,10 @@ func New(cfg Config) (*Service, error) {
 	}, nil
 }
 
+// Guard verifies both the caller and key before any storage operation.
+// It is exported for downstream wrappers that expose the same guard independently.
+func (s *Service) Guard(ctx context.Context, key string) error { return s.guard(ctx, key) }
+
 func (s *Service) guard(ctx context.Context, key string) error {
 	actor, err := s.actor(ctx)
 	if err != nil {
