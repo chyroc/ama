@@ -170,6 +170,10 @@ func (i *Instance) Skills() *SkillService { return i.skills }
 // (such as model inference Chat Completions, Responses, etc.).
 func (i *Instance) Client() *arkruntime.Client { return i.client }
 
+// StreamClient exposes the client used for long-lived streams so callers can verify
+// its timeout and transport settings. Requests should use the SessionService methods.
+func (i *Instance) StreamClient() *arkruntime.Client { return i.streamClient }
+
 // Option configures an Instance.
 type Option func(*options)
 
