@@ -308,6 +308,11 @@ func writeZipFile(zw *zip.Writer, name string, content []byte) error {
 	return nil
 }
 
+// SkillMarkdown restores a skill into a complete SKILL.md (frontmatter + body).
+// It is exported so downstream wrappers can test the exact document written into a zip
+// without maintaining another YAML escaping implementation.
+func SkillMarkdown(sk apimodel.Skill) []byte { return skillMarkdown(sk) }
+
 // skillMarkdown restores a skill into a complete SKILL.md (frontmatter + body).
 func skillMarkdown(sk apimodel.Skill) []byte {
 	var b strings.Builder
