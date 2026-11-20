@@ -57,7 +57,7 @@ import (
 // forever, the onboarding would never appear, and no error would be reported.
 // "This person has no record yet" is the most common normal case and should not go through
 // the error path.
-func (s *Service) GetOnboarding(ctx context.Context) (OnboardingState, error) {
+func (s *AccountService) GetOnboarding(ctx context.Context) (OnboardingState, error) {
 	actor, err := onboardingActor(ctx)
 	if err != nil {
 		return OnboardingState{}, err
@@ -79,7 +79,7 @@ func (s *Service) GetOnboarding(ctx context.Context) (OnboardingState, error) {
 //
 // version is the **onboarding content version** sent by the frontend, stored as-is. The
 // backend does not compare it; see the schema comment for why.
-func (s *Service) MarkOnboarding(ctx context.Context, action OnboardingAction, version int) (OnboardingState, error) {
+func (s *AccountService) MarkOnboarding(ctx context.Context, action OnboardingAction, version int) (OnboardingState, error) {
 	actor, err := onboardingActor(ctx)
 	if err != nil {
 		return OnboardingState{}, err

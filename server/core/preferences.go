@@ -76,7 +76,7 @@ func DefaultUserPreferences() UserPreferences {
 // the loading state forever, with no error at all.
 // "This person has not saved preferences yet" is the most common normal case and should not
 // go through the error path.
-func (s *Service) GetUserPreferences(ctx context.Context) (UserPreferences, error) {
+func (s *AccountService) GetUserPreferences(ctx context.Context) (UserPreferences, error) {
 	actor, err := preferencesActor(ctx)
 	if err != nil {
 		return UserPreferences{}, err
@@ -115,7 +115,7 @@ func (s *Service) GetUserPreferences(ctx context.Context) (UserPreferences, erro
 // may well contain values written by older versions or edited by hand. Returning 400 for one
 // bad field would look like "preferences never save", and the user would have no idea that
 // some old value is the cause.
-func (s *Service) SaveUserPreferences(ctx context.Context, prefs UserPreferences) (UserPreferences, error) {
+func (s *AccountService) SaveUserPreferences(ctx context.Context, prefs UserPreferences) (UserPreferences, error) {
 	actor, err := preferencesActor(ctx)
 	if err != nil {
 		return UserPreferences{}, err

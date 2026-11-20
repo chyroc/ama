@@ -625,16 +625,18 @@ func TestSnapshotCoversEveryDraftField(t *testing.T) {
 			// initial creation snapshot remains complete.
 			BaseAgent: apimodel.BaseAgentCodex,
 			// OpenVikingEnabled must also be rollbackable; set true so assertNoZeroField sees it.
-			OpenVikingEnabled: true,
-			BuiltinTools:      []string{"bash"},
-			SkillIDs:          []string{"sk"},
-			FeishuAppIDs:      []string{"fs"},
-			Status:            apimodel.StatusActive,
-			IntegrationIDs:    []string{"lark-user"},
-			Envs:              []apimodel.AgentEnv{{Key: "K", Value: "V"}},
-			EnvAliases:        []apimodel.AgentEnvAlias{{Key: "A", From: "lark-user"}},
-			FollowUp:          apimodel.FollowUpQueue,
-			ProgressDetail:    apimodel.ProgressDetailFull,
+			OpenVikingEnabled:          true,
+			BuiltinTools:               []string{"bash"},
+			SkillIDs:                   []string{"sk"},
+			FeishuAppIDs:               []string{"fs"},
+			Status:                     apimodel.StatusActive,
+			IntegrationIDs:             []string{"lark-user"},
+			CodebaseAppCredentialID:    "credential-one",
+			ServiceAccountCredentialID: "credential-two",
+			Envs:                       []apimodel.AgentEnv{{Key: "K", Value: "V"}},
+			EnvAliases:                 []apimodel.AgentEnvAlias{{Key: "A", From: "lark-user"}},
+			FollowUp:                   apimodel.FollowUpQueue,
+			ProgressDetail:             apimodel.ProgressDetailFull,
 			// The three executor fields must also be snapshotted with the version and be
 			// rollbackable.
 			ExecutorType: "host",
