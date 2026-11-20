@@ -287,7 +287,11 @@ func (s *Service) OpenFile(
 	if row.Status != persistmodel.UserFileStatusCompleted {
 		return apimodel.UserFile{}, nil, fmt.Errorf("%w: 文件还没传完", ErrConflict)
 	}
-	body, size, err := s.objects.Open(ctx, row.ObjectKey)
+	opener, ok := s.objects.(ObjectOpener)
+	if !ok {
+		return apimodel.UserFile{}, nil, fmt.Errorf("%w: 对象存储不支持流式下载", persistmodel.ErrPrecondition)
+	}
+	body, size, err := opener.Open(ctx, row.ObjectKey)
 	if err != nil {
 		return apimodel.UserFile{}, nil, fmt.Errorf("读文件内容失败: %w", err)
 	}

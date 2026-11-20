@@ -51,9 +51,9 @@ type Store interface {
 
 // ObjectStore is the outbound port for byte storage (the wiring side provides the adapter).
 //
-// The methods come in two groups: whole object (Put/Delete/Size/PresignedGetURL/Open/Bucket,
-// for simple mode and for delete/download) and the four multipart methods (for multipart
-// mode).
+// The methods cover whole objects (Put/Delete/Size/PresignedGetURL/Bucket)
+// and the four multipart methods. Open is a separate optional interface so a downstream
+// adapter with only whole-object reads does not have to implement streaming just to reuse CRUD.
 type ObjectStore interface {
 	// Bucket returns the current bucket name, stored in the bucket column.
 	Bucket() string
@@ -69,12 +69,6 @@ type ObjectStore interface {
 	// PresignedGetURL signs a time-limited download link for the **browser** (the caller sets
 	// the TTL).
 	PresignedGetURL(key string, ttl time.Duration) (string, error)
-	// Open streams the whole object (for downloads relayed through amad), returns the content
-	// and byte count; the caller must Close it.
-	// When the object does not exist, the error must be recognized by
-	// errors.Is(err, ErrObjectNotFound).
-	Open(ctx context.Context, key string) (io.ReadCloser, int64, error)
-
 	// InitMultipartUpload starts a multipart upload and returns the object storage uploadId.
 	InitMultipartUpload(ctx context.Context, key, contentType string) (string, error)
 	// UploadPart streams one part; size must be the real byte count of content.
@@ -85,4 +79,13 @@ type ObjectStore interface {
 	// AbortMultipartUpload abandons a multipart upload; a missing uploadId is not an error
 	// (idempotent).
 	AbortMultipartUpload(ctx context.Context, key, uploadID string) error
+}
+
+// ObjectOpener optionally streams a whole object for a download relayed through amad.
+// It is not part of ObjectStore: downstreams can reuse upload and management without
+// adding a streaming implementation. OpenFile reports ErrPrecondition when this is absent.
+type ObjectOpener interface {
+	// Open returns the content and byte count; the caller must Close it.
+	// A missing object must be recognizable with errors.Is(err, ErrObjectNotFound).
+	Open(ctx context.Context, key string) (io.ReadCloser, int64, error)
 }
