@@ -9,7 +9,7 @@
 // and handler step deliberately stays in core**.
 //
 // ⚠️ These are not optional format tests; each of the three pins a real failure: masking that showed
-// the prefix (`sa_g_` gives away the account type), milliseconds parsed as seconds giving the year
+// the prefix (`service_` gives away the account type), milliseconds parsed as seconds giving the year
 // 58624, and calling a network hiccup "authorization expired", so the user wastes a trip
 // re-authorizing.
 package integration
@@ -26,10 +26,10 @@ import (
 // maskCredential **keeps only the tail, not the prefix**, and masks short values entirely.
 //
 // Showing the prefix is a very common approach, but the prefix is often exactly what should not be
-// shown: `sa_g_` gives away the account type, `app-` gives away the tenant. Returning short values as
+// shown: `service_` gives away the account type, `app-` gives away the tenant. Returning short values as
 // is would be worse: those are exactly the ones to hide.
 func TestMaskCredentialKeepsTailNotPrefix(t *testing.T) {
-	const secret = "sa_g_1234567890abcdef"
+	const secret = "service_1234567890abcdef"
 	got := maskCredential(secret, 4)
 
 	if got == secret {
@@ -37,7 +37,7 @@ func TestMaskCredentialKeepsTailNotPrefix(t *testing.T) {
 	}
 	// The prefix must not appear: this is the key difference from approaches that "keep the first
 	// few characters".
-	if strings.Contains(got, "sa_g") {
+	if strings.Contains(got, "service_") {
 		t.Errorf("不能露前缀（sa_g 点出了这是应用账号），实际 %q", got)
 	}
 	if !strings.HasSuffix(got, "cdef") {

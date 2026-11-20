@@ -143,6 +143,7 @@ func roots() []any {
 		apimodel.IssueComment{},
 		apimodel.IssueDraft{},
 		apimodel.LarkAppQuery{},
+		apimodel.IntegrationCredentialView{},
 		apimodel.LarkUserApp{},
 		apimodel.PendingMessage{},
 		apimodel.Revision{},
