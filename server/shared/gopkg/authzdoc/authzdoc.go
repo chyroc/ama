@@ -72,8 +72,14 @@ func Generate() ([]byte, error) {
 // GenerateWith renders the supplied capability snapshot. Downstream route tables use this
 // so their generated documentation reflects the modules actually installed.
 func GenerateWith(caps []authz.Capability, roles []string) ([]byte, error) {
+	return GenerateWithHeader(caps, roles, header)
+}
+
+// GenerateWithHeader renders a supplied snapshot with a downstream header template.
+// The default Generate and GenerateWith behavior stays unchanged.
+func GenerateWithHeader(caps []authz.Capability, roles []string, headerText string) ([]byte, error) {
 	var b bytes.Buffer
-	b.WriteString(header)
+	b.WriteString(headerText)
 	b.WriteString("\nimport type { WorkspaceRole } from \"@/types/domain\";\n")
 
 	// Type definitions. Written into the output instead of declared by the frontend: otherwise
