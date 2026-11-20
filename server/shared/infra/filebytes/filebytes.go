@@ -206,6 +206,33 @@ func (s *Store) Put(
 	return fileID, nil
 }
 
+// ReadWithFallback supports downstream deployments that still have historical bytes
+// outside object storage. The default Read behavior remains strict: this fallback is
+// explicit, not a silent second source for every caller.
+func (s *Store) ReadWithFallback(
+	ctx context.Context, fileID string, fallback func(context.Context) ([]byte, error),
+) ([]byte, error) {
+	fileID = strings.TrimSpace(fileID)
+	if fileID == "" || !s.Enabled() {
+		return fallback(ctx)
+	}
+	rec, err := s.files.GetFile(ctx, fileID)
+	if err != nil {
+		if errors.Is(err, persistmodel.ErrNotFound) {
+			return fallback(ctx)
+		}
+		return nil, err
+	}
+	content, err := s.blobs.Get(ctx, rec.ObjectKey)
+	if err != nil {
+		if errors.Is(err, ErrBlobNotFound) {
+			return fallback(ctx)
+		}
+		return nil, fmt.Errorf("core: 读附件字节失败: %w", err)
+	}
+	return content, nil
+}
+
 // Read gets attachment bytes: it finds the files record by fileID, then fetches from object
 // storage.
 //
