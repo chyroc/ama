@@ -773,6 +773,10 @@ var ErrPollUnsupported = errors.New("这个授权源不需要轮询授权结果"
 //
 // The check only accepts the ctx and net kinds, never the message text: text is given by upstream
 // and can change any time.
+// IsTransient reports whether a check failed without proving that authorization is invalid.
+// It is exported for downstream providers that need the same warning classification.
+func IsTransient(err error) bool { return isTransient(err) }
+
 func isTransient(err error) bool {
 	if err == nil {
 		return false
@@ -837,6 +841,10 @@ func PlausibleExpiry(at time.Time) bool {
 }
 
 // fmtExpiry renders an expiry time as "local time + (time left / expired how long ago)".
+// FormatExpiry renders a due time with its remaining or elapsed duration.
+// Downstream providers use the same text as the registry and public providers.
+func FormatExpiry(now, at time.Time) string { return fmtExpiry(now, at) }
+
 func fmtExpiry(now, at time.Time) string {
 	local := at.Local().Format("2006-01-02 15:04:05")
 	if d := at.Sub(now); d <= 0 {
