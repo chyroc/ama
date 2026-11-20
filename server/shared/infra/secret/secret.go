@@ -65,7 +65,7 @@ const MinLen = 16
 // Mask redacts a credential-like value to "ellipsis + a few tail characters", for display only.
 //
 // ⚠️ **Keep only the tail, never the prefix.**
-// The prefix is often exactly the part that should least be exposed: `sa_g_` reveals the account
+// The prefix is often exactly the part that should least be exposed: `service_` reveals the account
 // type, `app-` reveals the tenant, while a few tail characters are already enough for people to
 // tell "is this the one I configured". Showing the prefix is a very common way to write it, but it
 // gives away "who this credential belongs to" for free.
@@ -188,7 +188,7 @@ func Redact(text string) string {
 //
 // `Redact` only looks at one piece of text, while structured logs keep keys and values apart:
 //
-//	slog.String("api_key", "AKLTZjM4YmY0N2Y...")
+//	slog.String("api_key", "example-not-a-real-credential")
 //
 // The value has no trace of "this is a credential" (not JWT-shaped, no `key=` prefix), so
 // `Redact(value)` cannot recognize it, and the credential goes into the log as is. **But the key

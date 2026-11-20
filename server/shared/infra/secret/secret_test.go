@@ -18,16 +18,16 @@ const theJWT = "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VybmFtZSI6ImFsaWNlIn0.s1gn4tur3-do-no
 
 // ⭐ Mask **keeps only the tail, never the prefix**.
 //
-// The prefix is exactly what should least be exposed: `sa_g_` reveals the account type, `app-`
+// The prefix is exactly what should least be exposed: `service_` reveals the account type, `app-`
 // reveals the tenant. Showing the prefix is a very common way to write it, so this must be pinned.
 func TestMaskKeepsTailNeverPrefix(t *testing.T) {
-	const s = "sa_g_secret_value_1234567890_TAIL"
+	const s = "service_secret_value_1234567890_TAIL"
 	got := Mask(s, 4)
 
 	if !strings.HasSuffix(got, "TAIL") {
 		t.Errorf("应保留尾部 4 位，实际 %q", got)
 	}
-	if strings.Contains(got, "sa_g_") {
+	if strings.Contains(got, "service_") {
 		t.Errorf("泄漏了前缀（那是账号类型信息）：%q", got)
 	}
 	if strings.Contains(got, "secret_value") {
