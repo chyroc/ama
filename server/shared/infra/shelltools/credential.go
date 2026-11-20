@@ -25,6 +25,7 @@ package shelltools
 import (
 	"context"
 	"strings"
+	"sync"
 )
 
 // Environment variable names read by the AMA CLI (the `ama` command in the container).
@@ -131,6 +132,19 @@ func IsPlatformReservedEnv(key string) bool {
 	return isReservedEnv(strings.TrimSpace(key))
 }
 
+// aliasableExtraEnvKeys contains downstream credential names registered during wiring.
+// It is add-only, like reservedEnvNames: once a name is public in the UI or stored in an
+// Agent, removing it would make existing aliases silently fail validation.
+var aliasableExtraEnvKeys sync.Map
+
+// RegisterAliasableEnv declares a downstream platform credential that may be referenced
+// by aliases. The credential must also be covered by the result scrubber.
+func RegisterAliasableEnv(key string) {
+	if key = strings.TrimSpace(key); key != "" {
+		aliasableExtraEnvKeys.Store(key, true)
+	}
+}
+
 // AliasableEnvKeys are the platform variable names **allowed to be referenced by an alias**.
 //
 // There is only one rule: **its value is itself a usable credential**. AMA_BASE_URL /
@@ -144,10 +158,15 @@ func IsPlatformReservedEnv(key string) bool {
 // It returns a slice instead of a map: it goes into the HTTP response for the frontend to render
 // dropdown options, so the order must be stable.
 func AliasableEnvKeys() []string {
-	return []string{
+	out := []string{
 		EnvAMAToken,
 		EnvLarkUserAccessToken,
 	}
+	aliasableExtraEnvKeys.Range(func(key, _ any) bool {
+		out = append(out, key.(string))
+		return true
+	})
+	return out
 }
 
 // IsAliasableEnv reports whether a platform variable can be referenced by an alias.
