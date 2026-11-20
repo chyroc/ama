@@ -430,6 +430,8 @@ feedback:
 ark:
   apiKey: ""
   environmentID: ""
+  # Optional Ark Vault IDs (e.g. [vlt-example]) attached when creating sessions. AMA_ARK_VAULT_IDS.
+  vaultIDs: []
   # secretKey is the master key that **encrypts users' Ark credentials**, 32 bytes base64
   # (AES-256-GCM).
   #
@@ -487,6 +489,20 @@ docker:
   # join it to
   # reach object storage as ama-s3 to fetch skill packages (see s3.sandboxEndpoint above).
   network: ama-net
+  # OCI runtime for session containers. Empty uses the daemon default (runc). runsc (gVisor) gives
+  # each session its own user-space kernel, for many sessions on one big host; it must first be
+  # registered in /etc/docker/daemon.json ("runtimes").
+  runtime: ""
+  # Linux capabilities dropped from session containers, e.g. [ALL]. Empty keeps Docker's default
+  # set. ALL breaks apt install / chown inside the container.
+  capDrop: []
+  # Host directories bind-mounted into every session container, for shared business data (e.g. a
+  # directory on an EBS disk). Every session sees the same files. readOnly defaults to true; the
+  # target must not overlap workdir.
+  #   dataMounts:
+  #     - {source: /mnt/data/marketing, target: /data/marketing}
+  #     - {source: /mnt/data/exports, target: /data/exports, readOnly: false}
+  dataMounts: []
   # What to do with the container after a turn goes idle: pause (default, frozen, memory kept) / stop
   # (stopped, memory released) / none.
   idleAction: ""
@@ -506,3 +522,148 @@ worker:
   # (a second person in the same workspace sending a message must wait for the first to be idle for
   # a full 60 seconds).
   concurrency: 20
+  # Register a Run automatically when the self_hosted worker receives work for an Ark session
+  # started outside AMA whose agent ID matches a bound AMA agent. AMA_WORKER_ADOPT_EXTERNAL_SESSIONS.
+  adoptExternalSessions: false
+
+# ---------------------------------------------------------------------------
+# Worker-side datasource tools (query_sql / read_object)
+# ---------------------------------------------------------------------------
+# Two custom tools the agent can call, executed by **amad** and not by the session container:
+#
+#   query_sql    one read-only SQL against a MySQL data source, rendered as a markdown table
+#   read_object  one UTF-8 text object from a TOS (S3-compatible) bucket prefix
+#
+# # Why here and not in the agent's env
+#
+# Credentials configured here stay in the amad process. They never enter the session container and
+# never appear in the Ark Agent definition, so the agent cannot read them out. The tools also
+# enforce the row / byte / timeout limits and write one audit line per call
+# (`datasource query_sql` / `datasource read_object` with session_id / work_id).
+#
+# Design, limits and troubleshooting: server/shared/infra/datasources/README.md
+#
+# # Off by default
+#
+# With both `enabled: false` (the default) nothing is declared: the model sees no such tools, and
+# the Ark Agent is exactly what it was before. An `enabled: true` source with a missing field is a
+# **startup error**, not a silent downgrade.
+#
+# # Credentials
+#
+# Do not write them here: use AMA_DATA_MYSQL_PASSWORD / AMA_DATA_TOS_ACCESS_KEY /
+# AMA_DATA_TOS_SECRET_KEY. The MySQL account should be SELECT-only on the business database, and
+# the TOS key should have a read-only policy on this bucket/prefix — that account / policy, not the
+# tool, is the real security boundary.
+dataSources:
+  mysql:
+    # Turns the source and the query_sql declaration on. AMA_DATA_MYSQL_ENABLED.
+    enabled: false
+    # Hostname or IP, e.g. mysql.example.com. AMA_DATA_MYSQL_HOST.
+    host: ""
+    # Empty means 3306. AMA_DATA_MYSQL_PORT.
+    port: 3306
+    # The schema the read-only account may query. AMA_DATA_MYSQL_DATABASE.
+    database: ""
+    # The read-only account, e.g. ro_user. AMA_DATA_MYSQL_USER.
+    user: ""
+    # **Leave empty and use AMA_DATA_MYSQL_PASSWORD.**
+    password: ""
+    # Per-call row cap; empty means 200, above 1000 is clamped to 1000.
+    # The tool's max_rows parameter can only lower it. AMA_DATA_MYSQL_MAX_ROWS.
+    maxRows: 200
+    # Per-call total timeout; empty means 30s. AMA_DATA_MYSQL_TIMEOUT.
+    timeout: 30s
+  tos:
+    # Turns the source and the read_object declaration on. AMA_DATA_TOS_ENABLED.
+    enabled: false
+    # S3-compatible endpoint; https:// is added when the scheme is missing.
+    # AMA_DATA_TOS_ENDPOINT.
+    endpoint: https://tos-s3-cn-beijing.volces.com
+    # Signing region, e.g. cn-beijing. AMA_DATA_TOS_REGION.
+    region: cn-beijing
+    # The only bucket the tool may read. AMA_DATA_TOS_BUCKET.
+    bucket: ""
+    # The only key prefix the tool may read; **required when enabled** (fail-closed: no whole-bucket
+    # reads). A trailing "/" is added when missing, so "example-prefix" does not also match
+    # "example-prefix-secret/...". AMA_DATA_TOS_PREFIX.
+    prefix: ""
+    # **Leave empty and use AMA_DATA_TOS_ACCESS_KEY / AMA_DATA_TOS_SECRET_KEY.**
+    accessKey: ""
+    secretKey: ""
+    # Per-call byte cap; empty means 1 MiB (1048576), above 8 MiB is clamped to 8 MiB.
+    # AMA_DATA_TOS_MAX_BYTES.
+    maxBytes: 1048576
+    # Per-call timeout; empty means 20s. AMA_DATA_TOS_TIMEOUT.
+    timeout: 20s
+    # Path-style addressing (http://host/bucket/key). Empty means false: TOS's S3-compatible domain
+    # is virtual-hosted. AMA_DATA_TOS_USE_PATH_STYLE.
+    usePathStyle: false
+  # Optional substring replacement map applied to text returned by query_sql and read_object
+  # (for example masking real customer names in shared datasets). Empty leaves text unchanged.
+  redact: {}
+
+# ---------------------------------------------------------------------------
+# Optional UI branding & empty-chat starter prompts
+# ---------------------------------------------------------------------------
+ui:
+  # Override platform display name (empty keeps "AMA"). AMA_UI_BRAND_NAME.
+  brandName: ""
+  # Optional badge shown next to brandName on the landing page. AMA_UI_BRAND_BADGE.
+  brandBadge: ""
+  # Override browser document title (empty keeps the default title). AMA_UI_TITLE.
+  title: ""
+  # Optional starter prompt cards shown on the empty chat screen.
+  starterPrompts: []
+
+# ---------------------------------------------------------------------------
+# Optional OpenViking long-term memory
+# ---------------------------------------------------------------------------
+openViking:
+  # Enable server-side OpenViking recall/capture hooks (agents still opt in individually). AMA_OPENVIKING_ENABLED.
+  enabled: false
+  # OpenViking HTTP base URL. AMA_OPENVIKING_URL.
+  url: https://api.vikingdb.cn-beijing.volces.com/openviking
+  # **Leave empty and use AMA_OPENVIKING_API_KEY.** Required when enabled is true.
+  apiKey: ""
+  # OpenViking resource ID, e.g. ov-example. Required when enabled is true. AMA_OPENVIKING_RESOURCE_ID.
+  resourceID: ""
+  # Pre-turn recall timeout; empty means 3500ms. AMA_OPENVIKING_RECALL_TIMEOUT.
+  recallTimeout: 3500ms
+  # Post-turn session commit timeout; empty means 15s. AMA_OPENVIKING_CAPTURE_TIMEOUT.
+  captureTimeout: 15s
+
+# ---------------------------------------------------------------------------
+# Optional Volcengine CUA cloud desktop proxy
+# ---------------------------------------------------------------------------
+cua:
+  # Mount the authenticated /desktops/ and /cua-app/ reverse proxy. AMA_CUA_ENABLED.
+  enabled: false
+  # CUA desktop web origin. AMA_CUA_UPSTREAM_URL.
+  upstreamURL: https://cua.ark.cn-beijing.volces.com
+  # CUA control-plane API base URL (e.g. https://cua-gateway.example.com). Required when enabled is true.
+  # AMA_CUA_GATEWAY_URL.
+  gatewayURL: ""
+  # **Leave empty and use AMA_CUA_API_KEY.**
+  apiKey: ""
+  # Optional credential bootstrap artifact base URL override. AMA_CUA_ARTIFACT_BASE_URL.
+  artifactBaseURL: ""
+
+# ---------------------------------------------------------------------------
+# Optional Seedance MA media generation skill defaults
+# ---------------------------------------------------------------------------
+seedance:
+  # Inject server-managed Seedance credentials and target Agent/Environment IDs into agents that
+  # bind the seedance-ma skill. AMA_SEEDANCE_ENABLED.
+  enabled: false
+  # Ark API base URL. AMA_SEEDANCE_API_BASE_URL.
+  apiBaseURL: https://ark.cn-beijing.volces.com/api/v3
+  # **Leave empty and use AMA_SEEDANCE_API_KEY.** Required when enabled is true.
+  apiKey: ""
+  # Target Ark Agent ID (e.g. agent-example). Required when enabled is true. AMA_SEEDANCE_AGENT_ID.
+  agentID: ""
+  # Optional Ark cloud Environment ID (e.g. env-example). AMA_SEEDANCE_ENVIRONMENT_ID.
+  environmentID: ""
+  # Optional model ID hints. AMA_SEEDANCE_VIDEO_MODEL / AMA_SEEDANCE_IMAGE_MODEL.
+  videoModel: ""
+  imageModel: ""

@@ -39,12 +39,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/chyroc/ama/server/shared/infra/datasources"
 	"github.com/chyroc/ama/server/shared/infra/github"
 	"github.com/chyroc/ama/server/shared/infra/pg"
 	"github.com/chyroc/ama/server/shared/infra/redis"
@@ -71,6 +73,28 @@ type Config struct {
 	Docker   Docker   `yaml:"docker"`
 	Worker   Worker   `yaml:"worker"`
 	Feedback Feedback `yaml:"feedback"`
+
+	// DataSources is the worker-side datasource tools (query_sql / read_object). Optional: when no
+	// source is enabled, amad declares no custom tool at all, and the Ark Agent is exactly what it
+	// was before this feature existed.
+	//
+	// Why credentials live here (the amad process) and not in the agent's env: see
+	// shared/infra/datasources/README.md, section "Why the worker side".
+	DataSources DataSources `yaml:"dataSources"`
+
+	// UI holds optional branding and empty-chat starter prompts served to the web frontend.
+	// Leaving it empty keeps AMA's default name, title, and clean empty chat state.
+	UI UI `yaml:"ui"`
+
+	// OpenViking configures optional long-term memory recall and capture hooks.
+	OpenViking OpenViking `yaml:"openViking"`
+
+	// CUA configures the optional Volcengine Computer Use Agent cloud desktop reverse proxy.
+	CUA CUA `yaml:"cua"`
+
+	// Seedance configures optional credentials and target Agent/Environment IDs injected for the
+	// built-in seedance-ma video/image generation skill.
+	Seedance Seedance `yaml:"seedance"`
 }
 
 // Feedback is the read permission for issue feedback: who counts as "the dev team".
@@ -229,6 +253,11 @@ type Ark struct {
 	APIKey        string `yaml:"apiKey"`
 	EnvironmentID string `yaml:"environmentID"`
 
+	// VaultIDs is an optional list of Ark Vault IDs (e.g. vlt-example) attached when creating
+	// sessions so Ark can authenticate Vault-managed MCP credentials without exposing plaintext
+	// secrets inside session containers. Empty attaches no Vault. AMA_ARK_VAULT_IDS.
+	VaultIDs []string `yaml:"vaultIDs"`
+
 	// SecretKey is the master key for **encrypting users' Ark credentials**: 32 bytes in base64
 	// (AES-256-GCM).
 	//
@@ -299,6 +328,20 @@ type Docker struct {
 	// code or install dependencies.
 	Network string `yaml:"network"`
 
+	// Runtime is the OCI runtime for session containers, for example runsc (gVisor). It must be
+	// registered with the daemon (/etc/docker/daemon.json "runtimes"). Empty uses the daemon
+	// default (runc). With many sessions sharing one big host, runsc gives each session its own
+	// user-space kernel instead of sharing the host kernel.
+	Runtime string `yaml:"runtime"`
+	// CapDrop lists Linux capabilities dropped from session containers, for example [ALL]. Empty
+	// keeps the Docker default set. Dropping ALL breaks things that need root inside the
+	// container (apt install, chown), so check the image before turning it on.
+	CapDrop []string `yaml:"capDrop"`
+	// DataMounts are host directories bind-mounted into every session container, for shared
+	// business data (for example a directory on an EBS disk). Every session sees the same files;
+	// keep readOnly true unless sessions really must write.
+	DataMounts []DockerDataMount `yaml:"dataMounts"`
+
 	// IdleAction is what to do with the container after a chat turn goes idle; empty means pause:
 	//
 	//	pause  freeze processes, keep memory; resumes in milliseconds when a message comes (default)
@@ -315,6 +358,19 @@ type Docker struct {
 	// delete.
 	WorkspaceTTL *time.Duration `yaml:"workspaceTTL"`
 }
+
+// DockerDataMount is one entry of docker.dataMounts.
+type DockerDataMount struct {
+	// Source is the absolute path on the Docker host.
+	Source string `yaml:"source"`
+	// Target is the absolute path inside the container; it must not overlap docker.workdir.
+	Target string `yaml:"target"`
+	// ReadOnly mounts the directory read-only. Empty means true.
+	ReadOnly *bool `yaml:"readOnly"`
+}
+
+// ReadOnlyOrDefault reports whether the mount is read-only (true when empty).
+func (m DockerDataMount) ReadOnlyOrDefault() bool { return m.ReadOnly == nil || *m.ReadOnly }
 
 // DockerEnabled reports whether the Docker executor is enabled (enabled by default when empty).
 func (d Docker) DockerEnabled() bool { return d.Enabled == nil || *d.Enabled }
@@ -383,6 +439,11 @@ type Worker struct {
 	// containers run at once; use a smaller value on a small machine.
 	// It is a pointer to tell "not set" from "explicitly set to 1".
 	Concurrency *int `yaml:"concurrency"`
+
+	// AdoptExternalSessions, when true, registers a Run automatically when the self_hosted worker
+	// picks up work for an Ark session created outside AMA (for example from the Ark Console or SDK)
+	// whose agent ID matches a bound AMA agent. AMA_WORKER_ADOPT_EXTERNAL_SESSIONS.
+	AdoptExternalSessions bool `yaml:"adoptExternalSessions"`
 }
 
 // DefaultWorkerConcurrency is the number of concurrent works per environment when
@@ -663,6 +724,307 @@ func (s S3) ToS3Config() s3.Config {
 	}
 }
 
+// DataSources is the configuration of the worker-side datasource tools.
+//
+// # Why the worker side instead of the agent's environment
+//
+// The agent's env goes into the session container and into the Ark Agent config, so credentials
+// put there are readable by the agent itself (one curl and they are gone) and visible in plaintext
+// in the Agent definition. amad holding them means the model only ever sees "a read-only account"
+// and "a prefix in one bucket"; the tool layer also owns the row/byte/timeout limits and writes an
+// audit line per call.
+//
+// # enabled but incomplete = startup failure
+//
+// Every field except the ones with defaults is required once `enabled: true`. Leaving enabled on
+// with a missing host does **not** degrade to "no tool": it fails at startup with ErrInvalidConfig,
+// because "looks enabled in config while the model has no tool" is a zero-error failure, and the
+// first person to notice it would be a user staring at an agent that never queries anything.
+//
+// # Defaults (0 / empty means the value in brackets)
+//
+//	mysql.port        (3306)     mysql.maxRows   (200, hard cap 1000)
+//	mysql.timeout     (30s)      tos.maxBytes    (1 MiB, hard cap 8 MiB)
+//	tos.timeout       (20s)      tos.prefix      (required; a trailing "/" is added when missing)
+type DataSources struct {
+	MySQL  DataSourceMySQL   `yaml:"mysql"`
+	TOS    DataSourceTOS     `yaml:"tos"`
+	Redact map[string]string `yaml:"redact"`
+}
+
+// DataSourceMySQL is the MySQL source behind the query_sql tool.
+//
+// In production the password should come from AMA_DATA_MYSQL_PASSWORD and the account should be
+// **SELECT-only** on the business database: that account is the real security boundary, the SQL
+// guard in the tool is only a "don't shoot yourself in the foot" layer.
+type DataSourceMySQL struct {
+	// Enabled turns the source (and the query_sql declaration) on. AMA_DATA_MYSQL_ENABLED.
+	Enabled bool `yaml:"enabled"`
+
+	// Host is the hostname or IP, e.g. mysql.example.com. AMA_DATA_MYSQL_HOST.
+	Host string `yaml:"host"`
+	// Port empty means 3306. AMA_DATA_MYSQL_PORT.
+	Port int `yaml:"port"`
+	// Database is the schema the read-only account may query. AMA_DATA_MYSQL_DATABASE.
+	Database string `yaml:"database"`
+	// User is the read-only account. AMA_DATA_MYSQL_USER.
+	User string `yaml:"user"`
+	// Password: **use AMA_DATA_MYSQL_PASSWORD in production**, not this field.
+	Password string `yaml:"password"`
+	// MaxRows is the per-call row cap; empty means 200, values above 1000 are clamped to 1000.
+	// The tool's max_rows parameter can only lower it. AMA_DATA_MYSQL_MAX_ROWS.
+	MaxRows int `yaml:"maxRows"`
+	// Timeout is the total per-call timeout; empty means 30s. AMA_DATA_MYSQL_TIMEOUT.
+	Timeout time.Duration `yaml:"timeout"`
+}
+
+// DataSourceTOS is the TOS (S3-compatible) source behind the read_object tool.
+//
+// The bucket is fixed and keys must start with Prefix: the tool can only narrow what the
+// credentials already allow, never widen it. A missing Prefix fails startup (fail-closed) rather
+// than defaulting to "the whole bucket".
+type DataSourceTOS struct {
+	// Enabled turns the source (and the read_object declaration) on. AMA_DATA_TOS_ENABLED.
+	Enabled bool `yaml:"enabled"`
+
+	// Endpoint is the S3-compatible endpoint, e.g. https://tos-s3-cn-beijing.volces.com.
+	// Without a scheme, https:// is added. AMA_DATA_TOS_ENDPOINT.
+	Endpoint string `yaml:"endpoint"`
+	// Region is the signing region, e.g. cn-beijing. AMA_DATA_TOS_REGION.
+	Region string `yaml:"region"`
+	// Bucket is the only bucket the tool may read. AMA_DATA_TOS_BUCKET.
+	Bucket string `yaml:"bucket"`
+	// Prefix is the only key prefix the tool may read, e.g. example-prefix/.
+	// A trailing "/" is added when missing, so "a" does not also match "a-secret/...".
+	// AMA_DATA_TOS_PREFIX.
+	Prefix string `yaml:"prefix"`
+	// AccessKey: **use AMA_DATA_TOS_ACCESS_KEY in production**.
+	AccessKey string `yaml:"accessKey"`
+	// SecretKey: **use AMA_DATA_TOS_SECRET_KEY in production**.
+	SecretKey string `yaml:"secretKey"`
+	// MaxBytes is the per-call byte cap; empty means 1 MiB, above 8 MiB is clamped to 8 MiB.
+	// AMA_DATA_TOS_MAX_BYTES.
+	MaxBytes int64 `yaml:"maxBytes"`
+	// Timeout is per-call timeout; empty means 20s. AMA_DATA_TOS_TIMEOUT.
+	Timeout time.Duration `yaml:"timeout"`
+	// UsePathStyle sends http://host/bucket/key instead of http://bucket.host/key. Empty means
+	// false: TOS's S3-compatible domain is virtual-hosted. AMA_DATA_TOS_USE_PATH_STYLE.
+	UsePathStyle bool `yaml:"usePathStyle"`
+}
+
+// Enabled reports whether at least one datasource is turned on.
+func (d DataSources) Enabled() bool { return d.MySQL.Enabled || d.TOS.Enabled }
+
+// ToConfig converts to shared/infra/datasources' Config.
+//
+// The direction is config → datasources (the same one as ToStdConfig / ToS3Config): the infra
+// package does not need to know about YAML or this package.
+func (d DataSources) ToConfig() datasources.Config {
+	return datasources.Config{
+		MySQL: datasources.MySQLConfig{
+			Enabled:  d.MySQL.Enabled,
+			Host:     d.MySQL.Host,
+			Port:     d.MySQL.Port,
+			Database: d.MySQL.Database,
+			User:     d.MySQL.User,
+			Password: d.MySQL.Password,
+			MaxRows:  d.MySQL.MaxRows,
+			Timeout:  d.MySQL.Timeout,
+		},
+		TOS: datasources.TOSConfig{
+			Enabled:      d.TOS.Enabled,
+			Endpoint:     d.TOS.Endpoint,
+			Region:       d.TOS.Region,
+			Bucket:       d.TOS.Bucket,
+			Prefix:       d.TOS.Prefix,
+			AccessKey:    d.TOS.AccessKey,
+			SecretKey:    d.TOS.SecretKey,
+			MaxBytes:     d.TOS.MaxBytes,
+			Timeout:      d.TOS.Timeout,
+			UsePathStyle: d.TOS.UsePathStyle,
+		},
+		Redact: d.Redact,
+	}
+}
+
+// validate checks the datasource section. Disabled sections are not looked at at all (so a
+// half-written `tos:` block left over from an experiment does not block startup); enabled ones
+// must be complete.
+//
+// The rules themselves live in datasources.Config.Validate: one implementation, so "config says it
+// is valid" and "the registry can actually be built" cannot drift apart.
+func (d DataSources) validate() error {
+	if !d.Enabled() {
+		return nil
+	}
+	if err := d.ToConfig().Validate(); err != nil {
+		return fmt.Errorf("%w: dataSources.%v", ErrInvalidConfig, err)
+	}
+	return nil
+}
+
+// UI configures optional white-label branding and empty-chat starter prompts for the web UI.
+// All fields default to empty, which preserves AMA's built-in brand and clean empty chat screen.
+type UI struct {
+	// BrandName overrides the platform display name (e.g. "Acme Agents"). AMA_UI_BRAND_NAME.
+	BrandName string `yaml:"brandName"`
+	// BrandBadge renders a small pill next to the brand name on the landing page. AMA_UI_BRAND_BADGE.
+	BrandBadge string `yaml:"brandBadge"`
+	// Title overrides document.title in the browser tab. AMA_UI_TITLE.
+	Title string `yaml:"title"`
+	// StarterPrompts lists optional prompt cards shown when starting a new conversation.
+	StarterPrompts []UIStarterPrompt `yaml:"starterPrompts"`
+}
+
+// UIStarterPrompt is one suggested starter card on the empty chat screen.
+type UIStarterPrompt struct {
+	Label  string `yaml:"label" json:"label"`
+	Prompt string `yaml:"prompt" json:"prompt"`
+}
+
+// DefaultOpenVikingURL is the default Volcengine VikingDB OpenViking endpoint when openViking.url is empty.
+const DefaultOpenVikingURL = "https://api.vikingdb.cn-beijing.volces.com/openviking"
+
+// OpenViking configures optional long-term memory recall and capture.
+type OpenViking struct {
+	// Enabled turns server-side OpenViking memory hooks on. Individual agents still opt in via
+	// Agent.OpenVikingEnabled. AMA_OPENVIKING_ENABLED.
+	Enabled bool `yaml:"enabled"`
+	// URL is the OpenViking HTTP base URL; empty defaults to DefaultOpenVikingURL. AMA_OPENVIKING_URL.
+	URL string `yaml:"url"`
+	// APIKey is the X-API-Key credential; required when enabled is true. AMA_OPENVIKING_API_KEY.
+	APIKey string `yaml:"apiKey"`
+	// ResourceID is the X-OpenViking-Resource-Id header; required when enabled is true. AMA_OPENVIKING_RESOURCE_ID.
+	ResourceID string `yaml:"resourceID"`
+	// RecallTimeout bounds pre-turn context search; empty defaults to 3500ms. AMA_OPENVIKING_RECALL_TIMEOUT.
+	RecallTimeout time.Duration `yaml:"recallTimeout"`
+	// CaptureTimeout bounds post-turn session commit; empty defaults to 15s. AMA_OPENVIKING_CAPTURE_TIMEOUT.
+	CaptureTimeout time.Duration `yaml:"captureTimeout"`
+}
+
+// URLOrDefault returns the trimmed OpenViking base URL without trailing slash.
+func (o OpenViking) URLOrDefault() string {
+	if u := strings.TrimRight(strings.TrimSpace(o.URL), "/"); u != "" {
+		return u
+	}
+	return DefaultOpenVikingURL
+}
+
+// RecallTimeoutOrDefault returns the recall timeout (3500ms when unset or non-positive).
+func (o OpenViking) RecallTimeoutOrDefault() time.Duration {
+	if o.RecallTimeout > 0 {
+		return o.RecallTimeout
+	}
+	return 3500 * time.Millisecond
+}
+
+// CaptureTimeoutOrDefault returns the capture timeout (15s when unset or non-positive).
+func (o OpenViking) CaptureTimeoutOrDefault() time.Duration {
+	if o.CaptureTimeout > 0 {
+		return o.CaptureTimeout
+	}
+	return 15 * time.Second
+}
+
+func (o OpenViking) validate() error {
+	if !o.Enabled {
+		return nil
+	}
+	var missing []string
+	if strings.TrimSpace(o.APIKey) == "" {
+		missing = append(missing, "apiKey")
+	}
+	if strings.TrimSpace(o.ResourceID) == "" {
+		missing = append(missing, "resourceID")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: openViking.enabled=true 但缺少 %s", ErrInvalidConfig, strings.Join(missing, " / "))
+	}
+	return nil
+}
+
+// DefaultCUAUpstreamURL is the default Volcengine CUA desktop web origin when cua.upstreamURL is empty.
+const DefaultCUAUpstreamURL = "https://cua.ark.cn-beijing.volces.com"
+
+// CUA configures the optional Computer Use Agent cloud desktop reverse proxy and skill defaults.
+type CUA struct {
+	// Enabled mounts the authenticated /desktops/ and /cua-app/ reverse proxy routes. AMA_CUA_ENABLED.
+	Enabled bool `yaml:"enabled"`
+	// UpstreamURL is the CUA desktop web origin; empty defaults to DefaultCUAUpstreamURL. AMA_CUA_UPSTREAM_URL.
+	UpstreamURL string `yaml:"upstreamURL"`
+	// GatewayURL is the CUA control-plane API base URL (used to mint desktop tickets and injected as
+	// AP_CUA_SKILL_API_BASE_URL for the ark-cua skill). Required when enabled is true. AMA_CUA_GATEWAY_URL.
+	GatewayURL string `yaml:"gatewayURL"`
+	// APIKey is the optional server-level CUA API key used to mint desktop access tickets. AMA_CUA_API_KEY.
+	APIKey string `yaml:"apiKey"`
+	// ArtifactBaseURL overrides CUA_CREDENTIAL_ARTIFACT_BASE_URL for CUA credential helper scripts. AMA_CUA_ARTIFACT_BASE_URL.
+	ArtifactBaseURL string `yaml:"artifactBaseURL"`
+}
+
+// UpstreamURLOrDefault returns the CUA upstream origin without trailing slash.
+func (c CUA) UpstreamURLOrDefault() string {
+	if u := strings.TrimRight(strings.TrimSpace(c.UpstreamURL), "/"); u != "" {
+		return u
+	}
+	return DefaultCUAUpstreamURL
+}
+
+func (c CUA) validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(c.GatewayURL) == "" {
+		return fmt.Errorf("%w: cua.enabled=true 但缺少 gatewayURL", ErrInvalidConfig)
+	}
+	return nil
+}
+
+// DefaultSeedanceAPIBaseURL is the default Ark API base URL for the seedance-ma skill.
+const DefaultSeedanceAPIBaseURL = "https://ark.cn-beijing.volces.com/api/v3"
+
+// Seedance configures optional server-managed defaults injected for agents using the seedance-ma skill.
+type Seedance struct {
+	// Enabled turns server-managed Seedance environment injection on. AMA_SEEDANCE_ENABLED.
+	Enabled bool `yaml:"enabled"`
+	// APIBaseURL is the Ark API base URL; empty defaults to DefaultSeedanceAPIBaseURL. AMA_SEEDANCE_API_BASE_URL.
+	APIBaseURL string `yaml:"apiBaseURL"`
+	// APIKey is the dedicated Ark API key for Seedance media generation; required when enabled is true. AMA_SEEDANCE_API_KEY.
+	APIKey string `yaml:"apiKey"`
+	// AgentID is the target Ark Agent ID for Seedance sessions; required when enabled is true. AMA_SEEDANCE_AGENT_ID.
+	AgentID string `yaml:"agentID"`
+	// EnvironmentID is the optional Ark cloud Environment ID for Seedance sessions. AMA_SEEDANCE_ENVIRONMENT_ID.
+	EnvironmentID string `yaml:"environmentID"`
+	// VideoModel is the optional video model identifier passed to seedance-ma. AMA_SEEDANCE_VIDEO_MODEL.
+	VideoModel string `yaml:"videoModel"`
+	// ImageModel is the optional image model identifier passed to seedance-ma. AMA_SEEDANCE_IMAGE_MODEL.
+	ImageModel string `yaml:"imageModel"`
+}
+
+// APIBaseURLOrDefault returns the Seedance API base URL without trailing slash.
+func (s Seedance) APIBaseURLOrDefault() string {
+	if u := strings.TrimRight(strings.TrimSpace(s.APIBaseURL), "/"); u != "" {
+		return u
+	}
+	return DefaultSeedanceAPIBaseURL
+}
+
+func (s Seedance) validate() error {
+	if !s.Enabled {
+		return nil
+	}
+	var missing []string
+	if strings.TrimSpace(s.APIKey) == "" {
+		missing = append(missing, "apiKey")
+	}
+	if strings.TrimSpace(s.AgentID) == "" {
+		missing = append(missing, "agentID")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: seedance.enabled=true 但缺少 %s", ErrInvalidConfig, strings.Join(missing, " / "))
+	}
+	return nil
+}
+
 // PG is the connection config for standard PostgreSQL; fields map one to one to pg.StdConfig.
 //
 // Production is any standard PostgreSQL; locally it is postgres:17-alpine from docker-compose.
@@ -750,6 +1112,29 @@ const (
 	EnvS3UsePathStyle    = "AMA_S3_USE_PATH_STYLE"
 	EnvS3CreateBucket    = "AMA_S3_CREATE_BUCKET"
 
+	// Worker-side datasource tools (query_sql / read_object). They exist **only as an override
+	// layer**, same as everything else here: the credentials belong in environment variables so
+	// they never have to be written into a config file that is checked in.
+	EnvDataMySQLEnabled  = "AMA_DATA_MYSQL_ENABLED"
+	EnvDataMySQLHost     = "AMA_DATA_MYSQL_HOST"
+	EnvDataMySQLPort     = "AMA_DATA_MYSQL_PORT"
+	EnvDataMySQLDatabase = "AMA_DATA_MYSQL_DATABASE"
+	EnvDataMySQLUser     = "AMA_DATA_MYSQL_USER"
+	EnvDataMySQLPassword = "AMA_DATA_MYSQL_PASSWORD"
+	EnvDataMySQLMaxRows  = "AMA_DATA_MYSQL_MAX_ROWS"
+	EnvDataMySQLTimeout  = "AMA_DATA_MYSQL_TIMEOUT"
+
+	EnvDataTOSEnabled      = "AMA_DATA_TOS_ENABLED"
+	EnvDataTOSEndpoint     = "AMA_DATA_TOS_ENDPOINT"
+	EnvDataTOSRegion       = "AMA_DATA_TOS_REGION"
+	EnvDataTOSBucket       = "AMA_DATA_TOS_BUCKET"
+	EnvDataTOSPrefix       = "AMA_DATA_TOS_PREFIX"
+	EnvDataTOSAccessKey    = "AMA_DATA_TOS_ACCESS_KEY"
+	EnvDataTOSSecretKey    = "AMA_DATA_TOS_SECRET_KEY"
+	EnvDataTOSMaxBytes     = "AMA_DATA_TOS_MAX_BYTES"
+	EnvDataTOSTimeout      = "AMA_DATA_TOS_TIMEOUT"
+	EnvDataTOSUsePathStyle = "AMA_DATA_TOS_USE_PATH_STYLE"
+
 	EnvAddr          = "AMA_ADDR"
 	EnvPublicURL     = "AMA_PUBLIC_URL"
 	EnvAllowedOrigin = "AMA_ALLOWED_ORIGIN"
@@ -772,23 +1157,51 @@ const (
 
 	EnvArkAPIKey        = "ARK_API_KEY"
 	EnvArkEnvironmentID = "ARK_ENVIRONMENT_ID"
+	EnvArkVaultIDs      = "AMA_ARK_VAULT_IDS"
 	// EnvArkSecretKey is the master key that encrypts users' Ark credentials. **It is not
 	// ARK_API_KEY**, see Ark.SecretKey.
 	EnvArkSecretKey = "ARK_SECRET_KEY"
 
-	EnvDockerEnabled      = "AMA_DOCKER_ENABLED"
-	EnvDockerHost         = "AMA_DOCKER_HOST"
-	EnvDockerImage        = "AMA_DOCKER_IMAGE"
-	EnvDockerWorkdir      = "AMA_DOCKER_WORKDIR"
-	EnvDockerPrefix       = "AMA_DOCKER_PREFIX"
-	EnvDockerCPUs         = "AMA_DOCKER_CPUS"
-	EnvDockerMemory       = "AMA_DOCKER_MEMORY"
-	EnvDockerPidsLimit    = "AMA_DOCKER_PIDS_LIMIT"
-	EnvDockerNetwork      = "AMA_DOCKER_NETWORK"
-	EnvDockerIdleAction   = "AMA_DOCKER_IDLE_ACTION"
-	EnvDockerContainerTTL = "AMA_DOCKER_CONTAINER_TTL"
-	EnvDockerWorkspaceTTL = "AMA_DOCKER_WORKSPACE_TTL"
-	EnvWorkerConcurrency  = "AMA_WORKER_CONCURRENCY"
+	EnvDockerEnabled               = "AMA_DOCKER_ENABLED"
+	EnvDockerHost                  = "AMA_DOCKER_HOST"
+	EnvDockerImage                 = "AMA_DOCKER_IMAGE"
+	EnvDockerWorkdir               = "AMA_DOCKER_WORKDIR"
+	EnvDockerPrefix                = "AMA_DOCKER_PREFIX"
+	EnvDockerCPUs                  = "AMA_DOCKER_CPUS"
+	EnvDockerMemory                = "AMA_DOCKER_MEMORY"
+	EnvDockerPidsLimit             = "AMA_DOCKER_PIDS_LIMIT"
+	EnvDockerNetwork               = "AMA_DOCKER_NETWORK"
+	EnvDockerRuntime               = "AMA_DOCKER_RUNTIME"
+	EnvDockerIdleAction            = "AMA_DOCKER_IDLE_ACTION"
+	EnvDockerContainerTTL          = "AMA_DOCKER_CONTAINER_TTL"
+	EnvDockerWorkspaceTTL          = "AMA_DOCKER_WORKSPACE_TTL"
+	EnvWorkerConcurrency           = "AMA_WORKER_CONCURRENCY"
+	EnvWorkerAdoptExternalSessions = "AMA_WORKER_ADOPT_EXTERNAL_SESSIONS"
+
+	EnvUIBrandName  = "AMA_UI_BRAND_NAME"
+	EnvUIBrandBadge = "AMA_UI_BRAND_BADGE"
+	EnvUITitle      = "AMA_UI_TITLE"
+
+	EnvOpenVikingEnabled        = "AMA_OPENVIKING_ENABLED"
+	EnvOpenVikingURL            = "AMA_OPENVIKING_URL"
+	EnvOpenVikingAPIKey         = "AMA_OPENVIKING_API_KEY"
+	EnvOpenVikingResourceID     = "AMA_OPENVIKING_RESOURCE_ID"
+	EnvOpenVikingRecallTimeout  = "AMA_OPENVIKING_RECALL_TIMEOUT"
+	EnvOpenVikingCaptureTimeout = "AMA_OPENVIKING_CAPTURE_TIMEOUT"
+
+	EnvCUAEnabled         = "AMA_CUA_ENABLED"
+	EnvCUAUpstreamURL     = "AMA_CUA_UPSTREAM_URL"
+	EnvCUAGatewayURL      = "AMA_CUA_GATEWAY_URL"
+	EnvCUAAPIKey          = "AMA_CUA_API_KEY"
+	EnvCUAArtifactBaseURL = "AMA_CUA_ARTIFACT_BASE_URL"
+
+	EnvSeedanceEnabled       = "AMA_SEEDANCE_ENABLED"
+	EnvSeedanceAPIBaseURL    = "AMA_SEEDANCE_API_BASE_URL"
+	EnvSeedanceAPIKey        = "AMA_SEEDANCE_API_KEY"
+	EnvSeedanceAgentID       = "AMA_SEEDANCE_AGENT_ID"
+	EnvSeedanceEnvironmentID = "AMA_SEEDANCE_ENVIRONMENT_ID"
+	EnvSeedanceVideoModel    = "AMA_SEEDANCE_VIDEO_MODEL"
+	EnvSeedanceImageModel    = "AMA_SEEDANCE_IMAGE_MODEL"
 
 	EnvAuthManagedKeySecret = "AMA_AUTH_MANAGED_KEY_SECRET"
 
@@ -1116,6 +1529,7 @@ func (c *Config) applyEnv() []string {
 	str(EnvDockerPrefix, "docker.prefix", &c.Docker.Prefix, true)
 	str(EnvDockerMemory, "docker.memory", &c.Docker.Memory, true)
 	str(EnvDockerNetwork, "docker.network", &c.Docker.Network, true)
+	str(EnvDockerRuntime, "docker.runtime", &c.Docker.Runtime, true)
 	str(EnvDockerIdleAction, "docker.idleAction", &c.Docker.IdleAction, true)
 	// Numbers and durations: if parsing fails, treat as unset, same as pg.port (a typo in one
 	// environment variable should not keep the service from starting).
@@ -1204,6 +1618,92 @@ func (c *Config) applyEnv() []string {
 	list(EnvAuthGitHubAllowedEmailDomains, "auth.github.allowedEmailDomains", &c.Auth.GitHub.AllowedEmailDomains)
 	list(EnvAuthGitHubAllowedOrgs, "auth.github.allowedOrgs", &c.Auth.GitHub.AllowedOrgs)
 
+	// Worker-side datasource tools. Credentials go through environment variables; the
+	// non-secret fields are here too so that "which environment is this pod talking to" can be
+	// fixed without editing the file.
+	boolEnv(EnvDataMySQLEnabled, "dataSources.mysql.enabled", &c.DataSources.MySQL.Enabled)
+	str(EnvDataMySQLHost, "dataSources.mysql.host", &c.DataSources.MySQL.Host, true)
+	str(EnvDataMySQLDatabase, "dataSources.mysql.database", &c.DataSources.MySQL.Database, true)
+	str(EnvDataMySQLUser, "dataSources.mysql.user", &c.DataSources.MySQL.User, true)
+	str(EnvDataMySQLPassword, "dataSources.mysql.password", &c.DataSources.MySQL.Password, false)
+	if v := strings.TrimSpace(os.Getenv(EnvDataMySQLPort)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.DataSources.MySQL.Port = n
+			hit = append(hit, "dataSources.mysql.port")
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvDataMySQLMaxRows)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.DataSources.MySQL.MaxRows = n
+			hit = append(hit, "dataSources.mysql.maxRows")
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvDataMySQLTimeout)); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.DataSources.MySQL.Timeout = d
+			hit = append(hit, "dataSources.mysql.timeout")
+		}
+	}
+
+	boolEnv(EnvDataTOSEnabled, "dataSources.tos.enabled", &c.DataSources.TOS.Enabled)
+	str(EnvDataTOSEndpoint, "dataSources.tos.endpoint", &c.DataSources.TOS.Endpoint, true)
+	str(EnvDataTOSRegion, "dataSources.tos.region", &c.DataSources.TOS.Region, true)
+	str(EnvDataTOSBucket, "dataSources.tos.bucket", &c.DataSources.TOS.Bucket, true)
+	str(EnvDataTOSPrefix, "dataSources.tos.prefix", &c.DataSources.TOS.Prefix, true)
+	str(EnvDataTOSAccessKey, "dataSources.tos.accessKey", &c.DataSources.TOS.AccessKey, true)
+	str(EnvDataTOSSecretKey, "dataSources.tos.secretKey", &c.DataSources.TOS.SecretKey, false)
+	boolEnv(EnvDataTOSUsePathStyle, "dataSources.tos.usePathStyle", &c.DataSources.TOS.UsePathStyle)
+	if v := strings.TrimSpace(os.Getenv(EnvDataTOSMaxBytes)); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			c.DataSources.TOS.MaxBytes = n
+			hit = append(hit, "dataSources.tos.maxBytes")
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvDataTOSTimeout)); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.DataSources.TOS.Timeout = d
+			hit = append(hit, "dataSources.tos.timeout")
+		}
+	}
+
+	list(EnvArkVaultIDs, "ark.vaultIDs", &c.Ark.VaultIDs)
+	boolEnv(EnvWorkerAdoptExternalSessions, "worker.adoptExternalSessions", &c.Worker.AdoptExternalSessions)
+
+	str(EnvUIBrandName, "ui.brandName", &c.UI.BrandName, true)
+	str(EnvUIBrandBadge, "ui.brandBadge", &c.UI.BrandBadge, true)
+	str(EnvUITitle, "ui.title", &c.UI.Title, true)
+
+	boolEnv(EnvOpenVikingEnabled, "openViking.enabled", &c.OpenViking.Enabled)
+	str(EnvOpenVikingURL, "openViking.url", &c.OpenViking.URL, true)
+	str(EnvOpenVikingAPIKey, "openViking.apiKey", &c.OpenViking.APIKey, false)
+	str(EnvOpenVikingResourceID, "openViking.resourceID", &c.OpenViking.ResourceID, true)
+	if v := strings.TrimSpace(os.Getenv(EnvOpenVikingRecallTimeout)); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.OpenViking.RecallTimeout = d
+			hit = append(hit, "openViking.recallTimeout")
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvOpenVikingCaptureTimeout)); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.OpenViking.CaptureTimeout = d
+			hit = append(hit, "openViking.captureTimeout")
+		}
+	}
+
+	boolEnv(EnvCUAEnabled, "cua.enabled", &c.CUA.Enabled)
+	str(EnvCUAUpstreamURL, "cua.upstreamURL", &c.CUA.UpstreamURL, true)
+	str(EnvCUAGatewayURL, "cua.gatewayURL", &c.CUA.GatewayURL, true)
+	str(EnvCUAAPIKey, "cua.apiKey", &c.CUA.APIKey, false)
+	str(EnvCUAArtifactBaseURL, "cua.artifactBaseURL", &c.CUA.ArtifactBaseURL, true)
+
+	boolEnv(EnvSeedanceEnabled, "seedance.enabled", &c.Seedance.Enabled)
+	str(EnvSeedanceAPIBaseURL, "seedance.apiBaseURL", &c.Seedance.APIBaseURL, true)
+	str(EnvSeedanceAPIKey, "seedance.apiKey", &c.Seedance.APIKey, false)
+	str(EnvSeedanceAgentID, "seedance.agentID", &c.Seedance.AgentID, true)
+	str(EnvSeedanceEnvironmentID, "seedance.environmentID", &c.Seedance.EnvironmentID, true)
+	str(EnvSeedanceVideoModel, "seedance.videoModel", &c.Seedance.VideoModel, true)
+	str(EnvSeedanceImageModel, "seedance.imageModel", &c.Seedance.ImageModel, true)
+
 	return hit
 }
 
@@ -1252,6 +1752,43 @@ func (c *Config) validate() error {
 	}
 	if c.Auth.Local.MaxFailures < 0 || c.Auth.Local.FailureWindowSeconds < 0 {
 		return fmt.Errorf("%w: auth.local.maxFailures / failureWindowSeconds 不能是负数", ErrInvalidConfig)
+	}
+	// Worker-side datasource tools: enabled but incomplete is a startup error, not "silently one
+	// tool fewer". See DataSources.
+	if err := c.DataSources.validate(); err != nil {
+		return err
+	}
+	if err := c.OpenViking.validate(); err != nil {
+		return err
+	}
+	if err := c.CUA.validate(); err != nil {
+		return err
+	}
+	if err := c.Seedance.validate(); err != nil {
+		return err
+	}
+	return c.Docker.validateDataMounts()
+}
+
+// validateDataMounts rejects data mounts the daemon would only refuse at the first tool call (a
+// relative path), or that would silently hide the workspace (a target on or around workdir).
+func (d Docker) validateDataMounts() error {
+	workdir := strings.TrimSpace(d.Workdir)
+	if workdir == "" {
+		workdir = "/workspace"
+	}
+	workdir = path.Clean(workdir)
+	for i, m := range d.DataMounts {
+		src, dst := strings.TrimSpace(m.Source), strings.TrimSpace(m.Target)
+		if !path.IsAbs(src) || !path.IsAbs(dst) {
+			return fmt.Errorf("%w: docker.dataMounts[%d] 的 source / target 都要是绝对路径（source=%q target=%q）",
+				ErrInvalidConfig, i, src, dst)
+		}
+		dst = path.Clean(dst)
+		if dst == "/" || dst == workdir || strings.HasPrefix(workdir, dst+"/") || strings.HasPrefix(dst, workdir+"/") {
+			return fmt.Errorf("%w: docker.dataMounts[%d].target %q 和工作目录 %q 重叠，会盖住工作区",
+				ErrInvalidConfig, i, dst, workdir)
+		}
 	}
 	return nil
 }

@@ -700,6 +700,42 @@ func TestDockerDefaultsAndParsing(t *testing.T) {
 	}
 }
 
+// docker.runtime / capDrop / dataMounts: parsed from YAML, readOnly defaults to true, and bad
+// mounts fail loading instead of failing at the first tool call.
+func TestDockerHardeningAndDataMounts(t *testing.T) {
+	cfg, err := Parse([]byte(minimalYAML + `
+docker:
+  runtime: runsc
+  capDrop: [ALL]
+  dataMounts:
+    - {source: /mnt/ebs/marketing, target: /data/marketing}
+    - {source: /mnt/ebs/out, target: /data/out, readOnly: false}
+`))
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	d := cfg.Docker
+	if d.Runtime != "runsc" || len(d.CapDrop) != 1 || d.CapDrop[0] != "ALL" {
+		t.Errorf("runtime / capDrop 解析不对: %+v", d)
+	}
+	if len(d.DataMounts) != 2 || !d.DataMounts[0].ReadOnlyOrDefault() || d.DataMounts[1].ReadOnlyOrDefault() {
+		t.Errorf("dataMounts 解析不对（readOnly 默认要是 true）: %+v", d.DataMounts)
+	}
+
+	for _, bad := range []string{
+		"{source: relative/dir, target: /data}",
+		"{source: /mnt/ebs, target: data}",
+		"{source: /mnt/ebs, target: /workspace}",
+		"{source: /mnt/ebs, target: /workspace/data}",
+		"{source: /mnt/ebs, target: /}",
+	} {
+		_, err := Parse([]byte(minimalYAML + "\ndocker:\n  dataMounts: [" + bad + "]\n"))
+		if !errors.Is(err, ErrInvalidConfig) {
+			t.Errorf("%s 应当被拒，实际 err=%v", bad, err)
+		}
+	}
+}
+
 // s3 section: the two nullable booleans default to true when empty, environment variables can
 // override them, and secrets are not trimmed.
 func TestS3DefaultsAndEnv(t *testing.T) {
