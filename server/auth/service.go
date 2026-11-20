@@ -125,6 +125,7 @@ type Config struct {
 
 // Service is the business entry point of this module. Safe to share between goroutines.
 type Service struct {
+	*APIKeyManager
 	store      Store
 	local      LocalConfig
 	apiKey     APIKey
@@ -185,7 +186,7 @@ func New(cfg Config) (*Service, error) {
 		display = "SSO"
 	}
 
-	return &Service{
+	result := &Service{
 		store:               cfg.Store,
 		local:               cfg.Local.withDefaults(),
 		apiKey:              key,
@@ -200,7 +201,11 @@ func New(cfg Config) (*Service, error) {
 		onLogin:             cfg.OnLogin,
 		bcryptCost:          defaultBcryptCost,
 		now:                 time.Now,
-	}, nil
+	}
+	result.APIKeyManager = &APIKeyManager{
+		store: cfg.Store, managedKeySecret: result.managedKeySecret, log: result.log, now: func() time.Time { return result.now() },
+	}
+	return result, nil
 }
 
 // APIKeyEnabled reports whether the fixed API Key channel is enabled. cmd/amad uses it to decide

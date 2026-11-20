@@ -163,7 +163,7 @@ func deriveManagedKey(secret string, subj ManagedKeySubject) string {
 // The wiring code uses it to decide whether to wire this feature, and to state the consequence
 // in the startup log. Same purpose as cryptobox.Enabled(): the two modes look the same in
 // behavior, and only the log tells operators which mode is active.
-func (s *Service) ManagedKeyEnabled() bool {
+func (s *APIKeyManager) ManagedKeyEnabled() bool {
 	return strings.TrimSpace(s.managedKeySecret) != ""
 }
 
@@ -184,7 +184,7 @@ func (s *Service) ManagedKeyEnabled() bool {
 // finds no row, and creates one again; the plain text is still the same string. This is the
 // required behavior (revoke → created again automatically at the next injection), but see "Revoking
 // means reset, not rotate" in the file header for its limit.
-func (s *Service) EnsureManagedAPIKey(
+func (s *APIKeyManager) EnsureManagedAPIKey(
 	ctx context.Context, subj ManagedKeySubject,
 ) (string, error) {
 	secret := strings.TrimSpace(s.managedKeySecret)
@@ -269,7 +269,7 @@ func managedKeyPrefix(plaintext string) string {
 // card is an HTTP response; plain text in the response ends up in the browser, in logs, in
 // screenshots, and it is a long-lived credential. Being able to compute it does not mean it
 // should be handed out.
-func (s *Service) ManagedAPIKeyRecord(
+func (s *APIKeyManager) ManagedAPIKeyRecord(
 	ctx context.Context, subj ManagedKeySubject,
 ) (UserAPIKey, error) {
 	secret := strings.TrimSpace(s.managedKeySecret)
@@ -294,7 +294,7 @@ func (s *Service) ManagedAPIKeyRecord(
 // added**: with two paths, each one's "you can only delete your own" would drift on its own.
 //
 // After a revoke, the next injection creates the same key again; see the file header.
-func (s *Service) RevokeManagedAPIKey(ctx context.Context, subj ManagedKeySubject) error {
+func (s *APIKeyManager) RevokeManagedAPIKey(ctx context.Context, subj ManagedKeySubject) error {
 	secret := strings.TrimSpace(s.managedKeySecret)
 	if secret == "" {
 		return ErrManagedKeyUnavailable
@@ -317,7 +317,7 @@ func (s *Service) RevokeManagedAPIKey(ctx context.Context, subj ManagedKeySubjec
 // **The adapter lives in auth, not in core**: the shape of the method signatures is decided by
 // types here (UserAPIKey / ErrNotFound both belong to this package); putting it on the other side
 // would make core guess the meaning of things here.
-func (s *Service) ManagedKeysFor() ManagedKeyOps { return managedKeyOps{svc: s} }
+func (s *APIKeyManager) ManagedKeysFor() ManagedKeyOps { return managedKeyOps{svc: s} }
 
 // ManagedKeyOps is the set of operations ManagedKeysFor returns.
 //
@@ -335,7 +335,7 @@ type ManagedKeyOps interface {
 	Enabled() bool
 }
 
-type managedKeyOps struct{ svc *Service }
+type managedKeyOps struct{ svc *APIKeyManager }
 
 func (o managedKeyOps) Record(ctx context.Context, email string) (UserAPIKey, error) {
 	return o.svc.ManagedAPIKeyRecord(ctx, ManagedKeySubject{Email: email})
@@ -348,6 +348,6 @@ func (o managedKeyOps) Enabled() bool { return o.svc.ManagedKeyEnabled() }
 // core.ManagedKeyIssuer only needs "give an email, get the plain text". Making it build a
 // ManagedKeySubject would leak the internal shape from here to there: when a field is added to the
 // id later, core would have to change too, although it does not care about that at all.
-func (s *Service) EnsureManagedKey(ctx context.Context, email string) (string, error) {
+func (s *APIKeyManager) EnsureManagedKey(ctx context.Context, email string) (string, error) {
 	return s.EnsureManagedAPIKey(ctx, ManagedKeySubject{Email: email})
 }

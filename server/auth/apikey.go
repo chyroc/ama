@@ -206,7 +206,7 @@ func looksLikeAPIKey(cred string) bool {
 // CreateAPIKey creates a key for email and returns the result **with the plain text**.
 //
 // The plain text exists only in this return value; Service keeps no copy.
-func (s *Service) CreateAPIKey(ctx context.Context, email, name string) (CreatedAPIKey, error) {
+func (s *APIKeyManager) CreateAPIKey(ctx context.Context, email, name string) (CreatedAPIKey, error) {
 	owner := normalizeEmail(email)
 	if owner == "" {
 		return CreatedAPIKey{}, fmt.Errorf("%w: email 不能为空", ErrInvalidArgument)
@@ -257,7 +257,7 @@ const apiKeyNameMaxLen = 128
 // ListAPIKeys lists all keys of one person, newest first by creation time.
 //
 // **It never returns the plain text**, and never returns other people's keys.
-func (s *Service) ListAPIKeys(ctx context.Context, email string) ([]UserAPIKey, error) {
+func (s *APIKeyManager) ListAPIKeys(ctx context.Context, email string) ([]UserAPIKey, error) {
 	owner := normalizeEmail(email)
 	if owner == "" {
 		return nil, fmt.Errorf("%w: email 不能为空", ErrInvalidArgument)
@@ -281,7 +281,7 @@ func (s *Service) ListAPIKeys(ctx context.Context, email string) ([]UserAPIKey, 
 // is returned instead of a permission error. Answering "access denied" would confirm "this id
 // exists", which is an unnecessary leak of information.
 // For the caller both cases are handled the same way too (this key is not yours).
-func (s *Service) RevokeAPIKey(ctx context.Context, email, id string) error {
+func (s *APIKeyManager) RevokeAPIKey(ctx context.Context, email, id string) error {
 	owner := normalizeEmail(email)
 	if owner == "" {
 		return fmt.Errorf("%w: email 不能为空", ErrInvalidArgument)
