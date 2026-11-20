@@ -78,6 +78,23 @@ func NewRouteTable(declarations []Route) (*RouteTable, error) {
 	return t, nil
 }
 
+// WithoutBuiltins marks optional built-in modules that a downstream distribution does not
+// install. It changes only registration requirements, never permissions: if a caller registers
+// one of these routes later, its original authorization level is still enforced. Unknown routes
+// are rejected so a typo cannot turn into a silently incomplete Guard.
+func (t *RouteTable) WithoutBuiltins(patterns ...string) error {
+	if t == nil {
+		return fmt.Errorf("authz: route table is nil")
+	}
+	for _, pattern := range patterns {
+		if _, ok := routePermissions[pattern]; !ok {
+			return fmt.Errorf("authz: optional built-in route %q does not exist", pattern)
+		}
+		t.optional[pattern] = true
+	}
+	return nil
+}
+
 func (t *RouteTable) permission(pattern string) (permission, bool) {
 	if t == nil {
 		return permission{}, false

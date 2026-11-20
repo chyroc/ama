@@ -94,6 +94,24 @@ func TestGuardEnforcesDownstreamRouteAndVerifiesRegistration(t *testing.T) {
 	}
 }
 
+func TestWithoutBuiltinsSkipsInstallationButNeverWeakensPermission(t *testing.T) {
+	table, err := NewRouteTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const pattern = "GET /api/workspaces/{workspaceId}/weixin/accounts"
+	if err := table.WithoutBuiltins(pattern); err != nil {
+		t.Fatal(err)
+	}
+	perm, ok := table.permission(pattern)
+	if !ok || perm.action != ActionRead || !table.optionalRoute(pattern) {
+		t.Fatalf("optional module lost its permission: %+v, %v", perm, ok)
+	}
+	if err := table.WithoutBuiltins("GET /api/not-a-built-in"); err == nil {
+		t.Fatal("unknown built-in route must be rejected")
+	}
+}
+
 func TestGuardVerifyChecksOptionalDownstreamRoute(t *testing.T) {
 	table, err := NewRouteTable([]Route{{
 		Method: http.MethodGet, Pattern: "/api/workspaces/{workspaceId}/optional", Action: ActionRead, Optional: true,
