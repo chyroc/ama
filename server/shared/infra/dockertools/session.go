@@ -389,6 +389,11 @@ func (p *Provider) containerConfig(arkSessionID, volume string) docker.Container
 		// The container runs commands the agent generated; at least do not let them escalate
 		// privileges inside it.
 		SecurityOpt: []string{"no-new-privileges"},
+		Runtime:     strings.TrimSpace(p.cfg.Runtime),
+		CapDrop:     p.cfg.CapDrop,
+	}
+	for _, m := range p.cfg.DataMounts {
+		hc.Mounts = append(hc.Mounts, docker.Mount{Type: "bind", Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
 	}
 	if p.cfg.CPUs > 0 {
 		hc.NanoCPUs = int64(p.cfg.CPUs * 1e9)

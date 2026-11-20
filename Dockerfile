@@ -29,7 +29,11 @@ RUN go build -trimpath -ldflags='-s -w' -o /out/amad ./cmd/amad
 
 # ---- 3. Runtime ----
 FROM debian:bookworm-slim
-RUN apt-get update \
+# Optional Debian mirror for slow networks, for example https://mirrors.volces.com (Volcengine).
+# Empty keeps deb.debian.org.
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then sed -i "s#http://deb.debian.org#${APT_MIRROR}#g" /etc/apt/sources.list.d/debian.sources; fi \
+ && apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates tzdata \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=server /out/amad /usr/local/bin/amad

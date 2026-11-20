@@ -37,6 +37,9 @@ docker build -t ama-sandbox:latest -f sandbox-image/Dockerfile .
 | `docker.memory` | `AMA_DOCKER_MEMORY` | 不限 | 如 `2g`；写错启动失败 |
 | `docker.pidsLimit` | `AMA_DOCKER_PIDS_LIMIT` | 不限 | 进程数上限 |
 | `docker.network` | `AMA_DOCKER_NETWORK` | daemon 默认（bridge） | `none` 彻底断网 |
+| `docker.runtime` | `AMA_DOCKER_RUNTIME` | daemon 默认（runc） | `runsc`（gVisor）：每个会话一个用户态内核，大机器多会话时用；要先在 daemon.json 注册 |
+| `docker.capDrop` | — | Docker 默认 | 如 `[ALL]`；会让容器里 apt install / chown 失败 |
+| `docker.dataMounts` | — | 无 | 把宿主机目录（如 EBS 上的业务数据）bind 进每个会话容器，`readOnly` 默认 `true`，`target` 不能和工作目录重叠 |
 | `docker.idleAction` | `AMA_DOCKER_IDLE_ACTION` | `pause` | `pause` / `stop` / `none` |
 | `docker.containerTTL` | `AMA_DOCKER_CONTAINER_TTL` | `24h` | 闲置多久删容器（volume 保留），`0s` 不删 |
 | `docker.workspaceTTL` | `AMA_DOCKER_WORKSPACE_TTL` | `168h` | 闲置多久删工作区 volume，`0s` 不删 |
@@ -68,11 +71,15 @@ docker build -t ama-sandbox:latest -f sandbox-image/Dockerfile .
    `_debug` 开发路由（`server.devRoutes`）。
 2. **会话容器拿不到 socket**——amad 不会把它挂给会话容器，agent 的命令碰不到 daemon。
    但会话容器与宿主机**共享内核**，容器隔离不是虚拟机隔离：内核漏洞就是逃逸面。
-   会话容器默认开了 `no-new-privileges`，没有 `--privileged`，也不挂任何宿主机目录。
+   会话容器默认开了 `no-new-privileges`，没有 `--privileged`，除了 `docker.dataMounts`
+   显式配的目录外不挂任何宿主机目录。`dataMounts` 是所有会话共享的，默认只读，别改成可写，
+   除非真要会话之间共享写入。
 3. 要更强的隔离，任选其一或叠加：
    - 把 `docker.host` 指向**一台专门跑会话容器的机器**（与 amad、数据库分开）；
    - daemon 开 `userns-remap` 或用 rootless Docker（容器里的 root 映射成宿主机普通用户）；
-   - 用 gVisor（`runsc`）/ Kata 之类的运行时当 daemon 默认运行时；
+   - 用 gVisor（`docker.runtime: runsc`）/ Kata 之类的运行时，每个会话不再共享宿主机内核
+     （在火山 ECS 上的完整步骤见 [volcengine-ecs.md](volcengine-ecs.md)）；
+   - `docker.capDrop: [ALL]` 去掉容器里 root 的 capability；
    - `docker.network: none` 断网，或接一个只放行必要出口的网络；
    - `docker.cpus` / `docker.memory` / `docker.pidsLimit` 限住单个会话能吃多少资源。
 4. agent 能读到注入进容器的凭据（`env` 一句就够），工具输出出口会把它们抹掉，但这挡不住

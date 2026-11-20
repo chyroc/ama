@@ -3,6 +3,7 @@ package dockertools
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -78,6 +79,39 @@ func TestFirstExecCreatesContainerLazily(t *testing.T) {
 	run(t, s, "echo again")
 	if eng.creates != 1 || sk.calls != 1 {
 		t.Errorf("容器只该建一次（实际 %d）、技能只注一次（实际 %d）", eng.creates, sk.calls)
+	}
+}
+
+// Runtime / CapDrop / DataMounts reach the container's HostConfig; data mounts come after the
+// workspace volume, and leaving them unset changes nothing.
+func TestContainerHardeningAndDataMounts(t *testing.T) {
+	p, eng, _, _ := newTestProvider(t, Config{
+		Runtime: "runsc",
+		CapDrop: []string{"ALL"},
+		DataMounts: []DataMount{
+			{Source: "/mnt/ebs/marketing", Target: "/data/marketing", ReadOnly: true},
+			{Source: "/mnt/ebs/out", Target: "/data/out"},
+		},
+	})
+	run(t, p.session("sesn-h"), "true")
+	hc := eng.containers["ama-sess-sesn-h"].cfg.HostConfig
+	if hc.Runtime != "runsc" || len(hc.CapDrop) != 1 || hc.CapDrop[0] != "ALL" {
+		t.Errorf("runtime / capDrop 没带上: %+v", hc)
+	}
+	want := []docker.Mount{
+		{Type: "volume", Source: "ama-ws-sesn-h", Target: DefaultWorkdir},
+		{Type: "bind", Source: "/mnt/ebs/marketing", Target: "/data/marketing", ReadOnly: true},
+		{Type: "bind", Source: "/mnt/ebs/out", Target: "/data/out"},
+	}
+	if !reflect.DeepEqual(hc.Mounts, want) {
+		t.Errorf("mounts = %+v，要 %+v", hc.Mounts, want)
+	}
+
+	p2, eng2, _, _ := newTestProvider(t, Config{})
+	run(t, p2.session("sesn-d"), "true")
+	hc = eng2.containers["ama-sess-sesn-d"].cfg.HostConfig
+	if hc.Runtime != "" || hc.CapDrop != nil || len(hc.Mounts) != 1 {
+		t.Errorf("不配时不该多出 runtime / capDrop / 挂载: %+v", hc)
 	}
 }
 

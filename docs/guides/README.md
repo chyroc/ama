@@ -13,6 +13,7 @@
 | [i18n.md](i18n.md) | 增删界面文案 |
 | [infra.md](infra.md) | 碰 `server/shared/infra/` 的外部接入层 |
 | [docker-executor.md](docker-executor.md) | 部署 / 配置 Docker 执行端（会话容器），以及 docker.sock 的安全问题 |
+| [volcengine-ecs.md](volcengine-ecs.md) | 在一台大火山 ECS 上跑多会话（gVisor 隔离 + EBS 业务数据只读挂载） |
 | [host-executor.md](host-executor.md) | 碰「自带机器」执行端（`ama daemon`、`service/host`） |
 | [environment.md](environment.md) | 装依赖、跑构建、找凭据、排查「本机跑不起来」 |
 

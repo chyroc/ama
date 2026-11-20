@@ -99,6 +99,8 @@ Common environment variables:
 | `AMA_AUTH_OIDC_*` / `AMA_AUTH_ADMINS` | OIDC login / platform admins |
 | `AMA_AUTH_GITHUB_*` | GitHub login (device flow), see below |
 | `AMA_DOCKER_HOST` / `AMA_DOCKER_IMAGE` / `AMA_DOCKER_NETWORK` / `AMA_DOCKER_IDLE_ACTION` / `AMA_DOCKER_MEMORY` / `AMA_DOCKER_CPUS` | Docker executor |
+| `AMA_DATA_MYSQL_ENABLED` / `AMA_DATA_MYSQL_HOST` / `AMA_DATA_MYSQL_PORT` / `AMA_DATA_MYSQL_DATABASE` / `AMA_DATA_MYSQL_USER` / `AMA_DATA_MYSQL_PASSWORD` / `AMA_DATA_MYSQL_MAX_ROWS` / `AMA_DATA_MYSQL_TIMEOUT` | Worker-side `query_sql` tool: read-only MySQL datasource (credentials stay in the amad process). Compose needs these passed through explicitly; see [server/shared/infra/datasources/README.md](../server/shared/infra/datasources/README.md) |
+| `AMA_DATA_TOS_ENABLED` / `AMA_DATA_TOS_ENDPOINT` / `AMA_DATA_TOS_REGION` / `AMA_DATA_TOS_BUCKET` / `AMA_DATA_TOS_PREFIX` / `AMA_DATA_TOS_ACCESS_KEY` / `AMA_DATA_TOS_SECRET_KEY` / `AMA_DATA_TOS_MAX_BYTES` / `AMA_DATA_TOS_TIMEOUT` / `AMA_DATA_TOS_USE_PATH_STYLE` | Worker-side `read_object` tool: read-only text objects under one TOS prefix |
 
 ### OIDC login
 

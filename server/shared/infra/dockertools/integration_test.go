@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -225,6 +226,52 @@ func TestRealDockerTimeoutKillsProcess(t *testing.T) {
 	}
 	if !strings.Contains(check.Stdout, "count=0") {
 		t.Errorf("超时的进程应当已经被杀掉，实际: %q %q", check.Stdout, check.Stderr)
+	}
+}
+
+// Data mounts and capDrop reach a real container: the read-only mount can be read but not
+// written, the writable one lands on the host, and capDrop ALL leaves no effective capabilities
+// (so even root cannot chown).
+func TestRealDockerDataMountsAndCapDrop(t *testing.T) {
+	ro, rw := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(ro, "leads.csv"), []byte("id,channel\n1,search\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := realProvider(t, Config{CapDrop: []string{"ALL"}, DataMounts: []DataMount{
+		{Source: ro, Target: "/data/ro", ReadOnly: true},
+		{Source: rw, Target: "/data/rw"},
+	}})
+	s := p.session("sesn-it-3")
+	ctx := context.Background()
+	run := func(cmd string) string {
+		t.Helper()
+		res, err := s.Exec(ctx, shellSpec(cmd, 30*time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Stdout + res.Stderr
+	}
+
+	if out := run("cat /data/ro/leads.csv"); !strings.Contains(out, "1,search") {
+		t.Errorf("只读挂载应当可读，输出: %s", out)
+	}
+	if out := run("touch /data/ro/x && echo WROTE || echo DENIED"); !strings.Contains(out, "DENIED") {
+		t.Errorf("只读挂载不应当可写，输出: %s", out)
+	}
+	if _, err := os.Stat(filepath.Join(ro, "x")); err == nil {
+		t.Error("只读挂载的宿主机目录里出现了容器写入的文件")
+	}
+
+	run("echo report > /data/rw/out.txt")
+	if b, err := os.ReadFile(filepath.Join(rw, "out.txt")); err != nil || strings.TrimSpace(string(b)) != "report" {
+		t.Errorf("可写挂载应当落到宿主机，实际 %q %v", b, err)
+	}
+
+	if out := run("grep CapEff /proc/self/status"); !strings.Contains(out, "0000000000000000") {
+		t.Errorf("capDrop ALL 之后不应当还有有效 capability，输出: %s", out)
+	}
+	if out := run("touch c && chown 1:1 c && echo CHOWNED || echo DENIED"); !strings.Contains(out, "DENIED") {
+		t.Errorf("capDrop ALL 之后 chown 应当失败，输出: %s", out)
 	}
 }
 

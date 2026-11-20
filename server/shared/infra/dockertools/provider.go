@@ -121,6 +121,16 @@ type Config struct {
 	// Network is the container network mode (bridge / none / custom network name); empty uses the
 	// daemon default.
 	Network string
+	// Runtime is the OCI runtime for session containers (for example runsc, i.e. gVisor, so that
+	// sessions on one big host do not share the host kernel). Empty uses the daemon default.
+	Runtime string
+	// CapDrop lists Linux capabilities dropped from session containers (for example ALL). Empty
+	// keeps the Docker default set.
+	CapDrop []string
+	// DataMounts are host directories bind-mounted into every session container, for shared
+	// business data (for example a directory on an EBS disk). They are not per-session: every
+	// session sees the same files, so mount them read-only unless sessions really must write.
+	DataMounts []DataMount
 	// IdleAction is what to do with the container when a turn goes idle: pause / stop / none.
 	IdleAction string
 	// ContainerTTL is how long without activity before the reaper removes the container (the volume
@@ -131,6 +141,16 @@ type Config struct {
 	WorkspaceTTL time.Duration
 	// ReapInterval is the reaper interval.
 	ReapInterval time.Duration
+}
+
+// DataMount is one host directory bind-mounted into session containers.
+type DataMount struct {
+	// Source is the absolute path on the Docker host (not on the amad host, if they differ).
+	Source string
+	// Target is the absolute path inside the container; it must not overlap Workdir.
+	Target string
+	// ReadOnly mounts the directory read-only.
+	ReadOnly bool
 }
 
 // Defaults.

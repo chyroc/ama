@@ -93,6 +93,15 @@ type fakeEngine struct {
 	calls   []string
 	stdin   bytes.Buffer
 	execEnv []string
+	// server is the daemon's API version without the v; empty means 1.44.
+	server string
+}
+
+func (f *fakeEngine) apiVersion() string {
+	if f.server == "" {
+		return "1.44"
+	}
+	return f.server
 }
 
 func (f *fakeEngine) record(r *http.Request) {
@@ -103,11 +112,20 @@ func (f *fakeEngine) record(r *http.Request) {
 
 func (f *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.record(r)
-	if !strings.HasPrefix(r.URL.Path, "/v1.41/") {
+	// /_ping is unversioned, like on a real daemon; it advertises the server's API version.
+	if r.URL.Path == "/_ping" {
+		w.Header().Set("Api-Version", f.apiVersion())
+		_, _ = w.Write([]byte("OK"))
+		return
+	}
+	// Like a real daemon, accept any version up to its own.
+	rest := strings.TrimPrefix(r.URL.Path, "/")
+	version, path, ok := strings.Cut(rest, "/")
+	path = "/" + path
+	if !ok || !strings.HasPrefix(version, "v") || versionLess("v"+f.apiVersion(), version) {
 		http.Error(w, `{"message":"bad version"}`, http.StatusBadRequest)
 		return
 	}
-	path := strings.TrimPrefix(r.URL.Path, "/v1.41")
 	writeJSON := func(code int, v any) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
@@ -200,6 +218,41 @@ func newTestClient(t *testing.T) (*Client, *fakeEngine) {
 		t.Fatalf("New: %v", err)
 	}
 	return c, fe
+}
+
+// Ping negotiates the path version: an older daemon lowers it, a newer one keeps the client's
+// ceiling, and a pinned version is never changed.
+func TestPingNegotiatesAPIVersion(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		server, pinned, want string
+	}{
+		{server: "1.41", want: "v1.41"},
+		{server: "1.52", want: DefaultAPIVersion},
+		{server: "1.9", want: "v1.9"},
+		{server: "1.52", pinned: "1.45", want: "v1.45"},
+		{server: "1.41", pinned: "1.45", want: "v1.45"},
+	}
+	for _, tc := range cases {
+		fe := &fakeEngine{t: t, server: tc.server}
+		srv := httptest.NewServer(fe)
+		c, err := New(Config{Host: srv.URL, APIVersion: tc.pinned})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if err := c.Ping(ctx); err != nil {
+			t.Fatalf("server %s: Ping: %v", tc.server, err)
+		}
+		if got := c.APIVersion(); got != tc.want {
+			t.Errorf("server %s pinned %q: 版本 = %s，要 %s", tc.server, tc.pinned, got, tc.want)
+		}
+		// A version the daemon speaks works; a pinned one that is too new gets the daemon's error.
+		_, err = c.Info(ctx)
+		if tooNew := versionLess("v"+tc.server, tc.want); tooNew != (err != nil) {
+			t.Errorf("server %s pinned %q: Info err = %v", tc.server, tc.pinned, err)
+		}
+		srv.Close()
+	}
 }
 
 func TestClientBasics(t *testing.T) {

@@ -17,8 +17,10 @@
 //
 // # API version
 //
-// Every request has the `/v1.41` prefix (supported since Docker 20.10). Newer daemons stay
-// backward compatible with this version; older daemons answer "client version too new", and that error is passed through as is.
+// Every request has a `/v1.xx` prefix. Without an explicit Config.APIVersion the client negotiates
+// on Ping, like the docker CLI: it uses the lower of DefaultAPIVersion and the daemon's
+// Api-Version header. Docker 29 rejects anything below 1.44, while Docker 20.10 only speaks 1.41,
+// so a fixed version cannot serve both. Before Ping, DefaultAPIVersion is used.
 package docker
 
 import (
@@ -33,32 +35,35 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 // DefaultHost is the address used when DOCKER_HOST is not set.
 const DefaultHost = "unix:///var/run/docker.sock"
 
-// DefaultAPIVersion is the API version in the request path.
-const DefaultAPIVersion = "v1.41"
+// DefaultAPIVersion is the highest API version the client asks for (the minimum Docker 29 accepts).
+const DefaultAPIVersion = "v1.44"
 
 // Config is the client configuration.
 type Config struct {
 	// Host is the daemon address, like unix:///var/run/docker.sock, tcp://127.0.0.1:2375,
 	// http://127.0.0.1:2375. If empty, the DOCKER_HOST env var is used, then DefaultHost.
 	Host string
-	// APIVersion defaults to DefaultAPIVersion when empty.
+	// APIVersion pins the version and turns off negotiation. Empty negotiates on Ping.
 	APIVersion string
 }
 
 // Client is a Docker Engine API client. It is safe for concurrent use.
 type Client struct {
-	hc      *http.Client
-	base    string // like http://docker or http://127.0.0.1:2375
-	version string
-	host    string // the original Host, only used in logs and errors
-	dial    func(ctx context.Context) (net.Conn, error)
+	hc        *http.Client
+	base      string       // like http://docker or http://127.0.0.1:2375
+	version   atomic.Value // string like v1.44; Ping may lower it
+	negotiate bool
+	host      string // the original Host, only used in logs and errors
+	dial      func(ctx context.Context) (net.Conn, error)
 }
 
 // New creates a client. It does not touch the network; call Ping to find out if it can connect.
@@ -71,7 +76,8 @@ func New(cfg Config) (*Client, error) {
 		host = DefaultHost
 	}
 	version := strings.TrimSpace(cfg.APIVersion)
-	if version == "" {
+	negotiate := version == ""
+	if negotiate {
 		version = DefaultAPIVersion
 	}
 	if !strings.HasPrefix(version, "v") {
@@ -83,7 +89,8 @@ func New(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("docker: 解析地址 %q 失败: %w", host, err)
 	}
 
-	c := &Client{version: version, host: host}
+	c := &Client{negotiate: negotiate, host: host}
+	c.version.Store(version)
 	var dialer net.Dialer
 	switch u.Scheme {
 	case "unix":
@@ -154,7 +161,7 @@ func statusIs(err error, code int) bool {
 // ---------------------------------------------------------------------------
 
 func (c *Client) url(path string, q url.Values) string {
-	u := c.base + "/" + c.version + path
+	u := c.base + "/" + c.version.Load().(string) + path
 	if len(q) > 0 {
 		u += "?" + q.Encode()
 	}
@@ -232,14 +239,55 @@ func (c *Client) doJSON(
 // System
 // ---------------------------------------------------------------------------
 
-// Ping checks that the daemon is reachable.
+// Ping checks that the daemon is reachable and, unless the version is pinned, negotiates the API
+// version. It calls the unversioned /_ping, which every daemon serves whatever its version range.
 func (c *Client) Ping(ctx context.Context) error {
-	resp, err := c.do(ctx, "ping", http.MethodGet, "/_ping", nil, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/_ping", nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("docker: ping 构造请求失败: %w", err)
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("docker: ping 请求失败（daemon=%s）: %w", c.host, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return readAPIError("ping", resp)
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
-	return resp.Body.Close()
+	if server := strings.TrimSpace(resp.Header.Get("Api-Version")); c.negotiate && server != "" {
+		if !strings.HasPrefix(server, "v") {
+			server = "v" + server
+		}
+		if versionLess(server, DefaultAPIVersion) {
+			c.version.Store(server)
+		} else {
+			c.version.Store(DefaultAPIVersion)
+		}
+	}
+	return nil
+}
+
+// APIVersion returns the version in the request path (for logs).
+func (c *Client) APIVersion() string { return c.version.Load().(string) }
+
+// versionLess compares versions like v1.41 numerically, so v1.9 < v1.41.
+func versionLess(a, b string) bool {
+	pa := strings.Split(strings.TrimPrefix(a, "v"), ".")
+	pb := strings.Split(strings.TrimPrefix(b, "v"), ".")
+	for i := 0; i < len(pa) || i < len(pb); i++ {
+		var x, y int
+		if i < len(pa) {
+			x, _ = strconv.Atoi(pa[i])
+		}
+		if i < len(pb) {
+			y, _ = strconv.Atoi(pb[i])
+		}
+		if x != y {
+			return x < y
+		}
+	}
+	return false
 }
 
 // SystemInfo holds the fields of GET /info that we use.

@@ -22,7 +22,11 @@ RUN go build -trimpath -ldflags='-s -w' -o /out/ama ./cmd/ama-cli
 
 # ---- 2. Runtime ----
 FROM debian:bookworm-slim
-RUN apt-get update \
+# Optional Debian mirror for slow networks, for example https://mirrors.volces.com (Volcengine).
+# Empty keeps deb.debian.org.
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then sed -i "s#http://deb.debian.org#${APT_MIRROR}#g" /etc/apt/sources.list.d/debian.sources; fi \
+ && apt-get update \
  && apt-get install -y --no-install-recommends \
       bash coreutils findutils grep sed gawk procps less \
       ca-certificates curl wget git openssh-client \

@@ -28,7 +28,7 @@ type ContainerConfig struct {
 
 // HostConfig is the HostConfig section of ContainerCreate.
 type HostConfig struct {
-	// Mounts are the mounts (we only use type=volume).
+	// Mounts are the mounts: the workspace volume, plus optional host directories (type=bind).
 	Mounts []Mount `json:"Mounts,omitempty"`
 	// NetworkMode is bridge / none / host / a custom network name. Empty uses the daemon default (bridge).
 	NetworkMode string `json:"NetworkMode,omitempty"`
@@ -44,13 +44,17 @@ type HostConfig struct {
 	// starts again, instead of the daemon restarting it and wasting resources.
 	SecurityOpt []string `json:"SecurityOpt,omitempty"`
 	CapDrop     []string `json:"CapDrop,omitempty"`
+	// Runtime is the OCI runtime registered with the daemon (for example runsc for gVisor). Empty
+	// uses the daemon default (runc).
+	Runtime string `json:"Runtime,omitempty"`
 }
 
 // Mount is one mount.
 type Mount struct {
-	Type   string `json:"Type"` // volume / bind / tmpfs
-	Source string `json:"Source"`
-	Target string `json:"Target"`
+	Type     string `json:"Type"` // volume / bind / tmpfs
+	Source   string `json:"Source"`
+	Target   string `json:"Target"`
+	ReadOnly bool   `json:"ReadOnly,omitempty"`
 }
 
 // ContainerState is the State section of inspect.

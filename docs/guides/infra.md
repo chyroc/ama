@@ -11,6 +11,7 @@
 | `shared/infra/dockertools/` | 默认执行端：每个方舟会话一个容器 | `server/shared/infra/dockertools/README.md` |
 | `shared/infra/shelltools/` | 六个 agent 工具本身（与执行端无关） | 包注释 |
 | `shared/infra/pg/` | PostgreSQL：托管实例 / 本地容器 | `server/shared/infra/pg/README.md` |
+| `shared/infra/datasources/` | worker 侧数据源工具（`query_sql` 只读 MySQL / `read_object` 读 TOS 前缀）；**凭证只在 amad 进程里，不进会话容器** | `server/shared/infra/datasources/README.md` |
 
 本地凭据放仓库根的 `.env`（已 gitignore），跑 example 前
 `set -a; source .env; set +a`。详见 [environment.md](environment.md)。
