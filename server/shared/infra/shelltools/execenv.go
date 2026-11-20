@@ -85,6 +85,16 @@ var (
 	reservedEnvNames = map[string]bool{}
 )
 
+// RegisterReservedEnv marks a downstream platform-owned variable name during process wiring.
+// Registrations are additive and cannot be removed: a later module must not make a previously
+// protected identity variable writable by agents. Call this before serving configuration writes;
+// do not wait for the first execution that happens to inject the value.
+func RegisterReservedEnv(key string) {
+	if key = strings.TrimSpace(key); key != "" {
+		markReservedEnv(key)
+	}
+}
+
 func markReservedEnv(key string) {
 	envNamesMu.Lock()
 	defer envNamesMu.Unlock()
