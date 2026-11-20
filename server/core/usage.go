@@ -47,7 +47,7 @@ import (
 //
 // Read-only: never write aggregated results or derived fields back via SaveRun. That would
 // freeze derived values into doc, with no symptom at all.
-func (s *Service) WorkspaceUsage(ctx context.Context, workspaceID string, q persistmodel.UsageQuery) (UsageSummary, error) {
+func (s *UsageService) WorkspaceUsage(ctx context.Context, workspaceID string, q persistmodel.UsageQuery) (UsageSummary, error) {
 	runs, err := s.store.ListRunsForUsage(ctx, workspaceID, q)
 	if err != nil {
 		return UsageSummary{}, err
@@ -60,7 +60,7 @@ func (s *Service) WorkspaceUsage(ctx context.Context, workspaceID string, q pers
 	if err != nil {
 		// fail-open: a DB hiccup should not look like "all your agents were deleted". The only
 		// cost is one missing marker.
-		s.log().Warn("列 agent 失败，用量看板暂不标记已删除", "workspace", workspaceID, "error", err.Error())
+		s.log.Warn("列 agent 失败，用量看板暂不标记已删除", "workspace", workspaceID, "error", err.Error())
 		alive = nil
 	} else {
 		for _, a := range agents {
