@@ -46,15 +46,53 @@ export interface HarnessFact {
   note?: string;
 }
 
+export interface OpenVikingMemoryItem {
+  uri: string;
+  type: string;
+  score: string;
+  detail: string;
+  content: string;
+}
+
 export interface ParsedHarnessBlock {
-  /** The block's namespace, e.g. `lark`. Empty string when not recognized. */
+  /** The block's namespace, e.g. `lark` or `openviking`. Empty string when not recognized. */
   kind: string;
   /** Facts one by one, in the original order. */
   facts: HarnessFact[];
   /** The static guidance for the model after the facts (including history commands and safety notes), tags removed. */
   guidance: string;
+  /** Structured OpenViking recalled memory entries when kind === "openviking". */
+  memories: OpenVikingMemoryItem[];
   /** Full text without the outer tags, for "view raw". */
   raw: string;
+}
+
+/** Matches `<memory ...>...</memory>` inside `<harness:openviking>`. */
+const MEMORY_TAG_RE = /<memory(?:\s+([^>]*))?>([\s\S]*?)<\/memory>/gi;
+const ATTR_RE = /([a-z0-9_-]+)="([^"]*)"/gi;
+
+function parseOpenVikingMemories(body: string): OpenVikingMemoryItem[] {
+  const items: OpenVikingMemoryItem[] = [];
+  let match: RegExpExecArray | null;
+  MEMORY_TAG_RE.lastIndex = 0;
+  while ((match = MEMORY_TAG_RE.exec(body)) !== null) {
+    const attrText = match[1] ?? "";
+    const content = (match[2] ?? "").trim();
+    const attrs: Record<string, string> = {};
+    let attrMatch: RegExpExecArray | null;
+    ATTR_RE.lastIndex = 0;
+    while ((attrMatch = ATTR_RE.exec(attrText)) !== null) {
+      attrs[attrMatch[1].toLowerCase()] = attrMatch[2];
+    }
+    items.push({
+      uri: attrs.uri ?? "",
+      type: attrs.type ?? "memory",
+      score: attrs.score ?? "",
+      detail: attrs.detail ?? "",
+      content,
+    });
+  }
+  return items;
 }
 
 /** Matches the `<harness:xxx>` opening tag and captures the namespace. */
@@ -93,6 +131,22 @@ export function parseHarnessBlock(block: string): ParsedHarnessBlock {
   }
   body = body.trim();
 
+  if (kind === "openviking") {
+    const memories = parseOpenVikingMemories(body);
+    MEMORY_TAG_RE.lastIndex = 0;
+    const remainingGuidance = body
+      .replace(MEMORY_TAG_RE, "")
+      .trim()
+      .replace(/^##\s+/gm, "### ");
+    return {
+      kind,
+      facts: [],
+      guidance: memories.length > 0 ? remainingGuidance : "",
+      memories,
+      raw: body,
+    };
+  }
+
   const lines = body.split("\n");
   const facts: HarnessFact[] = [];
   let guidanceStart = lines.length;
@@ -130,6 +184,7 @@ export function parseHarnessBlock(block: string): ParsedHarnessBlock {
       .join("\n")
       .trim()
       .replace(/^##\s+/gm, "### "),
+    memories: [],
     raw: body,
   };
 }

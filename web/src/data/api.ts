@@ -336,6 +336,25 @@ export interface AuthUser {
   employeeId?: string;
   /** true means this is a machine identity that came in via the fixed API Key, not a person who scanned to log in. */
   viaApiKey?: boolean;
+  /**
+   * Whether this user is a platform admin (may create login accounts for others). Comes from the
+   * `platformAdmin` field next to `user` in `/api/auth/me`; only a UI hint, the backend checks again.
+   */
+  platformAdmin?: boolean;
+}
+
+/** Optional starter prompt configured on the server (`ui.starterPrompts`). */
+export interface UIStarterPrompt {
+  label: string;
+  prompt: string;
+}
+
+/** Optional UI branding overrides returned by `GET /api/auth/providers`. */
+export interface UIBranding {
+  brandName?: string;
+  brandBadge?: string;
+  title?: string;
+  starterPrompts?: UIStarterPrompt[];
 }
 
 /** Shape of `GET /api/auth/providers`: which login methods this deployment has enabled. */
@@ -365,6 +384,8 @@ export interface AuthProviders {
   };
   /** Whether the fixed API Key channel is configured (for CI / scripts; no need to show it in the UI). */
   apiKeyEnabled: boolean;
+  /** Optional deployment-level UI branding and starter prompts (`ui.*`). */
+  ui?: UIBranding;
 }
 
 /**
@@ -427,6 +448,15 @@ export interface ApiClient {
    * password must be 8–72 bytes), `invalid_argument` (400), `local_disabled` (404).
    */
   signup(input: { email: string; password: string; name?: string }): Promise<AuthUser>;
+
+  /**
+   * A platform admin creates a local login account for someone (`POST /api/admin/users`). **Does
+   * not log in** as them.
+   *
+   * ApiError.code on failure: `access_denied` (403), `email_taken` (409), `weak_password` (400),
+   * `local_disabled` (404), `invalid_argument` (400).
+   */
+  createLocalUser(input: { email: string; password: string; name?: string }): Promise<AuthUser>;
 
   /**
    * Start GitHub device flow login. ApiError.code on failure: `github_disabled` (404),
@@ -4055,6 +4085,7 @@ class LocalApiClient implements ApiClient {
     return {
       email: MOCK_USER.email,
       name: MOCK_USER.name,
+      platformAdmin: true,
       // With no avatar, **omit the key entirely**, like the backend: Identity.AvatarURL has
       // omitempty, so with an empty value the key does not exist in the JSON at all. An empty string
       // would give the frontend a shape the backend never produces.
@@ -4085,6 +4116,14 @@ class LocalApiClient implements ApiClient {
     }
     this.completeLogin();
     return delay(this.mockAuthUser());
+  }
+
+  /** The mock stores no accounts: same password rule as signup, otherwise success. */
+  createLocalUser(input: { email: string; password: string; name?: string }): Promise<AuthUser> {
+    if (new TextEncoder().encode(input.password).length < 8) {
+      return Promise.reject(new ApiError("密码至少 8 位", "weak_password", 400, mockLogID()));
+    }
+    return delay({ email: input.email, name: input.name || input.email.split("@")[0] });
   }
 
   logout(): Promise<void> {
@@ -4322,6 +4361,20 @@ class LocalApiClient implements ApiClient {
   updateAgent(id: string, patch: Partial<AgentDraft>): Promise<Agent> {
     const agent = this.store.agents.find((a) => a.id === id);
     if (!agent) return Promise.reject(new Error("Agent 不存在"));
+    /*
+     * "Which harness" is **write-once**, matching the server: CreateAgent accepts baseAgent, UpdateAgent
+     * rejects a changed value with 400. The mock must do the same, because LocalApiClient is the
+     * frontend's behavior reference (see the integration gate below).
+     *
+     * The check is **"did the value change", not "was it sent"**, exactly like integrationIds: the
+     * frontend PATCHes the complete draft, so toAgentDraft always sends the current baseAgent back,
+     * and sending the same value must stay a no-op rather than a rejected edit.
+     */
+    if (patch.baseAgent !== undefined && patch.baseAgent !== (agent.baseAgent ?? "")) {
+      return Promise.reject(
+        new ApiError("基础 Agent 类型创建后不可修改", "invalid_argument", 400, mockLogID()),
+      );
+    }
     if (patch.feishuAppIds) {
       // Exclude itself: otherwise the most common save, "only change the name, send the bindings
       // back unchanged", would be blocked by its own existing bindings. The frontend sends the full
@@ -4392,6 +4445,16 @@ class LocalApiClient implements ApiClient {
       // snapshot, and putting it back on rollback would be a silent change in meaning.
       followUp: followUpOrDefault(agent.followUp),
       progressDetail: progressDetailOrDefault(agent.progressDetail),
+      // Also in the snapshot: it is write-once, so before and after are always the same value and a
+      // rollback sends it back unchanged (identical is allowed, see the baseAgent guard above).
+      // Missing it here would not corrupt anything today, but "the snapshot is the complete draft"
+      // is the rule the fields above are here for.
+      baseAgent: agent.baseAgent ?? "",
+      // The long-term-memory opt-in is editable, so it really does need rolling back. It is also
+      // assigned unconditionally by the server on update, which makes "the snapshot must carry it"
+      // a correctness rule rather than tidiness: a rollback with the key missing would silently
+      // switch memory off (the opposite of restoring).
+      openVikingEnabled: agent.openVikingEnabled ?? false,
     } satisfies AgentDraft);
     Object.assign(agent, patch);
     // Ark bumps version on every update; mirror that behavior here
@@ -8190,7 +8253,7 @@ class LocalApiClient implements ApiClient {
 
     this.emit(runId, { kind: "event", event: structuredClone(event) });
     // Running only starts after the user message is stored; replay is asynchronous (the real backend works the same way).
-    this.startReplay(runId, threadId);
+    this.startReplay(runId, threadId, body);
 
     return delay(structuredClone(event));
   }
@@ -8408,8 +8471,9 @@ class LocalApiClient implements ApiClient {
    * different times, and an interval would pile up). flushConversation() can run the remaining
    * steps at once; that is what lets e2e avoid sleeping to wait for animations.
    */
-  private startReplay(runId: string, threadId: string | null): void {
+  private startReplay(runId: string, threadId: string | null, userText?: string): void {
     stopReplay(runId);
+    const isCuaRequest = Boolean(userText && /cua|云电脑|云桌面/i.test(userText));
 
     const steps: (() => void)[] = [];
     const stages: (ReplayStage | undefined)[] = [];
@@ -8445,6 +8509,9 @@ class LocalApiClient implements ApiClient {
     // at that moment the streaming thinking panel is on the page with its full text. See the
     // heldStage comment.
     const thinkingId = `sevt-${nextId("t").slice(2)}`;
+    const thinkingChunks = isCuaRequest
+      ? ["正在调用云电脑（CUA）技能 ", "`ark-cua`", " 获取云桌面实例访问链接与实时画面..."]
+      : THINKING_CHUNKS;
     push(() => {
       this.emit(runId, {
         kind: "event_start",
@@ -8453,7 +8520,7 @@ class LocalApiClient implements ApiClient {
         session_thread_id: threadId,
       });
     }, "thinking");
-    for (const chunk of THINKING_CHUNKS) {
+    for (const chunk of thinkingChunks) {
       push(
         () => this.emit(runId, { kind: "event_delta", id: thinkingId, text: chunk }),
         "thinking",
@@ -8465,13 +8532,33 @@ class LocalApiClient implements ApiClient {
         type: "agent.thinking",
         processed_at: nowIso(),
         session_thread_id: threadId,
-        content: [{ type: "text", text: THINKING_CHUNKS.join("") }],
+        content: [{ type: "text", text: thinkingChunks.join("") }],
       });
       this.emit(runId, { kind: "event", event: structuredClone(e) });
     });
 
     // Tool call: a paired use + result, so the chat page's tool entry has something to render.
     const toolUseId = `tool_${nextId("k").slice(2)}`;
+    const origin =
+      typeof window !== "undefined" && window.location?.origin
+        ? window.location.origin
+        : "http://127.0.0.1:5273";
+    const cuaResultJson = JSON.stringify(
+      {
+        ok: true,
+        action: "desktop access",
+        data: {
+          desktop_id: "desk_local_preview_01",
+          task_id: "tsk_local_preview_01",
+          outcome: "completed",
+          access_url: `${origin}/cua-preview.html?view=desktop`,
+          desktop_view_url: `${origin}/cua-preview.html?view=desktop&ticket=tk_local_preview`,
+          full_interface_url: `${origin}/cua-preview.html?view=full&ticket=tk_local_preview`,
+        },
+      },
+      null,
+      2,
+    );
     push(() => {
       const e = this.appendEvent(runId, {
         id: `sevt-${nextId("a").slice(2)}`,
@@ -8479,8 +8566,12 @@ class LocalApiClient implements ApiClient {
         processed_at: nowIso(),
         session_thread_id: threadId,
         tool_use_id: toolUseId,
-        name: "grep",
-        input: JSON.stringify({ pattern: "TODO", path: "src/" }),
+        name: isCuaRequest ? "bash" : "grep",
+        input: isCuaRequest
+          ? JSON.stringify({
+              command: "python3 ./skills/ark-cua/scripts/cua.py desktop access",
+            })
+          : JSON.stringify({ pattern: "TODO", path: "src/" }),
         evaluated_permission: "allow",
       });
       this.emit(runId, { kind: "event", event: structuredClone(e) });
@@ -8493,7 +8584,10 @@ class LocalApiClient implements ApiClient {
         session_thread_id: threadId,
         tool_use_id: toolUseId,
         content: [
-          { type: "text", text: "src/data/api.ts:118  // TODO 换成 HttpApiClient" },
+          {
+            type: "text",
+            text: isCuaRequest ? cuaResultJson : "src/data/api.ts:118  // TODO 换成 HttpApiClient",
+          },
         ],
       });
       this.emit(runId, { kind: "event", event: structuredClone(e) });
@@ -8501,7 +8595,12 @@ class LocalApiClient implements ApiClient {
 
     // Character-by-character reply: event_start opens a draft, event_delta appends piece by piece, and the final event settles it.
     const replyId = `sevt-${nextId("m").slice(2)}`;
-    const chunks = REPLY_CHUNKS;
+    const chunks = isCuaRequest
+      ? [
+          "已启动云电脑实例（`desk_local_preview_01`），",
+          "并在下方卡片中嵌入了实时桌面界面。您可以直接在页面内查看或切换到右侧分屏。",
+        ]
+      : REPLY_CHUNKS;
     push(() => {
       this.emit(runId, {
         kind: "event_start",

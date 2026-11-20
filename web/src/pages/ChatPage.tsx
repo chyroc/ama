@@ -70,9 +70,12 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { Button } from "@heroui/react";
+import { Button, Tooltip } from "@heroui/react";
+import { Icon } from "@iconify/react";
 import { api } from "@/data/api";
+import { useAppShellLayout } from "@/app/AppShell";
 import { useWorkspace } from "@/app/WorkspaceGate";
+import { useUIBranding } from "@/lib/useUIBranding";
 import { ChatComposer } from "@/components/ChatComposer";
 import {
   ChatSessionsSidebar,
@@ -83,8 +86,10 @@ import { SendQueueList } from "@/components/SendQueueList";
 import { RawEventList } from "@/components/RawEventList";
 import { TracePanel } from "@/components/TracePanel";
 import { SandboxPanel } from "@/components/SandboxPanel";
+import { CuaDesktopPanel } from "@/components/CuaDesktopPanel";
 import { TimelineToolbar, type ToolbarCounts } from "@/components/TimelineToolbar";
-import { ViewSwitch, useRunView } from "@/components/ViewSwitch";
+import { ViewSwitch, useRunView, type RunView } from "@/components/ViewSwitch";
+import { extractCuaSessions } from "@/lib/cua";
 import {
   AgentDeletedChip,
   AgentDisabledChip,
@@ -121,7 +126,7 @@ import {
 import { useCanManage } from "@/lib/useCanManage";
 import { useT } from "@/prefs/PrefsContext";
 import type { RunEventType } from "@/types/events";
-import type { Agent, Run, RunTrigger } from "@/types/domain";
+import { isCodexAgent, type Agent, type Run, type RunTrigger } from "@/types/domain";
 
 /**
  * Which Runs the left conversation list takes.
@@ -432,10 +437,72 @@ export function ChatPage() {
     if (activeRun) setAgentId(activeRun.agentId);
   }, [activeRun]);
 
+  const selectedAgent = useMemo(
+    () => agents?.find((a) => a.id === agentId) ?? null,
+    [agents, agentId],
+  );
   const agentName = useMemo(() => {
     if (activeRun) return activeRun.agentName;
-    return agents?.find((a) => a.id === agentId)?.name ?? "";
-  }, [activeRun, agents, agentId]);
+    return selectedAgent?.name ?? "";
+  }, [activeRun, selectedAgent]);
+
+  /*
+   * A Codex agent's tools run in **Ark's cloud sandbox**: AMA never starts a container for that
+   * conversation, so the files and terminal views (which read this run's AMA sandbox) have nothing
+   * to show and clicking them can only fail. Both entries are hidden, and a stale `?view=files`
+   * link falls back to the conversation instead of rendering a panel that can only error.
+   *
+   * Keyed on the **saved agent**. While the agent list is still loading `selectedAgent` is null and
+   * this is false, which is the safe direction: the panels are simply visible for a moment, and
+   * there is no way to know the type before the list arrives. When no agent object can be found at
+   * all (deleted agent, stale ?agent=) this stays false too — same rule, nothing to judge.
+   */
+  const codexAgent = isCodexAgent(selectedAgent?.baseAgent);
+  const shownView: RunView =
+    codexAgent && (view === "files" || view === "terminal" || view === "cua")
+      ? "conversation"
+      : view;
+
+  const uiBranding = useUIBranding();
+  const starterPrompts = uiBranding?.starterPrompts ?? [];
+
+  const { navCollapsed, setNavCollapsed, toggleNavCollapsed } = useAppShellLayout();
+  const [sessionsCollapsed, setSessionsCollapsedState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("ama:chat-sessions-collapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const setSessionsCollapsed = useCallback((next: boolean) => {
+    setSessionsCollapsedState(next);
+    try {
+      localStorage.setItem("ama:chat-sessions-collapsed", next ? "1" : "0");
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+  const toggleSessionsCollapsed = useCallback(() => {
+    setSessionsCollapsedState((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("ama:chat-sessions-collapsed", next ? "1" : "0");
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  }, []);
+  const isFocusMode = navCollapsed && sessionsCollapsed;
+  const toggleFocusMode = useCallback(() => {
+    if (navCollapsed && sessionsCollapsed) {
+      setNavCollapsed(false);
+      setSessionsCollapsed(false);
+    } else {
+      setNavCollapsed(true);
+      setSessionsCollapsed(true);
+    }
+  }, [navCollapsed, sessionsCollapsed, setNavCollapsed, setSessionsCollapsed]);
 
   /**
    * This conversation is frozen: view only, no sending. Two causes: the linked agent was
@@ -461,6 +528,66 @@ export function ChatPage() {
     () => buildTimeline(stream.events, t),
     [stream.events, t],
   );
+  const cuaSessions = useMemo(
+    () => extractCuaSessions(stream.events),
+    [stream.events],
+  );
+  const latestTurnInfo = useMemo(() => {
+    let lastUserIdx = -1;
+    let lastUserId: string | null = null;
+    for (let i = stream.events.length - 1; i >= 0; i--) {
+      if (stream.events[i].type === "user.message") {
+        lastUserIdx = i;
+        lastUserId = stream.events[i].id;
+        break;
+      }
+    }
+    const tail = lastUserIdx >= 0 ? stream.events.slice(lastUserIdx) : stream.events;
+    return { hasCua: extractCuaSessions(tail).length > 0, lastUserId };
+  }, [stream.events]);
+  const latestTurnHasCua = latestTurnInfo.hasCua;
+  const [splitCuaDesktopId, setSplitCuaDesktopId] = useState<string | null>(null);
+  const [cuaSplitWide, setCuaSplitWide] = useState(false);
+  const dismissedCuaKeyRef = useRef<string | null>(null);
+  const manualSplitCuaRef = useRef(false);
+  const preSplitSessionsCollapsedRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    setSplitCuaDesktopId(null);
+    dismissedCuaKeyRef.current = null;
+    manualSplitCuaRef.current = false;
+    preSplitSessionsCollapsedRef.current = null;
+  }, [runId]);
+  useEffect(() => {
+    if (latestTurnInfo.lastUserId) {
+      manualSplitCuaRef.current = false;
+    }
+  }, [latestTurnInfo.lastUserId]);
+  const primaryCua = cuaSessions[0];
+  const primaryCuaKey = primaryCua ? `${primaryCua.desktopId}:${primaryCua.seq}` : null;
+  const cuaActiveNow =
+    (stream.streaming && latestTurnHasCua) || primaryCua?.outcome === "needs_human";
+  useEffect(() => {
+    if (!primaryCua || !primaryCuaKey) return;
+    if (cuaActiveNow) {
+      if (dismissedCuaKeyRef.current === primaryCuaKey) return;
+      setSplitCuaDesktopId((prev) => prev ?? primaryCua.desktopId);
+    } else if (!manualSplitCuaRef.current) {
+      setSplitCuaDesktopId(null);
+    }
+  }, [primaryCua, primaryCuaKey, cuaActiveNow]);
+  // Automatically collapse the session list when CUA split pane opens so the conversation + cloud desktop split has room,
+  // and restore the user's previous sidebar preference once the split pane closes.
+  useEffect(() => {
+    if (splitCuaDesktopId && cuaSessions.length > 0) {
+      if (preSplitSessionsCollapsedRef.current === null) {
+        preSplitSessionsCollapsedRef.current = sessionsCollapsed;
+      }
+      setSessionsCollapsedState(true);
+    } else if (preSplitSessionsCollapsedRef.current !== null) {
+      setSessionsCollapsedState(preSplitSessionsCollapsedRef.current);
+      preSplitSessionsCollapsedRef.current = null;
+    }
+  }, [splitCuaDesktopId, cuaSessions.length, sessionsCollapsed]);
   /*
    * What the event view needs: **skip buildTimeline and use the raw events directly**, one per
    * row, nothing merged.
@@ -858,6 +985,8 @@ export function ChatPage() {
       activeRunId={runId ?? null}
       onSelect={(id) => navigate(`/w/${workspace.key}/chat/${id}`)}
       onNew={() => navigate(`/w/${workspace.key}/chat`)}
+      collapsed={sessionsCollapsed}
+      onToggleCollapse={toggleSessionsCollapsed}
     />
   );
 
@@ -867,7 +996,63 @@ export function ChatPage() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Conversation title bar: only context and the entry to run detail, no repeated app-level info. */}
-        <div className="flex items-center gap-3 border-b border-border px-4 py-3">
+        <div className="flex items-center gap-2.5 border-b border-border px-4 py-3">
+          {navCollapsed ? (
+            <Tooltip>
+              <Tooltip.Trigger>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  isIconOnly
+                  className="hidden shrink-0 text-muted hover:text-foreground md:inline-flex"
+                  aria-label={t("nav.expandSidebar")}
+                  onPress={toggleNavCollapsed}
+                  data-testid="chat-expand-app-nav"
+                >
+                  <Icon icon="gravity-ui:layout-side-content-left" className="size-4" />
+                </Button>
+              </Tooltip.Trigger>
+              <Tooltip.Content>{t("nav.expandSidebarShortcut")}</Tooltip.Content>
+            </Tooltip>
+          ) : null}
+
+          {sessionsCollapsed ? (
+            <div className="hidden items-center gap-1 lg:flex">
+              <Tooltip>
+                <Tooltip.Trigger>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    isIconOnly
+                    className="shrink-0 text-muted hover:text-foreground"
+                    aria-label={t("chat.expandSessions")}
+                    onPress={toggleSessionsCollapsed}
+                    data-testid="chat-sessions-expand"
+                  >
+                    <Icon icon="gravity-ui:layout-columns" className="size-4" />
+                  </Button>
+                </Tooltip.Trigger>
+                <Tooltip.Content>{t("chat.expandSessions")}</Tooltip.Content>
+              </Tooltip>
+              <Tooltip>
+                <Tooltip.Trigger>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    isIconOnly
+                    className="shrink-0 text-muted hover:text-foreground"
+                    aria-label={t("chat.new")}
+                    onPress={() => navigate(`/w/${workspace.key}/chat`)}
+                    data-testid="chat-new"
+                  >
+                    <Icon icon="gravity-ui:plus" className="size-4" />
+                  </Button>
+                </Tooltip.Trigger>
+                <Tooltip.Content>{t("chat.new")}</Tooltip.Content>
+              </Tooltip>
+            </div>
+          ) : null}
+
           <ChatSessionsTrigger
             conversations={conversations}
             activeRunId={runId ?? null}
@@ -893,21 +1078,55 @@ export function ChatPage() {
               </span>
             ) : null}
           </div>
-          {runId ? (
-            <div className="ml-auto flex shrink-0 items-center gap-3">
-              <ViewSwitch view={view} onChange={setView} />
-              <Link
-                to={`/w/${workspace.key}/runs/${runId}`}
-                className="text-xs text-muted no-underline hover:text-foreground"
-              >
-                {t("chat.viewRun")}
-              </Link>
-            </div>
-          ) : null}
+          <div className="ml-auto flex shrink-0 items-center gap-2.5">
+            <Tooltip>
+              <Tooltip.Trigger>
+                <Button
+                  variant={isFocusMode ? "secondary" : "ghost"}
+                  size="sm"
+                  className="hidden h-7 gap-1 px-2 text-xs text-muted hover:text-foreground md:inline-flex"
+                  onPress={toggleFocusMode}
+                  data-testid="chat-focus-mode-toggle"
+                >
+                  <Icon
+                    icon={
+                      isFocusMode
+                        ? "gravity-ui:chevrons-collapse-up-right"
+                        : "gravity-ui:chevrons-expand-up-right"
+                    }
+                    className="size-3.5"
+                  />
+                  <span className="hidden xl:inline">
+                    {isFocusMode ? t("chat.focusExit") : t("chat.focusEnter")}
+                  </span>
+                </Button>
+              </Tooltip.Trigger>
+              <Tooltip.Content>
+                {isFocusMode ? t("chat.focusExitHint") : t("chat.focusEnterHint")}
+              </Tooltip.Content>
+            </Tooltip>
+            {runId ? (
+              <>
+                <ViewSwitch
+                  view={shownView}
+                  onChange={setView}
+                  hasCua={cuaSessions.length > 0}
+                  /* Codex: no AMA container/terminal exists for this conversation (see codexAgent). */
+                  hideSandbox={codexAgent}
+                />
+                <Link
+                  to={`/w/${workspace.key}/runs/${runId}`}
+                  className="text-xs text-muted no-underline hover:text-foreground"
+                >
+                  {t("chat.viewRun")}
+                </Link>
+              </>
+            ) : null}
+          </div>
         </div>
 
         {runId ? (
-          view === "events" ? (
+          shownView === "events" ? (
             // The event view is its own scroll area (the chat page is a fixed-height layout as a
             // whole, unlike the run detail page's page-level scrolling).
             // Wide screens show list + detail in two columns, so it widens to max-w-6xl here (the
@@ -938,22 +1157,92 @@ export function ChatPage() {
                 />
               </div>
             </div>
-          ) : view === "trace" ? (
+          ) : shownView === "trace" ? (
             /* The call tree is its own view, no longer hung at the end of the event view (see the comment on ViewSwitch).
                This layer is the scroll area (the chat page is fixed height as a whole, unlike the run detail page's page-level scrolling),
                and the panel has no scroll wrapper of its own, so this layer carries it (see the comment on TracePanel).
                Use allItems rather than eventRows: the call tree should not be affected by the event view's filter. */
             <div className="flex-1 overflow-y-auto px-4 pt-4 pb-6">
-              <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+              <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
                 <TracePanel items={allItems} />
               </div>
             </div>
-          ) : view === "files" || view === "terminal" ? (
+          ) : shownView === "files" || shownView === "terminal" ? (
             /* Files and terminal share one panel. Same scrolling arrangement as the call tree:
                this layer is the scroll area, and the panel has no wrapper of its own. */
             <div className="flex-1 overflow-y-auto px-4 pt-4 pb-6">
-              <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
-                <SandboxPanel runId={runId} mode={view} hostId={activeRun?.hostId} />
+              <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
+                <SandboxPanel runId={runId} mode={shownView} hostId={activeRun?.hostId} />
+              </div>
+            </div>
+          ) : shownView === "cua" ? (
+            /* Cloud computer (CUA) view: renders the live CUA desktop stream in the main viewport while keeping the composer below. */
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-4 pb-4">
+              <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col">
+                <CuaDesktopPanel sessions={cuaSessions} />
+              </div>
+            </div>
+          ) : splitCuaDesktopId && cuaSessions.length > 0 ? (
+            /* Side-by-side split view: conversation stream on the left, live CUA desktop on the right. */
+            <div className="flex min-h-0 flex-1 overflow-hidden">
+              <div className="flex min-w-0 flex-1 flex-col">
+                <ChatStream
+                  events={stream.events}
+                  draft={stream.draft}
+                  thinkingDraft={stream.thinkingDraft}
+                  thinking={stream.thinking}
+                  agentName={agentName}
+                  wide={navCollapsed || sessionsCollapsed}
+                  onOpenCuaDesktop={(desktopId) => {
+                    manualSplitCuaRef.current = true;
+                    setSplitCuaDesktopId(desktopId);
+                  }}
+                />
+              </div>
+              <div
+                className={[
+                  "relative hidden min-w-[420px] flex-col border-l border-border bg-surface p-3 transition-[width] duration-200 lg:flex",
+                  cuaSplitWide ? "w-[62%] max-w-[70%]" : "w-1/2 max-w-[60%]",
+                ].join(" ")}
+              >
+                <div className="mb-1.5 flex items-center justify-between px-1">
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-muted">
+                    <Icon icon="gravity-ui:display" className="size-3.5 text-accent" />
+                    <span>{t("chat.cuaSplitTitle")}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setCuaSplitWide((v) => !v)}
+                    className="inline-flex items-center gap-1 r-row px-2 py-0.5 text-xs text-muted hover:bg-surface-secondary hover:text-foreground"
+                    data-testid="chat-cua-split-resize"
+                  >
+                    <Icon
+                      icon={
+                        cuaSplitWide
+                          ? "gravity-ui:chevrons-right"
+                          : "gravity-ui:chevrons-left"
+                      }
+                      className="size-3.5"
+                    />
+                    <span>
+                      {cuaSplitWide ? t("chat.cuaSplitStandard") : t("chat.cuaSplitWide")}
+                    </span>
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1">
+                  <CuaDesktopPanel
+                    sessions={cuaSessions}
+                    selectedDesktopId={splitCuaDesktopId}
+                    onClose={() => {
+                      if (primaryCuaKey) {
+                        dismissedCuaKeyRef.current = primaryCuaKey;
+                      }
+                      manualSplitCuaRef.current = false;
+                      setSplitCuaDesktopId(null);
+                    }}
+                    compact
+                  />
+                </div>
               </div>
             </div>
           ) : (
@@ -963,15 +1252,54 @@ export function ChatPage() {
               thinkingDraft={stream.thinkingDraft}
               thinking={stream.thinking}
               agentName={agentName}
+              wide={navCollapsed || sessionsCollapsed}
+              onOpenCuaDesktop={(desktopId) => {
+                manualSplitCuaRef.current = true;
+                setSplitCuaDesktopId(desktopId);
+              }}
             />
           )
         ) : (
-          <div className="flex flex-1 items-center justify-center px-4">
-            <Empty
-              icon="gravity-ui:comments"
-              title={t("chat.pickAgentTitle")}
-              description={t("chat.pickAgentDesc")}
-            />
+          <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8">
+            <div className="mx-auto flex w-full max-w-2xl flex-col items-center gap-6">
+              <Empty
+                icon="gravity-ui:comments"
+                title={t("chat.pickAgentTitle")}
+                description={t("chat.pickAgentDesc")}
+              />
+              {selectedAgent && starterPrompts.length > 0 ? (
+                <div className="w-full space-y-3" data-testid="chat-starter-prompts">
+                  <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                    {starterPrompts.map((item) => (
+                      <button
+                        key={item.label}
+                        type="button"
+                        onClick={() =>
+                          setRefill((prev) => ({
+                            text: item.prompt,
+                            token: (prev?.token ?? 0) + 1,
+                          }))
+                        }
+                        className="group flex flex-col items-start gap-1 r-container border border-border bg-surface p-3.5 text-left transition-all hover:border-accent/50 hover:bg-surface-secondary/60 hover:shadow-2xs"
+                      >
+                        <div className="flex w-full items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-foreground">
+                            {item.label}
+                          </span>
+                          <Icon
+                            icon="gravity-ui:arrow-up-right"
+                            className="size-3.5 text-muted opacity-0 transition-opacity group-hover:opacity-100"
+                          />
+                        </div>
+                        <p className="clamp-2 text-xs leading-relaxed text-muted">
+                          {item.prompt}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </div>
         )}
 
@@ -1113,7 +1441,7 @@ export function ChatPage() {
             There is already a real terminal waiting for the keyboard; another "say something…" below would make people unsure
             whether what they type goes to the agent or into the container, and the two have very different consequences.
             Same for the files view: it is read-only browsing, with nothing to send. */}
-        {view !== "terminal" && view !== "files" && (
+        {shownView !== "terminal" && shownView !== "files" && (
           <ChatComposer
             agents={agents}
             agentId={agentId}
@@ -1128,6 +1456,7 @@ export function ChatPage() {
             isDisabled={frozen || arkBlocked}
             agentFallbackName={agentName}
             refill={refill}
+            wide={navCollapsed || sessionsCollapsed}
           />
         )}
       </div>

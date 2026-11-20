@@ -14,11 +14,24 @@
  * for the reason see the top of RunTimeline.tsx and docs/guides/heroui.md. Tool results are still <pre>.
  */
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { useParams } from "react-router-dom";
 import { Chip, Disclosure } from "@heroui/react";
 import { ChainOfThought, ChatLoader, ChatMessage } from "@/components/ui/Chat";
 import { Icon } from "@iconify/react";
 import { MarkdownMessage } from "@/components/MarkdownMessage";
+import { CuaDesktopPanel } from "@/components/CuaDesktopPanel";
+import {
+  extractCuaSessionsFromTimelineItems,
+  stripCuaUrlNoise,
+  toEmbeddableCuaUrl,
+  type CuaDesktopSession,
+} from "@/lib/cua";
+import {
+  buildSeedancePlayableUrls,
+  extractSeedanceTasksFromTimelineItems,
+  type SeedanceVideoTask,
+} from "@/lib/seedance";
 import { parseHarnessBlock } from "@/lib/harnessBlock";
 import {
   groupTurns,
@@ -31,6 +44,7 @@ import {
 import { formatDuration } from "@/lib/format";
 import type { RunEventType } from "@/types/events";
 import { useT, type TFunc } from "@/prefs/PrefsContext";
+import type { MessageKey } from "@/prefs/messages";
 
 /**
  * At most how many steps of the in-progress part are shown in full.
@@ -148,9 +162,91 @@ function isSubstantive(item: TimelineItem): boolean {
  * - **If no facts can be parsed, show the full text as is**: the block format is built by the backend, and with each side changed once it drifts,
  *   and if the drift showed as "nothing after expanding", that would be much worse than ugly.
  */
+const MEMORY_TYPE_KEYS: Record<string, MessageKey> = {
+  preference: "tl.memoryType.preference",
+  profile: "tl.memoryType.profile",
+  entity: "tl.memoryType.entity",
+  event: "tl.memoryType.event",
+  case: "tl.memoryType.case",
+  pattern: "tl.memoryType.pattern",
+};
+
+function fallbackCopyText(text: string): boolean {
+  if (typeof document === "undefined") return false;
+  try {
+    const el = document.createElement("textarea");
+    el.value = text;
+    el.style.position = "fixed";
+    el.style.opacity = "0";
+    document.body.appendChild(el);
+    el.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(el);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function CopyMessageButton({ text, className = "" }: { text: string; className?: string }) {
+  const t = useT();
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+      }
+    };
+  }, []);
+
+  if (!text) return null;
+
+  const markCopied = () => {
+    setCopied(true);
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+    }
+    timerRef.current = setTimeout(() => setCopied(false), 1800);
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+          navigator.clipboard
+            .writeText(text)
+            .then(markCopied)
+            .catch(() => {
+              if (fallbackCopyText(text)) markCopied();
+            });
+        } else if (fallbackCopyText(text)) {
+          markCopied();
+        }
+      }}
+      className={[
+        "inline-flex items-center gap-1 r-row px-1.5 py-0.5 text-xs text-muted transition-colors hover:bg-surface-secondary hover:text-foreground",
+        className,
+      ].join(" ")}
+      aria-label={copied ? t("chat.copied") : t("chat.copyMessage")}
+      data-testid="chat-copy-message"
+    >
+      <Icon icon={copied ? "gravity-ui:check" : "gravity-ui:copy"} className="size-3.5" />
+      <span>{copied ? t("chat.copied") : t("chat.copy")}</span>
+    </button>
+  );
+}
+
 function InjectedContext({ blocks }: { blocks?: string[] }) {
   const t = useT();
   if (!blocks?.length) return null;
+
+  const totalMemories = blocks.reduce(
+    (sum, b) => sum + parseHarnessBlock(b).memories.length,
+    0,
+  );
 
   return (
     <Disclosure>
@@ -162,8 +258,16 @@ function InjectedContext({ blocks }: { blocks?: string[] }) {
           <Disclosure.Indicator>
             <Icon icon="gravity-ui:chevron-right" className="size-3" />
           </Disclosure.Indicator>
-          <Icon icon="gravity-ui:gear" className="size-3.5" />
+          <Icon
+            icon={totalMemories > 0 ? "gravity-ui:database" : "gravity-ui:gear"}
+            className="size-3.5"
+          />
           <span className="font-medium">{t("tl.injectedContext")}</span>
+          {totalMemories > 0 ? (
+            <Chip size="sm" color="accent" variant="soft">
+              <Chip.Label>{t("tl.recalledMemories", { count: totalMemories })}</Chip.Label>
+            </Chip>
+          ) : null}
         </Disclosure.Trigger>
       </Disclosure.Heading>
       <Disclosure.Content>
@@ -187,8 +291,8 @@ function InjectedBlock({ block }: { block: string }) {
   const t = useT();
   const parsed = parseHarnessBlock(block);
 
-  // No facts parsed → show as is; do not hide the content (see the comment on InjectedContext).
-  if (parsed.facts.length === 0) {
+  // No facts or memories parsed → show as is; do not hide the content (see the comment on InjectedContext).
+  if (parsed.facts.length === 0 && parsed.memories.length === 0) {
     return (
       <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-muted">
         {parsed.raw}
@@ -206,7 +310,7 @@ function InjectedBlock({ block }: { block: string }) {
         <p className="text-xs text-muted">
           {t("tl.injectedFrom")}
           <Chip size="sm" variant="soft" className="ml-1.5 align-middle">
-            {parsed.kind}
+            {parsed.kind === "openviking" ? t("tl.injectedOpenViking") : parsed.kind}
           </Chip>
         </p>
       ) : null}
@@ -216,21 +320,62 @@ function InjectedBlock({ block }: { block: string }) {
         values can be selected and copied on their own: nine times out of ten users expand this block to grab some id to look up.
         Values use tabular-nums + font-mono: a hex string only lines up in monospace.
       */}
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-        {parsed.facts.map((f) => (
-          <Fragment key={f.key}>
-            <dt className="font-mono text-muted">{f.key}</dt>
-            <dd className="min-w-0 break-all font-mono text-foreground tabular-nums">
-              {f.value}
-              {f.note ? (
-                // The note is **not part of the value**: calling an API with `om_xxx (this very message)` will not work,
-                // and users copy what they see on screen. So it is pushed to a secondary color, and not monospace.
-                <span className="ml-1.5 font-sans text-muted">{f.note}</span>
-              ) : null}
-            </dd>
-          </Fragment>
-        ))}
-      </dl>
+      {parsed.facts.length > 0 ? (
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+          {parsed.facts.map((f) => (
+            <Fragment key={f.key}>
+              <dt className="font-mono text-muted">{f.key}</dt>
+              <dd className="min-w-0 break-all font-mono text-foreground tabular-nums">
+                {f.value}
+                {f.note ? (
+                  // The note is **not part of the value**: calling an API with `om_xxx (this very message)` will not work,
+                  // and users copy what they see on screen. So it is pushed to a secondary color, and not monospace.
+                  <span className="ml-1.5 font-sans text-muted">{f.note}</span>
+                ) : null}
+              </dd>
+            </Fragment>
+          ))}
+        </dl>
+      ) : null}
+
+      {parsed.memories.length > 0 ? (
+        <div className="flex flex-col gap-2" data-testid="injected-openviking-memories">
+          {parsed.memories.map((m, idx) => {
+            const scoreNum = m.score ? Number.parseFloat(m.score) : NaN;
+            const scorePct = Number.isFinite(scoreNum)
+              ? `${Math.round(scoreNum * 100)}%`
+              : m.score;
+            const typeKey = MEMORY_TYPE_KEYS[m.type];
+            return (
+              <div
+                key={`${m.uri}-${idx}`}
+                className="r-inset border border-border bg-surface-secondary/50 p-2.5 text-xs"
+              >
+                <div className="mb-1.5 flex flex-wrap items-center justify-between gap-1.5">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    {m.type ? (
+                      <Chip size="sm" color="accent" variant="soft">
+                        <Chip.Label>{typeKey ? t(typeKey) : m.type}</Chip.Label>
+                      </Chip>
+                    ) : null}
+                    {scorePct ? (
+                      <span className="r-chip bg-surface px-1.5 py-0.5 font-mono text-[11px] text-muted tabular-nums">
+                        {t("tl.memoryRelevance", { score: scorePct })}
+                      </span>
+                    ) : null}
+                  </div>
+                  {m.uri ? (
+                    <span className="truncate font-mono text-[11px] text-muted">{m.uri}</span>
+                  ) : null}
+                </div>
+                <MarkdownMessage className="text-xs leading-relaxed text-foreground">
+                  {m.content}
+                </MarkdownMessage>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
 
       {parsed.guidance ? (
         <Disclosure>
@@ -347,6 +492,13 @@ export function ToolRow({ item }: { item: TimelineItem }) {
           <Icon icon={item.icon} className={failed ? "size-3.5 text-danger" : "size-3.5"} />
           <span className={failed ? "font-medium text-danger" : "font-medium"}>{item.title}</span>
 
+          {item.vaultProtected ? (
+            <Chip size="sm" color="success" variant="soft" data-testid="tool-vault-badge">
+              <Icon icon="gravity-ui:lock" className="size-3" />
+              <Chip.Label>{t("tl.vaultBadge")}</Chip.Label>
+            </Chip>
+          ) : null}
+
           {/*
             The confirmation state must be visible in the collapsed state, and stand out more than "running":
             "waiting for your confirmation" is the reason the run **really stops there** (the whole of run_5 is just this one thing),
@@ -393,6 +545,37 @@ export function ToolRow({ item }: { item: TimelineItem }) {
       </Disclosure.Heading>
       <Disclosure.Content>
         <Disclosure.Body className="flex flex-col gap-2 px-2 pb-2">
+          {item.vaultProtected && item.vaultAudit ? (
+            <div
+              className="flex flex-wrap items-center gap-x-4 gap-y-1.5 r-inset border border-success/30 bg-success/10 px-3 py-2 text-xs text-foreground"
+              data-testid="tool-vault-audit-card"
+            >
+              <span className="inline-flex items-center gap-1.5 font-semibold text-success">
+                <Icon icon="gravity-ui:shield-check" className="size-3.5" />
+                {t("tl.vaultAuditTitle")}
+              </span>
+              {item.vaultAudit.vaultId ? (
+                <span className="font-mono text-[11px] text-muted">
+                  Vault: {item.vaultAudit.vaultId}
+                </span>
+              ) : null}
+              {item.vaultAudit.credentialId ? (
+                <span className="font-mono text-[11px] text-muted">
+                  Credential: {item.vaultAudit.credentialId}
+                </span>
+              ) : null}
+              {item.vaultAudit.authMode ? (
+                <span className="text-[11px] text-muted">
+                  {t("tl.vaultAuthMode", { mode: item.vaultAudit.authMode })}
+                </span>
+              ) : null}
+              {item.vaultAudit.mcpEndpoint ? (
+                <span className="font-mono text-[11px] text-muted">
+                  MCP: {item.vaultAudit.mcpEndpoint}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
           {/* While waiting for confirmation, spell out "what you need to do": the Chip in the collapsed state is only enough to hint it exists. */}
           {awaitingUser ? (
             <p className="flex items-center gap-1.5 text-xs text-warning">
@@ -514,6 +697,7 @@ function ProcessBlock({
   const windowed = live && items.length > LIVE_WINDOW;
   const earlier = windowed ? items.slice(0, items.length - LIVE_WINDOW) : [];
   const latest = windowed ? items.slice(items.length - LIVE_WINDOW) : items;
+  const vaultCallCount = items.filter((it) => it.vaultProtected).length;
 
   return (
     <ChainOfThought
@@ -523,7 +707,15 @@ function ProcessBlock({
       data-testid="turn-process"
     >
       <ChainOfThought.Trigger data-testid="turn-process-trigger">
-        {live ? t("turn.running") : <ProcessSummary stats={stats} t={t} />}
+        <span className="inline-flex flex-wrap items-center gap-2">
+          {live ? t("turn.running") : <ProcessSummary stats={stats} t={t} />}
+          {vaultCallCount > 0 ? (
+            <Chip size="sm" color="success" variant="soft" data-testid="turn-process-vault-badge">
+              <Icon icon="gravity-ui:lock" className="size-3" />
+              <Chip.Label>{t("tl.vaultProcessBadge", { count: vaultCallCount })}</Chip.Label>
+            </Chip>
+          ) : null}
+        </span>
       </ChainOfThought.Trigger>
       <ChainOfThought.Content>
         <ChainOfThought.Steps>
@@ -566,14 +758,309 @@ function ProcessBlock({
   );
 }
 
+function CuaTurnCard({
+  sessions,
+  defaultExpanded,
+  onOpenCuaDesktop,
+}: {
+  sessions: CuaDesktopSession[];
+  defaultExpanded: boolean;
+  onOpenCuaDesktop?: (desktopId: string) => void;
+}) {
+  const t = useT();
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  useEffect(() => {
+    if (defaultExpanded) {
+      setExpanded(true);
+    }
+  }, [defaultExpanded]);
+  const primary = sessions[0];
+  if (!primary) return null;
+  const needsHuman = primary.outcome === "needs_human";
+  const activeUrl = toEmbeddableCuaUrl(primary.fullInterfaceUrl || primary.desktopViewUrl);
+
+  return (
+    <div
+      className="my-2 overflow-hidden r-container border border-border bg-surface shadow-2xs"
+      data-testid="chat-cua-card"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3.5 py-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <Icon icon="gravity-ui:display" className="size-4 shrink-0 text-accent" />
+          <span className="text-xs font-semibold text-foreground">{t("cua.title")}</span>
+          <Chip
+            size="sm"
+            color={needsHuman ? "warning" : "success"}
+            variant="soft"
+          >
+            <Chip.Label>
+              {needsHuman ? t("cua.badgeNeedsHuman") : t("cua.badgeLive")}
+            </Chip.Label>
+          </Chip>
+          <span className="truncate font-mono text-xs text-muted">
+            {t("cua.desktopLabel", { id: primary.desktopId })}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          {onOpenCuaDesktop && (
+            <button
+              type="button"
+              onClick={() => onOpenCuaDesktop(primary.desktopId)}
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-default bg-surface-secondary px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-tertiary"
+              data-testid="chat-cua-open-panel"
+            >
+              <Icon icon="gravity-ui:display" className="size-3.5" />
+              <span>{t("cua.openInPanel")}</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="inline-flex h-7 items-center gap-1 rounded-md border border-default bg-surface px-2.5 text-xs text-muted transition-colors hover:bg-surface-secondary hover:text-foreground"
+            data-testid="chat-cua-toggle-inline"
+          >
+            <Icon
+              icon={
+                expanded
+                  ? "gravity-ui:chevrons-collapse-up-right"
+                  : "gravity-ui:chevrons-expand-up-right"
+              }
+              className="size-3.5"
+            />
+            <span>{expanded ? t("cua.collapseInline") : t("cua.expandInline")}</span>
+          </button>
+          <a
+            href={activeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex h-7 items-center gap-1 rounded-md border border-default bg-surface px-2 text-xs text-muted transition-colors hover:bg-surface-secondary hover:text-foreground"
+          >
+            <span>{t("cua.openExternal")}</span>
+            <Icon icon="gravity-ui:arrow-up-right-from-square" className="size-3" />
+          </a>
+        </div>
+      </div>
+
+      {!expanded ? (
+        <div className="px-3.5 py-2 text-xs text-muted">{t("cua.cardSubtitle")}</div>
+      ) : (
+        <div className="h-[520px] w-full">
+          <CuaDesktopPanel sessions={sessions} selectedDesktopId={primary.desktopId} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SeedanceTaskCardItem({
+  task,
+  runId,
+}: {
+  task: SeedanceVideoTask;
+  runId?: string;
+}) {
+  const t = useT();
+  const [showStoryboard, setShowStoryboard] = useState(false);
+  const [sourceIdx, setSourceIdx] = useState(0);
+  const [videoLoadFailed, setVideoLoadFailed] = useState(false);
+
+  const { sources, downloadUrl, externalUrl } = buildSeedancePlayableUrls(task, runId);
+
+  const primarySourceKey = `${task.sessionId}|${sources[0] ?? ""}`;
+  useEffect(() => {
+    setSourceIdx(0);
+    setVideoLoadFailed(false);
+  }, [primarySourceKey]);
+
+  const activeVideoUrl = !videoLoadFailed ? (sources[sourceIdx] ?? sources[0]) : undefined;
+  const completedWithoutPlayableUrl =
+    task.outcome === "completed" && (!activeVideoUrl || videoLoadFailed);
+  const isCompleted = task.outcome === "completed" && Boolean(activeVideoUrl);
+  const isFailed = task.outcome === "failed" || completedWithoutPlayableUrl;
+  const isPortrait = task.ratio === "9:16" || task.ratio === "3:4";
+  const storyboardText = task.storyboardPrompt || task.userPrompt || "";
+
+  return (
+    <div
+      className="my-2.5 overflow-hidden r-container border border-border bg-surface shadow-2xs"
+      data-testid="chat-seedance-card"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3.5 py-2.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <Icon icon="gravity-ui:play" className="size-4 shrink-0 text-accent" />
+          <span className="text-xs font-semibold text-foreground">
+            {task.title || t("seedance.defaultTitle")}
+          </span>
+          <Chip
+            size="sm"
+            color={isCompleted ? "success" : isFailed ? "danger" : "accent"}
+            variant="soft"
+          >
+            <Chip.Label>
+              {isCompleted
+                ? t("seedance.statusCompleted")
+                : isFailed
+                  ? t("seedance.statusFailed")
+                  : t("seedance.statusRendering")}
+            </Chip.Label>
+          </Chip>
+          <span className="r-chip bg-surface-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted">
+            {task.videoModel || t("seedance.modelLabel")}
+          </span>
+          {task.ratio ? (
+            <span className="r-chip bg-surface-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted">
+              {task.ratio}
+            </span>
+          ) : null}
+          {task.duration ? (
+            <span className="r-chip bg-surface-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted">
+              {task.duration}s
+            </span>
+          ) : null}
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          {storyboardText ? (
+            <button
+              type="button"
+              onClick={() => setShowStoryboard((v) => !v)}
+              className="inline-flex h-7 items-center gap-1 r-row border border-border bg-surface px-2.5 text-xs text-muted transition-colors hover:bg-surface-secondary hover:text-foreground"
+              data-testid="chat-seedance-toggle-storyboard"
+            >
+              <Icon icon="gravity-ui:file-text" className="size-3.5" />
+              <span>
+                {showStoryboard
+                  ? t("seedance.hideStoryboard")
+                  : t("seedance.showStoryboard")}
+              </span>
+            </button>
+          ) : null}
+          {activeVideoUrl ? (
+            <>
+              <a
+                href={downloadUrl || activeVideoUrl}
+                download
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex h-7 items-center gap-1 r-row border border-border bg-surface-secondary px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-tertiary"
+                data-testid="chat-seedance-download"
+              >
+                <Icon icon="gravity-ui:arrow-down" className="size-3.5" />
+                <span>{t("seedance.downloadMp4")}</span>
+              </a>
+              <a
+                href={externalUrl || activeVideoUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex h-7 items-center gap-1 r-row border border-border bg-surface px-2 text-xs text-muted transition-colors hover:bg-surface-secondary hover:text-foreground"
+                data-testid="chat-seedance-open-external"
+              >
+                <span>{t("seedance.openExternal")}</span>
+                <Icon icon="gravity-ui:arrow-up-right-from-square" className="size-3" />
+              </a>
+            </>
+          ) : null}
+        </div>
+      </div>
+
+      {activeVideoUrl ? (
+        <div className="flex items-center justify-center bg-black/95 p-2">
+          <video
+            src={activeVideoUrl}
+            controls
+            playsInline
+            preload="metadata"
+            onError={() => {
+              if (sourceIdx + 1 < sources.length) {
+                setSourceIdx((idx) => idx + 1);
+              } else {
+                setVideoLoadFailed(true);
+              }
+            }}
+            className={
+              isPortrait
+                ? "mx-auto max-h-[520px] w-auto r-inset"
+                : "max-h-[460px] w-full r-inset object-contain"
+            }
+            data-testid="chat-seedance-video"
+          />
+        </div>
+      ) : isFailed ? (
+        <div className="flex items-center gap-2 bg-danger/5 px-3.5 py-3 text-xs text-danger">
+          <Icon icon="gravity-ui:circle-exclamation" className="size-4 shrink-0" />
+          <span>{task.errorMessage || task.stageLabel || t("seedance.failedFallback")}</span>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2 px-3.5 py-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-medium text-foreground">
+              <ChatLoader.Dots size="sm" label={t("seedance.statusRendering")} className="shrink-0" />
+              <span>{task.stageLabel || t("seedance.renderingFallback")}</span>
+            </div>
+            {task.sessionId && !task.sessionId.startsWith("pending-") ? (
+              <span className="font-mono text-[11px] text-muted">{task.sessionId}</span>
+            ) : null}
+          </div>
+          {task.storyboardPrompt ? (
+            <div className="r-inset border border-border bg-surface-secondary/60 p-2.5 text-xs leading-relaxed text-muted">
+              <div className="mb-1 font-medium text-foreground">
+                {t("seedance.storyboardHeading")}
+              </div>
+              <div className="clamp-3 whitespace-pre-wrap">
+                {task.storyboardPrompt}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {showStoryboard && storyboardText ? (
+        <div className="border-t border-border bg-surface-secondary/50 px-3.5 py-2.5 text-xs">
+          <div className="mb-1 flex items-center justify-between text-[11px] font-medium text-muted">
+            <span>{t("seedance.storyboardPromptTitle")}</span>
+            {task.cgtTaskId ? (
+              <span className="font-mono">{task.cgtTaskId}</span>
+            ) : null}
+          </div>
+          <pre className="max-h-56 overflow-auto whitespace-pre-wrap font-sans text-xs leading-relaxed text-foreground">
+            {storyboardText}
+          </pre>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SeedanceTurnCard({
+  tasks,
+  runId,
+}: {
+  tasks: SeedanceVideoTask[];
+  runId?: string;
+}) {
+  if (tasks.length === 0) return null;
+  return (
+    <>
+      {tasks.map((task) => (
+        <SeedanceTaskCardItem key={task.sessionId} task={task} runId={runId} />
+      ))}
+    </>
+  );
+}
+
 function TurnBlock({
   turn,
   isLast,
   agentName,
+  runId,
+  onOpenCuaDesktop,
 }: {
   turn: Turn;
   isLast: boolean;
   agentName: string;
+  runId?: string;
+  onOpenCuaDesktop?: (desktopId: string) => void;
 }) {
   // The two noise filters of the chat view: span.* (see the event view, DESIGN.md 3.6.3) and self_hosted's
   // lifecycle churn (every tool call has a set of running/idle; see LIFECYCLE_CHURN).
@@ -596,6 +1083,28 @@ function TurnBlock({
     (acc, seg, i) => (seg.kind === "process" ? i : acc),
     -1,
   );
+  const lastOutputIdx = segments.reduce(
+    (acc, seg, i) => (seg.kind === "output" ? i : acc),
+    -1,
+  );
+
+  // Extract any CUA cloud desktop sessions opened or updated during this turn.
+  const turnItems: TimelineItem[] = [];
+  for (const seg of turn.segments) {
+    if (seg.kind === "process") {
+      turnItems.push(...seg.items);
+    } else {
+      turnItems.push(seg.item);
+    }
+  }
+  const cuaSessions = extractCuaSessionsFromTimelineItems(turnItems);
+  const cuaNeedsHuman = cuaSessions.some((s) => s.outcome === "needs_human");
+  // Show the inline CUA card only while this latest turn is actively running or when CUA
+  // explicitly paused for human takeover (`needs_human`). Once a normal CUA step finishes,
+  // do not leave a permanent card in the chat stream.
+  const showCuaTurnCard =
+    cuaSessions.length > 0 && isLast && (!turn.done || cuaNeedsHuman);
+  const seedanceTasks = extractSeedanceTasksFromTimelineItems(turnItems);
 
   return (
     <>
@@ -628,21 +1137,30 @@ function TurnBlock({
 
       {segments.map((seg, i) => {
         if (seg.kind === "output") {
+          const cleanReply = stripCuaUrlNoise(seg.item.body || seg.item.summary);
           // Agent replies have no bubble: a long reply reads more smoothly aligned left than stuffed into a bubble.
           return (
-            <ChatMessage.Assistant key={seg.item.key} data-testid="chat-agent-message">
-              <ChatMessage.Avatar alt={agentName} fallback={agentName.slice(0, 1) || "A"} />
-              <ChatMessage.Body>
-                {/*
-                  The agent's reply is Markdown, rendered by the Markdown renderer (headings/code blocks/tables/lists).
-                  **Do not** add whitespace-pre-wrap here: the Markdown renderer has already laid it out as block-level elements,
-                  and keeping the raw line breaks too would double the blank lines between paragraphs.
-                */}
-                <ChatMessage.Content>
-                  <MarkdownMessage>{seg.item.body || seg.item.summary}</MarkdownMessage>
-                </ChatMessage.Content>
-              </ChatMessage.Body>
-            </ChatMessage.Assistant>
+            <Fragment key={seg.item.key}>
+              {seedanceTasks.length > 0 && i === lastOutputIdx ? (
+                <SeedanceTurnCard tasks={seedanceTasks} runId={runId} />
+              ) : null}
+              <ChatMessage.Assistant className="group" data-testid="chat-agent-message">
+                <ChatMessage.Avatar alt={agentName} fallback={agentName.slice(0, 1) || "A"} />
+                <ChatMessage.Body>
+                  {/*
+                    The agent's reply is Markdown, rendered by the Markdown renderer (headings/code blocks/tables/lists).
+                    **Do not** add whitespace-pre-wrap here: the Markdown renderer has already laid it out as block-level elements,
+                    and keeping the raw line breaks too would double the blank lines between paragraphs.
+                  */}
+                  <ChatMessage.Content>
+                    <MarkdownMessage>{cleanReply}</MarkdownMessage>
+                  </ChatMessage.Content>
+                  <div className="mt-1 flex items-center gap-2 opacity-60 transition-opacity group-hover:opacity-100">
+                    <CopyMessageButton text={cleanReply} />
+                  </div>
+                </ChatMessage.Body>
+              </ChatMessage.Assistant>
+            </Fragment>
           );
         }
 
@@ -661,6 +1179,18 @@ function TurnBlock({
           />
         );
       })}
+
+      {seedanceTasks.length > 0 && lastOutputIdx < 0 ? (
+        <SeedanceTurnCard tasks={seedanceTasks} runId={runId} />
+      ) : null}
+
+      {showCuaTurnCard ? (
+        <CuaTurnCard
+          sessions={cuaSessions}
+          defaultExpanded={isLast && !onOpenCuaDesktop}
+          onOpenCuaDesktop={onOpenCuaDesktop}
+        />
+      ) : null}
     </>
   );
 }
@@ -676,12 +1206,18 @@ function TurnBlock({
 export function ConversationView({
   items,
   agentName,
+  runId,
   runStatus,
+  onOpenCuaDesktop,
 }: {
   items: TimelineItem[];
   agentName: string;
+  runId?: string;
   runStatus?: string;
+  onOpenCuaDesktop?: (desktopId: string) => void;
 }) {
+  const params = useParams<{ runId?: string }>();
+  const effectiveRunId = runId || params.runId;
   const turns = groupTurns(items, runStatus);
 
   return (
@@ -692,6 +1228,8 @@ export function ConversationView({
           turn={turn}
           isLast={i === turns.length - 1}
           agentName={agentName}
+          runId={effectiveRunId}
+          onOpenCuaDesktop={onOpenCuaDesktop}
         />
       ))}
     </>

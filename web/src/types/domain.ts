@@ -586,7 +586,10 @@ export type ModelId =
   | "deepseek-v4-pro-ga-260813"
   | "deepseek-v4-flash-ga-260731"
   | "deepseek-v4-1-flash-261017"
-  | "glm-5-2-260617";
+  | "glm-5-2-260617"
+  | "kimi-k3-1-pro-261024"
+  | "kimi-k3-260716"
+  | "kimi-k2-7-code-260601";
 
 export type ReasoningEffort =
   | "none"
@@ -746,10 +749,56 @@ export const MODEL_SPECS: ModelSpec[] = [
     serviceTiers: ["auto", "default"],
     supportsThinking: true,
   },
+  {
+    id: "kimi-k3-1-pro-261024",
+    label: "Kimi K3.1 Pro",
+    vendor: "Kimi",
+    reasoningEfforts: ["low", "high", "max"],
+    defaultReasoningEffort: "max",
+    serviceTiers: ["auto", "default"],
+    supportsThinking: true,
+  },
+  {
+    id: "kimi-k3-260716",
+    label: "Kimi K3",
+    vendor: "Kimi",
+    reasoningEfforts: ["low", "high", "max"],
+    defaultReasoningEffort: "max",
+    serviceTiers: ["auto", "default"],
+    supportsThinking: true,
+  },
+  {
+    id: "kimi-k2-7-code-260601",
+    label: "Kimi K2.7 Code",
+    vendor: "Kimi",
+    reasoningEfforts: ["low", "high", "max"],
+    defaultReasoningEffort: "high",
+    serviceTiers: ["auto", "default"],
+    supportsThinking: true,
+  },
 ];
 
 export function modelSpec(id: ModelId): ModelSpec {
-  return MODEL_SPECS.find((m) => m.id === id) ?? MODEL_SPECS[0];
+  const found = MODEL_SPECS.find((m) => m.id === id);
+  if (found) return found;
+  if (id) {
+    return {
+      id,
+      label: id,
+      vendor: id.startsWith("kimi")
+        ? "Kimi"
+        : id.startsWith("deepseek")
+          ? "DeepSeek"
+          : id.startsWith("glm")
+            ? "智谱"
+            : "豆包",
+      reasoningEfforts: ["minimal", "low", "medium", "high", "max"],
+      defaultReasoningEffort: "high",
+      serviceTiers: ["auto", "default"],
+      supportsThinking: true,
+    };
+  }
+  return MODEL_SPECS[0];
 }
 
 export const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
@@ -810,6 +859,30 @@ export const AGENT_STATUS_LABELS: Record<AgentStatus, string> = {
   disabled: "已停用",
 };
 
+/**
+ * The one non-default base agent value: the **Codex harness** hosted by Ark.
+ *
+ * Kept as a constant rather than typed in at each comparison site, so "which string means Codex"
+ * has exactly one source. See isCodexAgent below, which is what call sites should use.
+ */
+export const BASE_AGENT_CODEX = "codex";
+
+/**
+ * Is this agent driven by the Codex harness?
+ *
+ * **Always go through this instead of comparing `baseAgent === "codex"` by hand.** The field is
+ * optional and older agents have no key at all (undefined), while the backend stores either "" or
+ * "codex"; a bare comparison has three spellings to get right, and missing one gives **no error at
+ * all** (the UI just renders as a general agent and offers entries that cannot work).
+ *
+ * What changes when it is true: tools run in **Ark's cloud sandbox** (Codex harness), so the AMA
+ * side's executor (Docker/host), skills, datasource custom tools and the container/terminal/file
+ * views do **not** apply. System prompt, model and the built-in tool switches still apply.
+ */
+export function isCodexAgent(baseAgent: string | null | undefined): boolean {
+  return baseAgent === BASE_AGENT_CODEX;
+}
+
 export interface Agent {
   id: string;
   workspaceId: string;
@@ -825,6 +898,35 @@ export interface Agent {
   skillIds: string[];
   feishuAppIds: string[];
   status: AgentStatus;
+  /**
+   * Which harness runs this agent: missing / empty string = the existing **general agent** (AMA's
+   * own agent loop), "codex" = the **Codex harness hosted by Ark** (see isCodexAgent above).
+   *
+   * ⚠️ **Write-once**: creation accepts it, update rejects a **changed** value (400). Sending the
+   * current value back unchanged is allowed — exactly like integrationIds, because the frontend sends
+   * the complete draft on every save (see toAgentDraft). The edit page therefore renders it
+   * read-only: there is no way for the user to make it differ.
+   *
+   * Optional because agents created before this field have no key at all, and because the general
+   * agent is expressed as "" — read it as `baseAgent ?? ""`, never with a bare `!baseAgent` truthiness
+   * check (a future value would silently look general, which is exactly what isCodexAgent is for).
+   */
+  baseAgent?: string;
+  /**
+   * Whether this agent participates in **platform long-term memory (OpenViking)**: recall (a
+   * `<harness:openviking>` block appended to every outgoing user message) and capture (the finished
+   * turn is written back to the memory store).
+   *
+   * **Default off, opt-in per agent** (missing / false = off). The memory store is
+   * deployment/user-scoped, so enabling it deployment-wide mixed unrelated histories — e.g. a
+   * marketing agent's memories showing up in a codex agent. Product rule: only agents that
+   * explicitly select it get memory.
+   *
+   * Optional because old agents/old rows have no key; read it as `Boolean(openVikingEnabled)`.
+   * Unlike baseAgent this one **is editable after creation** (the server assigns it unconditionally
+   * on update), so the edit page's switch writes it into the draft.
+   */
+  openVikingEnabled?: boolean;
   /**
    * Which authorization sources' credentials this agent may inject (`ama` / `lark-user` / ...).
    *
@@ -1230,6 +1332,32 @@ export interface AgentDraft {
    */
   integrationIds: string[];
   /**
+   * Which harness this agent uses; see the field of the same name on Agent.
+   *
+   * ⚠️ **Optional, not a required draft field** (unlike executorType below): older agents have no
+   * key at all, and the general agent is the empty string. toAgentDraft carries it as `?? ""`, so
+   * the PATCH still sends the complete draft — the server allows the value unchanged and only
+   * rejects a **changed** one (400).
+   *
+   * The only place that can actually change it is the create form (emptyAgentDraft starts at "");
+   * the edit page shows it read-only, because an edit could never be saved.
+   */
+  baseAgent?: string;
+  /**
+   * Whether this agent opts into platform long-term memory (OpenViking); see the field of the same
+   * name on Agent.
+   *
+   * ⚠️⚠️ **toAgentDraft must always carry it (`?? false`), and the create form must start at
+   * false.** The server's UpdateAgent assigns this field **unconditionally**
+   * (`a.OpenVikingEnabled = draft.OpenVikingEnabled`), so a missing key is not "leave it alone":
+   * it reads as false and would silently switch the user's memory off on the next unrelated save
+   * (rename the agent → memory gone, with no error).
+   *
+   * Optional only because the wire contract says so (old frontends do not send it); in practice
+   * both draft builders set it explicitly.
+   */
+  openVikingEnabled?: boolean;
+  /**
    * Tool executor choice; see the field of the same name on Agent.
    *
    * ⚠️ In the draft these are **non-optional** fields: executorType empty string means cloud
@@ -1324,6 +1452,21 @@ export function toAgentDraft(a: Agent): AgentDraft {
     // isDirty is a bare JSON.stringify comparison, and one missing key in the draft never equals the
     // agent read back.
     progressDetail: progressDetailOrDefault(a.progressDetail),
+    // Carried (`?? ""`) like every other field: PATCH takes the **complete** draft, and the server
+    // rejects only a *changed* baseAgent (400), not the key's presence — the same rule as
+    // integrationIds above. Leaving it out would be read as "the caller cleared it" and, worse, the
+    // two sides of isDirty's JSON.stringify comparison would still agree, so the drift would only
+    // show up as a rejected save.
+    //
+    // Existing agents have no such key, which reads as undefined while the draft wants a string:
+    // normalize to "" (the general agent). The edit page never changes it (read-only), so a save can
+    // only ever send the current value back.
+    baseAgent: a.baseAgent ?? "",
+    // **Always carried (`?? false`)**, or the user's opt-in for long-term memory is silently lost:
+    // UpdateAgent assigns this field unconditionally, so a missing key reads as false and switches
+    // memory off on the next save (even a rename). Existing agents/old rows have no key at all, which
+    // reads as undefined → false, i.e. the documented default.
+    openVikingEnabled: a.openVikingEnabled ?? false,
   };
 }
 

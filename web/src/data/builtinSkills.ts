@@ -76,6 +76,34 @@ export const BUILTIN_SKILLS: Skill[] = [
     createdAt: BUILTIN_TIME,
     updatedAt: BUILTIN_TIME,
   },
+  {
+    id: "skill-builtin-ark-cua",
+    workspaceId: "",
+    name: "ark-cua",
+    displayTitle: "ark-cua（CUA 云电脑）",
+    description:
+      "操作火山方舟 Agent Plan 云电脑（Computer Use Agent / CUA）：启动并访问云桌面、在 AMA 页面内嵌渲染实时桌面视图、将需要 GUI 或浏览器交互的任务委派给云端桌面执行。",
+    instructions: "",
+    source: "builtin",
+    latestVersion: "1",
+    tags: ["内置", "CUA", "云电脑"],
+    createdAt: BUILTIN_TIME,
+    updatedAt: BUILTIN_TIME,
+  },
+  {
+    id: "skill-builtin-seedance-ma",
+    workspaceId: "",
+    name: "seedance-ma",
+    displayTitle: "seedance-ma（Seedance 视频生成）",
+    description:
+      "调用火山方舟 Seedance 视频创作智能体（Managed Agent）完成分镜规划与视频渲染，支持在 AMA 对话页面内嵌播放与下载生成的 MP4 视频。",
+    instructions: "",
+    source: "builtin",
+    latestVersion: "1",
+    tags: ["内置", "Seedance", "视频生成"],
+    createdAt: BUILTIN_TIME,
+    updatedAt: BUILTIN_TIME,
+  },
 ];
 
 /**
@@ -88,11 +116,17 @@ export const BUILTIN_SKILLS: Skill[] = [
 const BUILTIN_TEXT_KEYS: Record<string, { title: MessageKey; description: MessageKey }> = {
   "lark-cli": { title: "skill.builtin.larkCli.title", description: "skill.builtin.larkCli.description" },
   ama: { title: "skill.builtin.ama.title", description: "skill.builtin.ama.description" },
+  "ark-cua": { title: "skill.builtin.cua.title", description: "skill.builtin.cua.description" },
+  "seedance-ma": { title: "skill.builtin.seedanceMa.title", description: "skill.builtin.seedanceMa.description" },
 };
 
 const BUILTIN_TAG_KEYS: Record<string, MessageKey> = {
   内置: "skill.builtin.tagBuiltin",
   飞书: "skill.builtin.tagFeishu",
+  CUA: "skill.builtin.tagCua",
+  云电脑: "skill.builtin.tagCloudDesktop",
+  Seedance: "skill.builtin.tagSeedance",
+  视频生成: "skill.builtin.tagVideoGen",
 };
 
 export function skillText(

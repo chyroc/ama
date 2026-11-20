@@ -36,7 +36,9 @@ import { TimelineToolbar, type ToolbarCounts } from "@/components/TimelineToolba
 import { ConversationView } from "@/components/ConversationView";
 import { TracePanel } from "@/components/TracePanel";
 import { SandboxPanel } from "@/components/SandboxPanel";
-import { ViewSwitch, useRunView } from "@/components/ViewSwitch";
+import { CuaDesktopPanel } from "@/components/CuaDesktopPanel";
+import { ViewSwitch, useRunView, type RunView } from "@/components/ViewSwitch";
+import { extractCuaSessions } from "@/lib/cua";
 import { buildTimeline, computeStats } from "@/lib/timeline";
 import { applyRawFilter, buildRawHaystack, useTimelineFilter } from "@/lib/useTimelineFilter";
 import { buildRawRows, rawEventStats } from "@/lib/rawEvents";
@@ -130,9 +132,37 @@ export function RunDetailPage() {
   } = useAsyncData(fetch, t("common.loadFailedUnknown"));
   const run = data?.run ?? null;
   const events = data?.events ?? null;
+  const [agentBaseAgent, setAgentBaseAgent] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    const agentId = run?.agentId;
+    if (!agentId || run?.agentDeleted) {
+      setAgentBaseAgent(undefined);
+      return;
+    }
+    let alive = true;
+    void api
+      .getAgent(agentId)
+      .then((a) => {
+        if (alive) setAgentBaseAgent(a?.baseAgent);
+      })
+      .catch(() => {
+        if (alive) setAgentBaseAgent(undefined);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [run?.agentId, run?.agentDeleted]);
+
+  const codexAgent = agentBaseAgent === "codex";
+  const shownView: RunView =
+    codexAgent && (view === "files" || view === "terminal" || view === "cua")
+      ? "conversation"
+      : view;
 
   // t is a dependency: after switching language the event titles must be recomputed
   const allItems = useMemo(() => (events ? buildTimeline(events, t) : []), [events, t]);
+  const cuaSessions = useMemo(() => (events ? extractCuaSessions(events) : []), [events]);
   const stats = useMemo(
     () => (events ? computeStats(events, allItems) : null),
     [events, allItems],
@@ -387,27 +417,34 @@ export function RunDetailPage() {
       <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm font-medium">
-            {view === "events" ? (
+            {shownView === "events" ? (
               <>
                 {t("run.eventStream")}
                 <span className="ml-2 num text-xs text-muted">
                   {t("run.eventShown", { shown: eventRows.length, total: rawRows.length })}
                 </span>
               </>
-            ) : view === "trace" ? (
+            ) : shownView === "trace" ? (
               t("trace.title")
-            ) : view === "files" ? (
+            ) : shownView === "files" ? (
               t("sandbox.files")
-            ) : view === "terminal" ? (
+            ) : shownView === "terminal" ? (
               t("sandbox.terminal")
+            ) : shownView === "cua" ? (
+              t("view.cua")
             ) : (
               t("chat.title")
             )}
           </p>
-          <ViewSwitch view={view} onChange={setView} />
+          <ViewSwitch
+            view={shownView}
+            onChange={setView}
+            hasCua={cuaSessions.length > 0}
+            hideSandbox={codexAgent}
+          />
         </div>
 
-        {view === "events" ? (
+        {shownView === "events" ? (
           <>
             {stats ? (
               <TimelineToolbar
@@ -446,7 +483,7 @@ export function RunDetailPage() {
               />
             )}
           </>
-        ) : view === "trace" ? (
+        ) : shownView === "trace" ? (
           /* The call tree is its own view, no longer hung at the end of the event view (see the comment on ViewSwitch).
              **The panel has no scroll wrapper**: this page's scroll container is AppShell's <main>,
              and wrapping another would give two scroll areas.
@@ -454,12 +491,14 @@ export function RunDetailPage() {
              the two views have their own tradeoffs (filtering out half the events would drop half the call tree's nodes,
              while the user never filtered anything on the call tree). */
           <TracePanel items={allItems} />
-        ) : view === "files" || view === "terminal" ? (
+        ) : shownView === "files" || shownView === "terminal" ? (
           /* Files and terminal are two views sharing one panel (the container state part is shown in both).
              Also **no scroll wrapper** (the scroll container is AppShell's <main>).
              The panel checks state itself: containers pause/get reclaimed on their own, and fetching with the page data would give
              a stale snapshot. */
-          <SandboxPanel runId={run.id} mode={view} hostId={run.hostId} />
+          <SandboxPanel runId={run.id} mode={shownView} hostId={run.hostId} />
+        ) : shownView === "cua" ? (
+          <CuaDesktopPanel sessions={cuaSessions} />
         ) : (
           <>
             <ThreadSwitcher

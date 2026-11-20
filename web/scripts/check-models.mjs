@@ -70,6 +70,23 @@ const KNOWN_DOC_LAG = [
       "塞伪造值会被拒（说明有元数据校验）。" +
       "而线上文档 2026-10-20 版仍未收录该模型，属文档落后于平台。",
   },
+  {
+    id: "kimi-k3-1-pro-261024",
+    why:
+      "2026-11-06 探针实测：火山方舟已上线 Kimi K3.1 Pro（kimi-k3-1-pro-261024），" +
+      "Managed Agents 可直接创建与更新 Agent，支持 thinking 常驻与 reasoning_effort=[low,high,max]（默认 max）。",
+  },
+  {
+    id: "kimi-k3-260716",
+    why:
+      "2026-11-06 探针实测：火山方舟 Managed Agents 支持 Kimi K3（kimi-k3-260716），" +
+      "回显默认 service_tier=default、reasoning_effort=max，校验档位为 [low,high,max]。",
+  },
+  {
+    id: "kimi-k2-7-code-260601",
+    why:
+      "2026-11-06 探针实测：火山方舟 Managed Agents 支持 Kimi K2.7 Code（kimi-k2-7-code-260601）。",
+  },
 ];
 
 /** For ordered set comparison: the canonical level order, following the order of reasoning_effort

@@ -1616,3 +1616,59 @@ export function AgentEnvAliasSection({
     </Disclosure>
   );
 }
+
+/**
+ * Long-term memory (OpenViking) opt-in switch, **shared** by the create page and the detail page.
+ *
+ * # Why a switch per agent rather than a deployment-wide setting
+ *
+ * The memory store is scoped to deployment/user, so a global switch injected every agent's history
+ * into every other agent (a marketing agent's memories showing up in a codex agent doing video
+ * work). Product rule: **only an agent that explicitly selects it gets recall and capture**, so the
+ * default is off and this is the only place that turns it on.
+ *
+ * # Both pages render the same component
+ *
+ * Same reason as the other sections in this file: what you tick when creating must look identical
+ * to what you change later, otherwise users read them as two different features. Only the testid
+ * differs (`agent-openviking` on create, `cfg-openviking` on the detail page), because that is what
+ * the two pages' e2e specs anchor on.
+ *
+ * # ⚠️ The value must reach the draft even when it is false
+ *
+ * The server assigns this field unconditionally on update, so "not sent" means "off". Callers must
+ * always build the draft from `emptyAgentDraft()` / `toAgentDraft()`, which both set it explicitly;
+ * writing `{...draft, openVikingEnabled: on}` here is what keeps the stored value from being wiped
+ * by an unrelated save (see the comments on both builders).
+ */
+export function AgentMemorySection({
+  draft,
+  setDraft,
+  testId,
+}: {
+  draft: AgentDraft;
+  setDraft: (d: AgentDraft) => void;
+  /** Page-specific testid: `agent-openviking` (create) / `cfg-openviking` (detail). */
+  testId: string;
+}) {
+  const t = useT();
+  // Old agents (and a draft built before this field existed) have no key: missing reads as off.
+  const on = draft.openVikingEnabled ?? false;
+  return (
+    <div className="flex flex-col gap-3">
+      <SectionTitle title={t("agent.memorySection")} description={t("agent.memorySectionDesc")} />
+      <Switch
+        isSelected={on}
+        onChange={(next) => setDraft({ ...draft, openVikingEnabled: next })}
+        data-testid={testId}
+      >
+        <Switch.Content className="text-sm">
+          <Switch.Control>
+            <Switch.Thumb />
+          </Switch.Control>
+          {t("agent.memoryToggle")}
+        </Switch.Content>
+      </Switch>
+    </div>
+  );
+}

@@ -23,6 +23,10 @@ interface ChatStreamProps {
   thinking: boolean;
   /** Agent name, used as the avatar fallback and accessibility label. */
   agentName: string;
+  /** Optional callback to open a CUA desktop session in a side-by-side split pane. */
+  onOpenCuaDesktop?: (desktopId: string) => void;
+  /** Expand conversation column width when sidebars are collapsed or focus mode is active. */
+  wide?: boolean;
 }
 
 export function ChatStream({
@@ -31,6 +35,8 @@ export function ChatStream({
   thinkingDraft,
   thinking,
   agentName,
+  onOpenCuaDesktop,
+  wide = false,
 }: ChatStreamProps) {
   const t = useT();
   const items = buildTimeline(events, t);
@@ -41,8 +47,17 @@ export function ChatStream({
         ChatConversation.Content already has `mx-auto w-full`; here we only add max-w-3xl,
         so the message column is centered.
       */}
-      <ChatConversation.Content className="max-w-3xl flex-col gap-5 px-4 pt-8 pb-6">
-        <ConversationView items={items} agentName={agentName} />
+      <ChatConversation.Content
+        className={[
+          "flex-col gap-5 px-4 pt-6 pb-6 transition-[max-width] duration-200",
+          wide ? "max-w-5xl" : "max-w-3xl xl:max-w-4xl",
+        ].join(" ")}
+      >
+        <ConversationView
+          items={items}
+          agentName={agentName}
+          onOpenCuaDesktop={onOpenCuaDesktop}
+        />
 
         {/*
           Streaming thinking process.

@@ -11,6 +11,7 @@ import {
   type SandboxState,
   type SandboxStatus,
 } from "@/data/api";
+import { API_BASE } from "@/data/http";
 import { usePrefs } from "@/prefs/PrefsContext";
 import { SandboxTerminal } from "@/components/SandboxTerminal";
 import { useRunView } from "@/components/ViewSwitch";
@@ -545,12 +546,36 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function detectMediaKind(path: string): "video" | "image" | "audio" | null {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".mov") || lower.endsWith(".m4v")) {
+    return "video";
+  }
+  // Deliberately excludes `.svg`: SVG can carry embedded scripts and is served as an attachment by the backend.
+  if (
+    lower.endsWith(".png") ||
+    lower.endsWith(".jpg") ||
+    lower.endsWith(".jpeg") ||
+    lower.endsWith(".gif") ||
+    lower.endsWith(".webp")
+  ) {
+    return "image";
+  }
+  if (lower.endsWith(".mp3") || lower.endsWith(".wav") || lower.endsWith(".ogg") || lower.endsWith(".m4a")) {
+    return "audio";
+  }
+  return null;
+}
+
 /**
  * File detail: click a file to see its content.
  *
  * **Read-only, text only.** Binary files get no content (the backend returns `binary:true`): rendering random bytes
  * on the page is pointless and could break the layout. Files that are too big are truncated to 256 KiB, and it **says so**;
  * otherwise users would think that is the file's full size.
+ *
+ * Media files (`.mp4`, `.png`, `.mp3`, etc.) are streamed directly via `/api/runs/{runId}/sandbox/file?raw=1`
+ * so videos and images generated in the sandbox can be previewed and downloaded inline.
  *
  * No syntax highlighting: that would pull in a highlighter (the md-box prism path),
  * while this is for "glancing at logs/config"; monospace + wrapping is enough. To look closely, use the terminal.
@@ -568,10 +593,19 @@ function SandboxFileDetail({
   const [body, setBody] = useState<SandboxFileContent | null>(null);
   const [failed, setFailed] = useState(false);
 
+  const mediaKind = detectMediaKind(file.path);
+  const rawUrl = `${API_BASE}/runs/${encodeURIComponent(runId)}/sandbox/file?raw=1&path=${encodeURIComponent(file.path)}`;
+  const downloadUrl = `${rawUrl}&download=1`;
+
   useEffect(() => {
     let alive = true;
     setBody(null);
     setFailed(false);
+    if (mediaKind !== null) {
+      return () => {
+        alive = false;
+      };
+    }
     void api
       .readRunSandboxFile(runId, file.path)
       .then((c) => {
@@ -584,33 +618,98 @@ function SandboxFileDetail({
     return () => {
       alive = false;
     };
-  }, [runId, file.path]);
+  }, [runId, file.path, mediaKind]);
 
   return (
     <div className="flex flex-col gap-2" data-testid="sandbox-file-detail">
       <div className="flex items-center gap-2">
-        <Icon icon="gravity-ui:file-text" className="text-muted size-4 shrink-0" />
+        <Icon
+          icon={mediaKind === "video" ? "gravity-ui:play" : mediaKind === "image" ? "gravity-ui:picture" : "gravity-ui:file-text"}
+          className="text-muted size-4 shrink-0"
+        />
         <span className="truncate font-mono text-xs">{file.path}</span>
-        <Button
-          size="sm"
-          variant="ghost"
-          isIconOnly
-          className="ml-auto"
-          aria-label={t("sandbox.fileClose")}
-          data-testid="sandbox-file-close"
-          onPress={onClose}
-        >
-          <Icon icon="gravity-ui:xmark" />
-        </Button>
+        <div className="ml-auto flex items-center gap-1.5">
+          <a
+            href={downloadUrl}
+            download={file.name}
+            className="border-border bg-surface text-foreground hover:bg-surface-secondary inline-flex items-center gap-1 r-row border px-2 py-1 text-xs font-medium transition-colors"
+            data-testid="sandbox-file-download"
+          >
+            <Icon icon="gravity-ui:arrow-down" className="size-3" />
+            <span>{t("sandbox.fileDownload")}</span>
+          </a>
+          {mediaKind !== null ? (
+            <a
+              href={rawUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="border-border bg-surface text-foreground hover:bg-surface-secondary inline-flex items-center gap-1 r-row border px-2 py-1 text-xs font-medium transition-colors"
+              data-testid="sandbox-file-open"
+            >
+              <Icon icon="gravity-ui:arrow-up-right-from-square" className="size-3" />
+              <span>{t("sandbox.fileOpenNewTab")}</span>
+            </a>
+          ) : null}
+          <Button
+            size="sm"
+            variant="ghost"
+            isIconOnly
+            aria-label={t("sandbox.fileClose")}
+            data-testid="sandbox-file-close"
+            onPress={onClose}
+          >
+            <Icon icon="gravity-ui:xmark" />
+          </Button>
+        </div>
       </div>
+
+      {mediaKind === "video" && (
+        <div className="overflow-hidden r-inset border border-border bg-black">
+          <video
+            key={rawUrl}
+            src={rawUrl}
+            controls
+            playsInline
+            preload="metadata"
+            className="max-h-96 w-full object-contain"
+            data-testid="sandbox-file-video"
+            onError={() => setFailed(true)}
+          />
+        </div>
+      )}
+
+      {mediaKind === "image" && (
+        <div className="bg-surface-secondary flex justify-center overflow-hidden r-inset p-2">
+          <img
+            key={rawUrl}
+            src={rawUrl}
+            alt={file.name}
+            className="max-h-96 r-row object-contain"
+            data-testid="sandbox-file-image"
+            onError={() => setFailed(true)}
+          />
+        </div>
+      )}
+
+      {mediaKind === "audio" && (
+        <audio
+          key={rawUrl}
+          src={rawUrl}
+          controls
+          preload="metadata"
+          className="w-full"
+          data-testid="sandbox-file-audio"
+          onError={() => setFailed(true)}
+        />
+      )}
 
       {failed && <p className="text-danger text-xs">{t("sandbox.fileLoadFailed")}</p>}
 
-      {body?.binary && <p className="text-muted text-xs">{t("sandbox.fileBinary")}</p>}
+      {mediaKind === null && body?.binary && <p className="text-muted text-xs">{t("sandbox.fileBinary")}</p>}
 
-      {body && !body.binary && (
+      {mediaKind === null && body && !body.binary && (
         <pre
-          className="bg-surface-secondary max-h-80 overflow-auto rounded-xl p-3 font-mono text-xs whitespace-pre-wrap break-all"
+          className="bg-surface-secondary max-h-80 overflow-auto r-inset p-3 font-mono text-xs whitespace-pre-wrap break-all"
           data-testid="sandbox-file-content"
         >
           {body.content}
@@ -618,7 +717,7 @@ function SandboxFileDetail({
       )}
 
       {/* When truncated, say so, same as the file list. */}
-      {body?.truncated && <p className="text-muted text-xs">{t("sandbox.fileTruncated")}</p>}
+      {mediaKind === null && body?.truncated && <p className="text-muted text-xs">{t("sandbox.fileTruncated")}</p>}
     </div>
   );
 }

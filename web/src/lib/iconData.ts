@@ -3,7 +3,7 @@
  * subset of `@iconify-json/gravity-ui` picked by the USED list in `src/lib/icons.ts`.
  *
  * Why not import the whole package: that would put all 799 icons (451KB raw / 104KB gzip) into
- * the main chunk, while we only use 76 of them. JSON cannot be
+ * the main chunk, while we only use 82 of them. JSON cannot be
  * tree-shaken by key, and the runtime subset loop does not stop bundling. See the header
  * comment of scripts/gen-icon-data.mjs for details.
  *
@@ -30,6 +30,9 @@ export const GRAVITY_ICONS: IconifyJSON["icons"] = {
   },
   "arrow-up": {
     "body": "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M8 14.75a.75.75 0 0 1-.75-.75V3.81L4.53 6.53a.75.75 0 0 1-1.06-1.06l4-4a.75.75 0 0 1 1.06 0l4 4a.75.75 0 0 1-1.06 1.06L8.75 3.81V14a.75.75 0 0 1-.75.75\" clip-rule=\"evenodd\"/>"
+  },
+  "arrow-up-right": {
+    "body": "<path fill=\"currentColor\" d=\"M12.728 2.521a.75.75 0 0 1 .75.75v5.657a.751.751 0 0 1-1.5 0V5.083l-8.176 8.176a.75.75 0 0 1-1.061-1.06l8.176-8.177H7.07a.75.75 0 0 1 .001-1.5z\"/>"
   },
   "arrow-up-right-from-square": {
     "body": "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M10 1.5A.75.75 0 0 0 10 3h1.94L6.97 7.97a.75.75 0 0 0 1.06 1.06L13 4.06V6a.75.75 0 0 0 1.5 0V2.25a.75.75 0 0 0-.75-.75zM7.5 3.25a.75.75 0 0 0-.75-.75H4.5a3 3 0 0 0-3 3v6a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V9.25a.75.75 0 0 0-1.5 0v2.25a1.5 1.5 0 0 1-1.5 1.5h-6A1.5 1.5 0 0 1 3 11.5v-6A1.5 1.5 0 0 1 4.5 4h2.25a.75.75 0 0 0 .75-.75\" clip-rule=\"evenodd\"/>"
@@ -73,6 +76,12 @@ export const GRAVITY_ICONS: IconifyJSON["icons"] = {
   "chevrons-expand-up-right": {
     "body": "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M7.754 2.004a.75.75 0 0 0 0 1.5h4.75v4.742a.75.75 0 0 0 1.5 0V2.754a.75.75 0 0 0-.75-.75zm.492 11.992a.75.75 0 0 0 0-1.5h-4.75V7.754a.75.75 0 0 0-1.5 0v5.492a.75.75 0 0 0 .75.75z\" clip-rule=\"evenodd\"/>"
   },
+  "chevrons-left": {
+    "body": "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M12.53 5.03a.75.75 0 0 0-1.06-1.06l-3.5 3.5a.75.75 0 0 0 0 1.06l3.5 3.5a.75.75 0 1 0 1.06-1.06L9.56 8zm-5 0a.75.75 0 0 0-1.06-1.06l-3.5 3.5a.75.75 0 0 0 0 1.06l3.5 3.5a.75.75 0 0 0 1.06-1.06L4.56 8z\" clip-rule=\"evenodd\"/>"
+  },
+  "chevrons-right": {
+    "body": "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M3.47 10.97a.75.75 0 1 0 1.06 1.06l3.5-3.5a.75.75 0 0 0 0-1.06l-3.5-3.5a.75.75 0 0 0-1.06 1.06L6.44 8zm5 0a.75.75 0 1 0 1.06 1.06l3.5-3.5a.75.75 0 0 0 0-1.06l-3.5-3.5a.75.75 0 0 0-1.06 1.06L11.44 8z\" clip-rule=\"evenodd\"/>"
+  },
   "circle-check": {
     "body": "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M13.5 8a5.5 5.5 0 1 1-11 0a5.5 5.5 0 0 1 11 0M15 8A7 7 0 1 1 1 8a7 7 0 0 1 14 0m-3.9-1.55a.75.75 0 1 0-1.2-.9L7.419 8.858L6.03 7.47a.75.75 0 0 0-1.06 1.06l2 2a.75.75 0 0 0 1.13-.08z\" clip-rule=\"evenodd\"/>"
   },
@@ -115,6 +124,9 @@ export const GRAVITY_ICONS: IconifyJSON["icons"] = {
   "cpu": {
     "body": "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M7 1.25a.75.75 0 0 0-1.5 0V2.5a3 3 0 0 0-3 3H1.25a.75.75 0 0 0 0 1.5H2.5v2H1.25a.75.75 0 0 0 0 1.5H2.5a3 3 0 0 0 3 3v1.25a.75.75 0 0 0 1.5 0V13.5h2v1.25a.75.75 0 0 0 1.5 0V13.5a3 3 0 0 0 3-3h1.25a.75.75 0 0 0 0-1.5H13.5V7h1.25a.75.75 0 0 0 0-1.5H13.5a3 3 0 0 0-3-3V1.25a.75.75 0 0 0-1.5 0V2.5H7zM10.5 4h-5A1.5 1.5 0 0 0 4 5.5v5A1.5 1.5 0 0 0 5.5 12h5a1.5 1.5 0 0 0 1.5-1.5v-5A1.5 1.5 0 0 0 10.5 4m0 2.25a.75.75 0 0 0-.75-.75h-3.5a.75.75 0 0 0-.75.75v3.5a.75.75 0 0 0 .75.75h3.5a.75.75 0 0 0 .75-.75zM7 7h2v2H7z\" clip-rule=\"evenodd\"/>"
   },
+  "database": {
+    "body": "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M11.615 4.888c.814-.375.885-.714.885-.888s-.071-.513-.885-.888S9.538 2.5 8 2.5s-2.799.237-3.615.612C3.57 3.487 3.5 3.826 3.5 4s.071.513.885.888S6.462 5.5 8 5.5s2.799-.237 3.615-.612m.885 1.235C11.4 6.708 9.792 7 8 7s-3.4-.292-4.5-.877V8c0 .174.071.513.885.888S6.462 9.5 8 9.5s2.799-.237 3.615-.612c.814-.375.885-.714.885-.888zm0 4C11.4 10.708 9.792 11 8 11s-3.4-.293-4.5-.877V12c0 .174.071.513.885.887c.816.377 2.077.613 3.615.613s2.799-.236 3.615-.613c.814-.374.885-.713.885-.887zM14 4c0-2-2.686-3-6-3S2 2 2 4v8c0 2 2.686 3 6 3s6-1 6-3z\" clip-rule=\"evenodd\"/>"
+  },
   "display": {
     "body": "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M12 3H4a1.5 1.5 0 0 0-1.5 1.5v4A1.5 1.5 0 0 0 4 10h8a1.5 1.5 0 0 0 1.5-1.5v-4A1.5 1.5 0 0 0 12 3M4 1.5a3 3 0 0 0-3 3v4a3 3 0 0 0 3 3h3.25V13h-2.5a.75.75 0 0 0 0 1.5h6.5a.75.75 0 0 0 0-1.5h-2.5v-1.5H12a3 3 0 0 0 3-3v-4a3 3 0 0 0-3-3z\" clip-rule=\"evenodd\"/>"
   },
@@ -153,6 +165,12 @@ export const GRAVITY_ICONS: IconifyJSON["icons"] = {
   },
   "layers": {
     "body": "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"m2.789 5.283l4.037-2.02A2.5 2.5 0 0 1 7.944 3h.112c.388 0 .77.09 1.118.264l4.037 2.019a.522.522 0 0 1 0 .934l-4.037 2.02a2.5 2.5 0 0 1-1.118.263h-.112a2.5 2.5 0 0 1-1.118-.264L2.79 6.217a.523.523 0 0 1 0-.934M1 5.75c0-.766.433-1.466 1.118-1.809l4.037-2.019a4 4 0 0 1 1.79-.422h.11a4 4 0 0 1 1.79.422l4.037 2.019a2.023 2.023 0 0 1 0 3.618l-.882.44l.882.442a2.023 2.023 0 0 1 0 3.618l-4.037 2.019a4 4 0 0 1-1.79.422h-.11a4 4 0 0 1-1.79-.422l-4.037-2.02a2.023 2.023 0 0 1 0-3.617L3 8l-.882-.441A2.02 2.02 0 0 1 1 5.75m3.677 3.088l-1.888.945a.523.523 0 0 0 0 .934l4.037 2.019A2.5 2.5 0 0 0 7.944 13h.112a2.5 2.5 0 0 0 1.118-.264l4.037-2.019a.523.523 0 0 0 0-.934l-1.888-.945l-1.478.74a4 4 0 0 1-1.79.422h-.11a4 4 0 0 1-1.79-.422z\" clip-rule=\"evenodd\"/>"
+  },
+  "layout-columns": {
+    "body": "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M8.75 3.5H12A1.5 1.5 0 0 1 13.5 5v6a1.5 1.5 0 0 1-1.5 1.5H8.75zm-1.5 0H4A1.5 1.5 0 0 0 2.5 5v6A1.5 1.5 0 0 0 4 12.5h3.25zM1 5a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H4a3 3 0 0 1-3-3z\" clip-rule=\"evenodd\"/>"
+  },
+  "layout-side-content-left": {
+    "body": "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M6 3.5h6A1.5 1.5 0 0 1 13.5 5v6a1.5 1.5 0 0 1-1.5 1.5H6zm-1.5 0H4A1.5 1.5 0 0 0 2.5 5v6A1.5 1.5 0 0 0 4 12.5h.5zM1 5a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H4a3 3 0 0 1-3-3z\" clip-rule=\"evenodd\"/>"
   },
   "link": {
     "body": "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M3.47 6.53a.75.75 0 0 1 1.06 1.061l-.727.727a2.743 2.743 0 0 0 3.879 3.879l.727-.727a.75.75 0 0 1 1.06 1.06l-.726.727a4.243 4.243 0 0 1-6-6zm8 1.879a.75.75 0 0 0 1.06 1.06l.727-.726a4.243 4.243 0 0 0-6-6l-.727.727a.75.75 0 0 0 1.061 1.06l.727-.727a2.743 2.743 0 0 1 3.879 3.879zm-.94-1.879a.75.75 0 1 0-1.06-1.06l-4 4a.75.75 0 1 0 1.06 1.06z\" clip-rule=\"evenodd\"/>"

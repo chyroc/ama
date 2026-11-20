@@ -113,7 +113,7 @@ import { recordFailedCall, routePatternForReport, type FeedbackPayload } from "@
  * same-origin means no cross-origin, and the backend needs no CORS config. To connect elsewhere,
  * override with VITE_API_BASE (no trailing slash).
  */
-const API_BASE = (import.meta.env.VITE_API_BASE ?? "/api").replace(/\/+$/, "");
+export const API_BASE = (import.meta.env.VITE_API_BASE ?? "/api").replace(/\/+$/, "");
 
 /**
  * How identity is sent.
@@ -602,8 +602,8 @@ export class HttpApiClient implements ApiClient {
    */
   async getCurrentUser(): Promise<AuthUser | null> {
     try {
-      const res = await request<{ user: AuthUser }>("GET", "/auth/me");
-      return res.user;
+      const res = await request<{ user: AuthUser; platformAdmin?: boolean }>("GET", "/auth/me");
+      return { ...res.user, platformAdmin: res.platformAdmin === true };
     } catch (e) {
       if (e instanceof ApiError && e.code === UNAUTHENTICATED_CODE) return null;
       throw e;
@@ -640,6 +640,12 @@ export class HttpApiClient implements ApiClient {
   /** Sign up and log in directly. See ApiClient.signup. */
   async signup(input: { email: string; password: string; name?: string }): Promise<AuthUser> {
     const res = await request<{ user: AuthUser }>("POST", "/auth/signup", { body: input });
+    return res.user;
+  }
+
+  /** Platform admin creates an account for someone. See ApiClient.createLocalUser. */
+  async createLocalUser(input: { email: string; password: string; name?: string }): Promise<AuthUser> {
+    const res = await request<{ user: AuthUser }>("POST", "/admin/users", { body: input });
     return res.user;
   }
 

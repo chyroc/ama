@@ -66,6 +66,7 @@ import {
   Avatar,
   Button,
   Card,
+  Checkbox,
   Chip,
   Description,
   FieldError,
@@ -80,6 +81,8 @@ import {
 } from "@heroui/react";
 import { Icon } from "@iconify/react";
 import { api } from "@/data/api";
+import { ApiError } from "@/data/http";
+import { useAuth } from "@/app/AuthGate";
 import { useWorkspace } from "@/app/WorkspaceGate";
 import { preferencesPath } from "@/app/preferencesLink";
 import {
@@ -905,6 +908,15 @@ function MembersTab() {
   const [name, setName] = useState("");
   const [role, setRole] = useState<WorkspaceRole>("member");
   const [emailError, setEmailError] = useState<string | null>(null);
+  /**
+   * Platform admins can create the login account in the same step. Sign-up is closed by default
+   * (`auth.local.allowSignup`), so without this an invited email has no way to log in, and the
+   * only other path is calling `POST /api/admin/users` by hand.
+   */
+  const canCreateAccount = useAuth().user.platformAdmin === true;
+  const [createAccount, setCreateAccount] = useState(true);
+  const [password, setPassword] = useState("");
+  const [passwordError, setPasswordError] = useState<string | null>(null);
 
   /**
    * People sorted by role: owner → admin → member → viewer.
@@ -923,6 +935,9 @@ function MembersTab() {
     setName("");
     setRole("member");
     setEmailError(null);
+    setCreateAccount(true);
+    setPassword("");
+    setPasswordError(null);
     setInviting(true);
   };
 
@@ -987,8 +1002,22 @@ function MembersTab() {
               return false;
             }
             setEmailError(null);
+            const withAccount = canCreateAccount && createAccount;
+            if (withAccount && new TextEncoder().encode(password).length < 8) {
+              setPasswordError(t("settings.memberPasswordTooShort"));
+              return false;
+            }
+            const displayName = name.trim() || trimmed.split("@")[0];
+            if (withAccount) {
+              try {
+                await api.createLocalUser({ email: trimmed, password, name: displayName });
+              } catch (e) {
+                // Already has an account (e.g. invited to another workspace before): just add it.
+                if (!(e instanceof ApiError && e.code === "email_taken")) throw e;
+              }
+            }
             await api.addMember(workspace.id, {
-              name: name.trim() || trimmed.split("@")[0],
+              name: displayName,
               email: trimmed,
               role,
             });
@@ -1023,6 +1052,47 @@ function MembersTab() {
             />
           </TextField>
           <RoleSelect role={role} onChange={setRole} testId="member-role" />
+          {canCreateAccount ? (
+            <>
+              <Checkbox
+                isSelected={createAccount}
+                onChange={setCreateAccount}
+                data-testid="member-create-account"
+              >
+                <Checkbox.Content>
+                  <Checkbox.Control>
+                    <Checkbox.Indicator />
+                  </Checkbox.Control>
+                  <span className="flex flex-col">
+                    <span className="text-sm">{t("settings.memberCreateAccount")}</span>
+                    <span className="text-xs text-muted">
+                      {t("settings.memberCreateAccountHint")}
+                    </span>
+                  </span>
+                </Checkbox.Content>
+              </Checkbox>
+              {createAccount ? (
+                <TextField isRequired isInvalid={Boolean(passwordError)}>
+                  <Label>{t("settings.memberInitialPassword")}</Label>
+                  <Input
+                    type="text"
+                    autoComplete="off"
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      setPasswordError(null);
+                    }}
+                    data-testid="member-password"
+                  />
+                  {passwordError ? (
+                    <FieldError>{passwordError}</FieldError>
+                  ) : (
+                    <Description>{t("settings.memberInitialPasswordHint")}</Description>
+                  )}
+                </TextField>
+              ) : null}
+            </>
+          ) : null}
         </FormModal>
 
         <ConfirmModal

@@ -39,6 +39,7 @@ import {
   AgentEnvSection,
   AgentExecutorSection,
   AgentIntegrationsSection,
+  AgentMemorySection,
 } from "@/components/AgentRuntimeSections";
 import { useCanManage, useCanWrite } from "@/lib/useCanManage";
 import { RevisionPanel } from "@/components/RevisionPanel";
@@ -53,7 +54,7 @@ import {
 } from "@/components/Page";
 import { ConfirmModal } from "@/components/FormModal";
 import { Issue } from "@/components/FeishuReadiness";
-import { ModelPicker } from "@/pages/AgentsPage";
+import { CodexAgentNotice, ModelPicker } from "@/pages/AgentsPage";
 import { AgentArkCard } from "@/pages/AgentArkCard";
 import { formatDuration, formatRelative, truncate } from "@/lib/format";
 import { useAsyncData } from "@/lib/useAsyncData";
@@ -62,6 +63,7 @@ import {
   AGENT_STATUS_LABELS,
   BUILTIN_TOOLS,
   FEISHU_STATUS_COLOR,
+  isCodexAgent,
   modelSpec,
   skillSourceBadge,
   followUpOrDefault,
@@ -124,15 +126,24 @@ function ConfigTab({
   setDraft,
   agentId,
   createdByEmail,
+  baseAgent,
 }: {
   agentId: string;
   draft: AgentDraft;
   setDraft: (d: AgentDraft) => void;
   /** Creator email of the saved agent: the executor's personal direct-connect read-only state depends on it. */
   createdByEmail?: string;
+  /**
+   * The saved agent's baseAgent. Comes from `Agent`, **not from the draft**: the field is write-once
+   * (the server rejects a changed value on update), so it is deliberately not part of the editable
+   * draft (see toAgentDraft), and this page only displays it.
+   */
+  baseAgent?: string;
 }) {
   const { t } = usePrefs();
   const wp = useWorkspacePath();
+  // Saved value, not draft: see the comment on the prop. Everything "runtime" below branches on it.
+  const codex = isCodexAgent(baseAgent);
 
   /*
    * The authorization list is **its own hook, deliberately not merged into the page-level
@@ -275,8 +286,29 @@ function ConfigTab({
               </ListBox>
             </Select.Popover>
           </Select>
+
+          {/*
+            Base agent type, **read-only**. It is write-once on the server (an update carrying a
+            changed value is a 400), so this is a value, not a form control: drawing a Select here
+            would promise an edit that can never save.
+            It reads from `agent.baseAgent` through the prop, because the draft deliberately does
+            not carry the field (see toAgentDraft).
+          */}
+          <div className="flex flex-wrap items-center gap-2" data-testid="cfg-base-agent">
+            <span className="text-xs text-muted">{t("agent.baseAgentSection")}</span>
+            <Chip size="sm" variant="soft">
+              <Chip.Label>
+                {codex ? t("agent.baseAgentCodex") : t("agent.baseAgentGeneral")}
+              </Chip.Label>
+            </Chip>
+            <span className="text-xs text-muted">{t("agent.baseAgentReadonly")}</span>
+          </div>
         </Card.Content>
       </Card>
+
+      {/* The "what stops working" warning, right below the identity block and above everything it
+          affects: prompt/model/tool switches still apply, the runtime blocks further down do not. */}
+      {codex ? <CodexAgentNotice /> : null}
 
       <Card>
         <Card.Content className="flex flex-col gap-5 pt-6">
@@ -336,22 +368,44 @@ function ConfigTab({
       </Card>
 
       {/*
+        Long-term memory. **Its own card, above the runtime block**: it is not about "where tools run"
+        (executor) or "what credentials are injected" but about what the model receives on every turn,
+        which is the same kind of decision as the tool switches right above it.
+
+        The whole card is drawn for Codex agents too: recall/capture append a text block to the Ark
+        message stream (core/openviking.go), which is independent of the harness — unlike the
+        executor/skills/custom tools below it, this one does apply.
+      */}
+      <Card>
+        <Card.Content className="flex flex-col gap-5 pt-6">
+          <AgentMemorySection draft={draft} setDraft={setDraft} testId="cfg-openviking" />
+        </Card.Content>
+      </Card>
+
+      {/*
         "What this agent can get at runtime": executor choice + authorization checks + custom env.
         The three blocks **share one component** with the create page, the same shape word for word
         (see AgentRuntimeSections).
 
         There are several authorization sources, so it is a group of checkboxes rather than a single
         boolean switch.
+
+        ⚠️ The executor block is **not rendered for a Codex agent**: its tools run in Ark's cloud
+        sandbox, AMA's Docker/host worker is never involved, and the stored executor values are
+        meaningless. Hidden rather than disabled: a disabled control still says "this is a decision
+        about this agent", and there is no decision to make.
       */}
       <Card>
         <Card.Content className="flex flex-col gap-6 pt-6">
-          <AgentExecutorSection
-            draft={draft}
-            setDraft={setDraft}
-            workspaceId={workspace.id}
-            workspaceKey={workspace.key}
-            createdByEmail={createdByEmail}
-          />
+          {codex ? null : (
+            <AgentExecutorSection
+              draft={draft}
+              setDraft={setDraft}
+              workspaceId={workspace.id}
+              workspaceKey={workspace.key}
+              createdByEmail={createdByEmail}
+            />
+          )}
           <AgentIntegrationsSection
             draft={draft}
             setDraft={setDraft}
@@ -416,10 +470,13 @@ function SkillsTab({
   draft,
   setDraft,
   skills,
+  baseAgent,
 }: {
   draft: AgentDraft;
   setDraft: (d: AgentDraft) => void;
   skills: Skill[];
+  /** The saved agent's baseAgent (read-only); a Codex agent has no skills at all. */
+  baseAgent?: string;
 }) {
   const { t } = usePrefs();
   const wp = useWorkspacePath();
@@ -430,6 +487,26 @@ function SkillsTab({
       ...draft,
       skillIds: has ? draft.skillIds.filter((s) => s !== id) : [...draft.skillIds, id],
     });
+  }
+
+  /*
+   * A Codex agent gets **no skill list at all**: skills are injected into AMA's worker container,
+   * which that harness never uses, so binding one would look like it takes effect and then do
+   * nothing at runtime. The tab stays (it is linked from elsewhere) and explains instead of showing
+   * a list whose checkboxes would be a lie.
+   *
+   * ⚠️ Before the empty-workspace branch: "no skills in this workspace" is the wrong thing to say
+   * here — it would send people off to create a skill that can never be used.
+   */
+  if (isCodexAgent(baseAgent)) {
+    return (
+      <Card>
+        <Card.Content className="flex flex-col gap-4 pt-6">
+          <SectionTitle title={t("skill.bindTitle")} description={t("agent.skillsCodexHint")} />
+          <CodexAgentNotice />
+        </Card.Content>
+      </Card>
+    );
   }
 
   if (skills.length === 0) {
@@ -1545,6 +1622,19 @@ export function AgentDetailPage() {
 
       {/* Summary bar: lay out key config at the top, visible without switching tabs */}
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 r-inset bg-surface-secondary px-4 py-3 text-xs">
+        {/*
+          Only shown for a Codex agent: "general" is the default the whole page used to describe, so
+          printing it on every existing agent would be noise. This one changes what the rest of the
+          page means, so it goes first.
+        */}
+        {isCodexAgent(agent.baseAgent) ? (
+          <span className="flex items-center gap-1.5">
+            <span className="text-muted">{t("agent.baseAgentSection")}</span>
+            <Chip size="sm" variant="soft" data-testid="summary-base-agent">
+              <Chip.Label>{t("agent.baseAgentCodex")}</Chip.Label>
+            </Chip>
+          </span>
+        ) : null}
         <span className="flex items-center gap-1.5">
           <span className="text-muted">{t("agent.model")}</span>
           <span className="font-medium">{spec.label}</span>
@@ -1553,12 +1643,15 @@ export function AgentDetailPage() {
           <span className="text-muted">{t("agent.summaryReasoning")}</span>
           <span>{t(`enum.effort.${d.model.reasoning_effort ?? "high"}`)}</span>
         </span>
-        <span className="flex items-center gap-1.5">
-          <span className="text-muted">{t("overview.metricSkills")}</span>
-          <span className="num" data-testid="summary-skills">
-            {d.skillIds.length}
+        {/* A Codex agent has no skills; a "0" here would read as "you could add some". */}
+        {isCodexAgent(agent.baseAgent) ? null : (
+          <span className="flex items-center gap-1.5">
+            <span className="text-muted">{t("overview.metricSkills")}</span>
+            <span className="num" data-testid="summary-skills">
+              {d.skillIds.length}
+            </span>
           </span>
-        </span>
+        )}
         <span className="flex items-center gap-1.5">
           <span className="text-muted">{t("agent.summaryFeishu")}</span>
           <span className="num" data-testid="summary-feishu">
@@ -1615,9 +1708,18 @@ export function AgentDetailPage() {
           draft={d}
           setDraft={setDraft}
           createdByEmail={agent.createdBy}
+          /* Saved value, not draft: baseAgent is write-once (see toAgentDraft). */
+          baseAgent={agent.baseAgent}
         />
       ) : null}
-      {tab === "skills" ? <SkillsTab draft={d} setDraft={setDraft} skills={skills} /> : null}
+      {tab === "skills" ? (
+        <SkillsTab
+          draft={d}
+          setDraft={setDraft}
+          skills={skills}
+          baseAgent={agent.baseAgent}
+        />
+      ) : null}
       {tab === "feishu" ? (
         <FeishuTab
           draft={d}

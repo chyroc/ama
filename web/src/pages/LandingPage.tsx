@@ -46,7 +46,7 @@ import { Icon } from "@iconify/react";
 import { BrandMark } from "@/components/BrandMark";
 import { CopyButton } from "@/components/CopyButton";
 import { api } from "@/data/api";
-import type { AuthProviders, AuthUser, GitHubDeviceStart } from "@/data/api";
+import type { AuthProviders, AuthUser, GitHubDeviceStart, UIBranding } from "@/data/api";
 import { ApiError } from "@/data/http";
 import { useT } from "@/prefs/PrefsContext";
 import type { MessageKey } from "@/prefs/messages";
@@ -136,11 +136,14 @@ const FEATURES: { icon: string; titleKey: MessageKey; descKey: MessageKey }[] = 
 
 export function LandingPage({ onLoggedIn }: { onLoggedIn: (user: AuthUser) => void }) {
   const t = useT();
+  const [uiBranding, setUiBranding] = useState<UIBranding | undefined>(undefined);
   // Read the callback failure reason from the URL. **Use window.location, not useSearchParams**:
   // this component is **outside** RouterProvider (AuthGate wraps the whole route table), so it has
   // no router context.
   const reason = new URLSearchParams(window.location.search).get("login_error");
   const errorKey = reason ? (LOGIN_ERROR_KEYS[reason] ?? "login.errUnavailable") : null;
+  const brandName = uiBranding?.brandName?.trim() || "AMA";
+  const brandBadge = uiBranding?.brandBadge?.trim() || "";
 
   // The outer full-page shell and background belong here; LoginPage only draws one card. Writing
   // min-h-dvh in both places would stack two layers.
@@ -169,7 +172,12 @@ export function LandingPage({ onLoggedIn }: { onLoggedIn: (user: AuthUser) => vo
             {/* Brand mark: logo + wordmark. On the whole page only this and the login card have weight. */}
             <div className="flex items-center gap-2.5">
               <BrandMark />
-              <span className="text-2xl font-semibold tracking-tight">AMA</span>
+              <span className="text-2xl font-semibold tracking-tight">{brandName}</span>
+              {brandBadge ? (
+                <span className="r-chip border border-border px-2 py-0.5 text-xs text-muted">
+                  {brandBadge}
+                </span>
+              ) : null}
             </div>
 
             <div className="flex flex-col items-center gap-3">
@@ -219,7 +227,7 @@ export function LandingPage({ onLoggedIn }: { onLoggedIn: (user: AuthUser) => vo
               </div>
             )}
 
-            <LoginCard onLoggedIn={onLoggedIn} />
+            <LoginCard onLoggedIn={onLoggedIn} onBrandingLoaded={setUiBranding} />
           </header>
 
           {/* Narrow screens one column, sm two columns, lg four in a row. */}
@@ -250,7 +258,13 @@ type ProvidersState =
  * Login card: email/password form (can switch to sign-up) + OIDC button; which parts show depends
  * on providers.
  */
-function LoginCard({ onLoggedIn }: { onLoggedIn: (user: AuthUser) => void }) {
+function LoginCard({
+  onLoggedIn,
+  onBrandingLoaded,
+}: {
+  onLoggedIn: (user: AuthUser) => void;
+  onBrandingLoaded?: (ui: UIBranding | undefined) => void;
+}) {
   const t = useT();
   const [state, setState] = useState<ProvidersState>({ phase: "loading" });
   const [githubFlow, setGitHubFlow] = useState<GitHubDeviceStart | null>(null);
@@ -274,11 +288,17 @@ function LoginCard({ onLoggedIn }: { onLoggedIn: (user: AuthUser) => void }) {
   const load = useCallback(async () => {
     setState({ phase: "loading" });
     try {
-      setState({ phase: "ready", providers: await api.getAuthProviders() });
+      const providers = await api.getAuthProviders();
+      onBrandingLoaded?.(providers.ui);
+      const customTitle = providers.ui?.title?.trim();
+      if (customTitle && typeof document !== "undefined") {
+        document.title = customTitle;
+      }
+      setState({ phase: "ready", providers });
     } catch {
       setState({ phase: "failed" });
     }
-  }, []);
+  }, [onBrandingLoaded]);
 
   useEffect(() => {
     void load();
@@ -351,6 +371,7 @@ function LoginCard({ onLoggedIn }: { onLoggedIn: (user: AuthUser) => void }) {
           <PasswordForm
             signupOpen={local.signupOpen}
             firstUser={local.signupOpen && !local.allowSignup}
+            brandName={state.providers.ui?.brandName?.trim()}
             onLoggedIn={onLoggedIn}
           />
         )}
@@ -416,11 +437,13 @@ function LoginCard({ onLoggedIn }: { onLoggedIn: (user: AuthUser) => void }) {
 function PasswordForm({
   signupOpen,
   firstUser,
+  brandName,
   onLoggedIn,
 }: {
   signupOpen: boolean;
   /** The deployment has no accounts yet (sign-up is not enabled in config, but the first account can sign up). */
   firstUser: boolean;
+  brandName?: string;
   onLoggedIn: (user: AuthUser) => void;
 }) {
   const t = useT();
@@ -458,7 +481,15 @@ function PasswordForm({
 
   return (
     <Form className="flex flex-col gap-4" onSubmit={(e) => void onSubmit(e)}>
-      <h2 className="text-lg font-semibold">{isSignup ? t("login.signupTitle") : t("login.title")}</h2>
+      <h2 className="text-lg font-semibold">
+        {isSignup
+          ? brandName
+            ? t("login.signupTitleWithBrand", { brand: brandName })
+            : t("login.signupTitle")
+          : brandName
+            ? t("login.titleWithBrand", { brand: brandName })
+            : t("login.title")}
+      </h2>
 
       {isSignup && firstUser && (
         <p className="text-sm text-muted" data-testid="login-first-user-hint">
@@ -538,6 +569,12 @@ function PasswordForm({
         >
           {isSignup ? t("login.toLogin") : t("login.toSignup")}
         </Button>
+      )}
+      {/* Sign-up closed: accounts are created by a platform admin when inviting members (see MembersTab). */}
+      {!signupOpen && (
+        <p className="self-center text-xs text-muted" data-testid="login-ask-admin">
+          {t("login.askAdmin")}
+        </p>
       )}
     </Form>
   );

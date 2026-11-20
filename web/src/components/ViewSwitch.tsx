@@ -24,14 +24,14 @@ import { useSearchParams } from "react-router-dom";
 import { Segment } from "@/components/ui/Segment";
 import { useT } from "@/prefs/PrefsContext";
 
-export type RunView = "conversation" | "events" | "trace" | "files" | "terminal";
+export type RunView = "conversation" | "events" | "trace" | "files" | "terminal" | "cua";
 
 const PARAM = "view";
 
 /**
  * Reads the current view from the URL and returns a switch function.
  *
- * Only the four values `events` / `trace` / `files` / `terminal` are accepted; anything else (missing, misspelled, old links) falls back to the chat view;
+ * Only the five values `events` / `trace` / `files` / `terminal` / `cua` are accepted; anything else (missing, misspelled, old links) falls back to the chat view;
  * the default view should not change because of one unrecognized parameter.
  */
 export function useRunView(): [RunView, (next: RunView) => void] {
@@ -46,7 +46,9 @@ export function useRunView(): [RunView, (next: RunView) => void] {
           ? "files"
           : raw === "terminal"
             ? "terminal"
-            : "conversation";
+            : raw === "cua"
+              ? "cua"
+              : "conversation";
 
   const setView = (next: RunView) => {
     const updated = new URLSearchParams(params);
@@ -63,9 +65,21 @@ export function useRunView(): [RunView, (next: RunView) => void] {
 export function ViewSwitch({
   view,
   onChange,
+  hasCua,
+  hideSandbox,
 }: {
   view: RunView;
   onChange: (next: RunView) => void;
+  hasCua?: boolean;
+  /**
+   * Hide the files / terminal items. Used by the chat page for a Codex agent: its tools run in Ark's
+   * cloud sandbox, so AMA never creates a container or terminal for that run and both panels could
+   * only fail.
+   *
+   * ⚠️ Callers must also keep `view` off the hidden values, or the segmented control selects
+   * nothing (ChatPage falls back to the conversation view for a stale `?view=files` link).
+   */
+  hideSandbox?: boolean;
 }) {
   const t = useT();
   return (
@@ -85,12 +99,24 @@ export function ViewSwitch({
       <Segment.Item id="trace" data-testid="view-trace">
         {t("view.trace")}
       </Segment.Item>
-      <Segment.Item id="files" data-testid="view-files">
-        {t("view.files")}
-      </Segment.Item>
-      <Segment.Item id="terminal" data-testid="view-terminal">
-        {t("view.terminal")}
-      </Segment.Item>
+      {hideSandbox ? null : (
+        <Segment.Item id="files" data-testid="view-files">
+          {t("view.files")}
+        </Segment.Item>
+      )}
+      {hideSandbox ? null : (
+        <Segment.Item id="terminal" data-testid="view-terminal">
+          {t("view.terminal")}
+        </Segment.Item>
+      )}
+      {hideSandbox ? null : (
+        <Segment.Item id="cua" data-testid="view-cua">
+          <span className="inline-flex items-center gap-1">
+            <span>{t("view.cua")}</span>
+            {hasCua && <span className="h-1.5 w-1.5 rounded-full bg-success" />}
+          </span>
+        </Segment.Item>
+      )}
     </Segment>
   );
 }

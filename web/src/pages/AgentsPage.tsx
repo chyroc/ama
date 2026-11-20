@@ -28,7 +28,7 @@ import {
 import { Icon } from "@iconify/react";
 import { api } from "@/data/api";
 import { useWorkspace, useWorkspacePath } from "@/app/WorkspaceGate";
-import { AsyncErrorBlock, Empty, ListSkeleton, PageBody, PageHeader, SectionTitle } from "@/components/Page";
+import { AsyncErrorBlock, Empty, ListSkeleton, Notice, PageBody, PageHeader, SectionTitle } from "@/components/Page";
 import { ModelIcon } from "@/components/ModelIcon";
 import { formatRelative, truncate } from "@/lib/format";
 import { useAsyncData } from "@/lib/useAsyncData";
@@ -36,6 +36,7 @@ import {
   BUILTIN_TOOLS,
   MODEL_SPECS,
   isBuiltinSkill,
+  isCodexAgent,
   modelSpec,
   type AgentDraft,
   type AgentStatus,
@@ -52,6 +53,7 @@ import {
   AgentEnvSection,
   AgentExecutorSection,
   AgentIntegrationsSection,
+  AgentMemorySection,
 } from "@/components/AgentRuntimeSections";
 import { useCanManage } from "@/lib/useCanManage";
 import { SkillLibraryPicker } from "@/components/SkillLibraryPicker";
@@ -63,6 +65,29 @@ const STATUS_COLOR: Record<AgentStatus, "default" | "success" | "warning"> = {
   active: "success",
   disabled: "default",
 };
+
+/**
+ * The "this is a Codex agent" warning, shared by the create page and the detail page.
+ *
+ * It must say **what stops working**, not just "Codex": the two kinds of agent look identical in this
+ * form (same prompt/model/tool switches), and the difference only shows up at runtime, as "the
+ * terminal is empty" or "the skill I bound does nothing". One sentence here is cheaper than that.
+ *
+ * The wording is the product's: Codex tools run in **Ark's cloud sandbox**, so AMA's container,
+ * terminal, skills and datasource tools are unavailable.
+ */
+export function CodexAgentNotice() {
+  const { t } = usePrefs();
+  return (
+    <Notice
+      tone="warning"
+      icon="gravity-ui:triangle-exclamation"
+      title={t("agent.baseAgentCodexNotice")}
+      hint={t("agent.baseAgentCodexNoticeHint")}
+      data-testid="codex-agent-notice"
+    />
+  );
+}
 
 /**
  * Initial draft for a new agent.
@@ -147,6 +172,17 @@ export function emptyAgentDraft(): AgentDraft {
     // "defaults not applied yet" both look like empty arrays, and a ref is needed to tell them
     // apart). There is no default to apply here.
     integrationIds: [],
+    // **Long-term memory (OpenViking) is opt-in, so a new agent starts with it off.** Written out
+    // even though false is the zero value: the server assigns this field unconditionally on update,
+    // so "the draft carries it" is the rule that keeps an unrelated save from switching memory off
+    // (see the comments on AgentDraft.openVikingEnabled).
+    openVikingEnabled: false,
+    // General agent (the built-in agent loop), i.e. the empty string. **Written out even though it
+    // is the default**: this is the only place where baseAgent is *chosen* (a saved agent's value is
+    // read-only, the server rejects changing it), and a create form that left the field undefined
+    // would send no key at all — the same thing to the server, but then the two "create" paths (a
+    // plain agent and a Codex one) would differ in shape for no reason.
+    baseAgent: "",
     envs: [],
     envAliases: [],
     // Default Docker container (executorType empty string), no host attached. **Empty string, not
@@ -176,6 +212,9 @@ export function ModelPicker({
 }) {
   const { t } = usePrefs();
   const spec = modelSpec(draft.model.id);
+  const modelOptions = MODEL_SPECS.some((m) => m.id === draft.model.id)
+    ? MODEL_SPECS
+    : [spec, ...MODEL_SPECS];
 
   function changeModel(id: ModelId) {
     const next = modelSpec(id);
@@ -220,7 +259,7 @@ export function ModelPicker({
         </Select.Trigger>
         <Select.Popover>
           <ListBox>
-            {MODEL_SPECS.map((m) => (
+            {modelOptions.map((m) => (
               <ListBox.Item key={m.id} id={m.id} textValue={m.label}>
                 {/* items-center rather than the default stretch: the icon must center against the two lines of text as a whole */}
                 <span className="flex items-center gap-2">
@@ -448,7 +487,28 @@ export function AgentsPage() {
                           <Icon icon="gravity-ui:face-robot" className="size-4 text-muted" />
                         </span>
                         <div className="flex min-w-0 flex-col gap-1">
-                          <p className="truncate font-medium">{a.name}</p>
+                          {/*
+                            The Codex marker sits **next to the name** rather than in the chip row
+                            below: that row holds "what this agent is configured with" (model,
+                            skills, Feishu), while the base agent decides whether the rest even
+                            applies, so it belongs to the identity line.
+                            The name keeps `truncate` in its own span: as soon as the row becomes a
+                            flex container the truncation would stop working, and a long name would
+                            push the chip (and the status chip on the right) out of the card.
+                          */}
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <span className="truncate font-medium">{a.name}</span>
+                            {isCodexAgent(a.baseAgent) ? (
+                              <Chip
+                                size="sm"
+                                variant="soft"
+                                data-testid={`agent-codex-${a.id}`}
+                                className="shrink-0"
+                              >
+                                <Chip.Label>{t("agent.baseAgentCodexBadge")}</Chip.Label>
+                              </Chip>
+                            ) : null}
+                          </span>
                           <p className="truncate text-xs text-muted">{a.description}</p>
                         </div>
                       </div>
@@ -484,6 +544,20 @@ export function AgentsPage() {
                       {a.feishuAppIds.length > 0 ? (
                         <Chip size="sm" variant="soft">
                           <Chip.Label>{t("agent.feishuBound")}</Chip.Label>
+                        </Chip>
+                      ) : null}
+                      {/*
+                        Long-term memory opt-in marker. Reaches the list too, not just the detail
+                        page: "why does this agent remember things from a month ago" is a question
+                        people ask while scanning the list, and the answer should be visible there.
+                      */}
+                      {a.openVikingEnabled ? (
+                        <Chip
+                          size="sm"
+                          variant="soft"
+                          data-testid={`agent-openviking-${a.id}`}
+                        >
+                          <Chip.Label>{t("agent.memoryBadge")}</Chip.Label>
                         </Chip>
                       ) : null}
                     </div>
@@ -570,12 +644,22 @@ function NewAgentCapabilities({
   setDraft,
   builtinSkills,
   skills,
+  hideSkills,
 }: {
   draft: AgentDraft;
   setDraft: (d: AgentDraft) => void;
   builtinSkills: Skill[];
   /** All skills in the workspace (built-in included). null means not fetched yet or fetch failed. */
   skills: Skill[] | null;
+  /**
+   * Hide the two skill blocks, keeping only the built-in tool switches. Used for a Codex agent:
+   * its tools run in Ark's cloud sandbox and workspace skills are injected into AMA's container, so
+   * binding one changes nothing at runtime.
+   *
+   * The draft is **not** cleared here: the caller decides what to send (see NewAgentPage's submit),
+   * so switching the type back and forth does not lose the picks.
+   */
+  hideSkills?: boolean;
 }) {
   const { t } = usePrefs();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -661,7 +745,7 @@ function NewAgentCapabilities({
         the user is waiting for;
         leaving a flashing gray bar for it would only make the form look unfinished loading.
       */}
-      {builtinSkills.length > 0 ? (
+      {builtinSkills.length > 0 && !hideSkills ? (
         <div className="flex flex-col gap-4">
           <SectionTitle
             title={t("agent.builtinSkillsSection")}
@@ -719,7 +803,7 @@ function NewAgentCapabilities({
         from the skill library",
         and hiding it would leave users unaware of that path (see SkillLibraryPicker's empty state).
       */}
-      {skills !== null ? (
+      {skills !== null && !hideSkills ? (
         <div className="flex flex-col gap-4">
           <SectionTitle
             title={t("skill.pickerSection")}
@@ -986,6 +1070,8 @@ export function NewAgentPage() {
     setDraft((cur) => ({ ...cur, skillIds: [...cur.skillIds, ...ids] }));
   }, [skills]);
 
+  const codex = isCodexAgent(draft.baseAgent);
+
   async function submit() {
     const e: Partial<Record<string, string>> = {};
     if (!draft.name.trim()) e.name = t("agent.nameRequired");
@@ -993,9 +1079,24 @@ export function NewAgentPage() {
     setErrors(e);
     if (Object.keys(e).length > 0) return;
 
+    /*
+     * For a Codex agent, executor and skills **do not apply** (tools run in Ark's cloud sandbox;
+     * AMA's worker/container is not involved), so the payload must not carry leftovers from before
+     * the user switched the type.
+     *
+     * ⚠️ The draft itself is **not** cleared when switching the type: switching back and forth
+     * should not lose the host/skills the user already picked, and clearing on switch would do
+     * exactly that. They are simply dropped here, where the meaning is decided. The sections are
+     * hidden while Codex is selected, so nothing invisible is being "thrown away" from the user's
+     * point of view.
+     */
+    const payload: AgentDraft = codex
+      ? { ...draft, executorType: "", hostId: "", hostSource: "", skillIds: [] }
+      : draft;
+
     setSubmitting(true);
     try {
-      const agent = await api.createAgent(workspace.id, draft);
+      const agent = await api.createAgent(workspace.id, payload);
       navigate(wp(`/agents/${agent.id}`));
     } finally {
       setSubmitting(false);
@@ -1043,6 +1144,44 @@ export function NewAgentPage() {
             </TextField>
           </div>
 
+          {/*
+            "What drives this agent", placed **before the prompt**: the choice changes what the rest
+            of the form means (executor and skills disappear for Codex), and picking it after filling
+            in a prompt would make half the form vanish after the fact.
+          */}
+          <div className="flex flex-col gap-2">
+            <Select
+              className="max-w-sm"
+              selectedKey={codex ? "codex" : "general"}
+              onSelectionChange={(k) =>
+                setDraft({ ...draft, baseAgent: k === "codex" ? "codex" : "" })
+              }
+            >
+              <Label>{t("agent.baseAgentSection")}</Label>
+              <Select.Trigger data-testid="agent-base-agent">
+                <Select.Value />
+                <Select.Indicator />
+              </Select.Trigger>
+              <Select.Popover>
+                <ListBox>
+                  {/*
+                    The keys are **not** the stored values: the default general agent is stored as an
+                    empty string, and an empty ListBox id is a trap of its own (selection and
+                    "nothing selected" become indistinguishable). Map at the edge instead.
+                  */}
+                  <ListBox.Item id="general" textValue={t("agent.baseAgentGeneral")}>
+                    {t("agent.baseAgentGeneral")}
+                  </ListBox.Item>
+                  <ListBox.Item id="codex" textValue={t("agent.baseAgentCodex")}>
+                    {t("agent.baseAgentCodex")}
+                  </ListBox.Item>
+                </ListBox>
+              </Select.Popover>
+            </Select>
+            <Description>{t("agent.baseAgentSectionDesc")}</Description>
+            {codex ? <CodexAgentNotice /> : null}
+          </div>
+
           <TextField isRequired isInvalid={Boolean(errors.system)}>
             <Label>{t("agent.system")}</Label>
             <TextArea
@@ -1063,16 +1202,34 @@ export function NewAgentPage() {
             setDraft={setDraft}
             builtinSkills={builtinSkills}
             skills={skills}
+            // Skills are injected into AMA's worker container, which a Codex agent never uses: the
+            // whole skill area is hidden (the warning above says why), not drawn disabled.
+            hideSkills={codex}
           />
 
-          {/* Executor choice: placed between "what this agent can do" and "authorization injection";
-              it answers "where tools run", runtime config like capabilities; both blocks share one component. */}
-          <AgentExecutorSection
-            draft={draft}
-            setDraft={setDraft}
-            workspaceId={workspace.id}
-            workspaceKey={workspace.key}
-          />
+          {/*
+            Long-term memory: the same component as the detail page (shared copy + shared behavior).
+            Placed with the other "what this agent can do" blocks, before the executor choice: memory
+            is about what the model receives, not about where tools run.
+          */}
+          <AgentMemorySection draft={draft} setDraft={setDraft} testId="agent-openviking" />
+
+          {/*
+            Executor choice: placed between "what this agent can do" and "authorization injection";
+            it answers "where tools run", runtime config like capabilities; both blocks share one component.
+
+            ⚠️ **Not rendered for Codex**: its tools run in Ark's cloud sandbox and AMA's
+            Docker/host worker is not involved at all. Drawn disabled it would still read as "a
+            choice that applies"; hidden, the warning above is the only thing said about it.
+          */}
+          {codex ? null : (
+            <AgentExecutorSection
+              draft={draft}
+              setDraft={setDraft}
+              workspaceId={workspace.id}
+              workspaceKey={workspace.key}
+            />
+          )}
 
           {/*
             Authorization + custom env: the same kind as "what this agent can use", so it follows

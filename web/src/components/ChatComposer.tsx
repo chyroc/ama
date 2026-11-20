@@ -41,7 +41,7 @@ interface ChatComposerProps {
   agentLocked: boolean;
   onSend: (text: string) => void;
   onInterrupt: () => void;
-  /** This turn is still running: the send button becomes interrupt. */
+  /** This turn is still running: the interrupt button is shown alongside send. */
   streaming: boolean;
   isDisabled?: boolean;
   /**
@@ -62,6 +62,8 @@ interface ChatComposerProps {
    * `null` means no text waiting to be put back (initial state).
    */
   refill?: { text: string; token: number } | null;
+  /** Expand composer width when sidebars are collapsed or focus mode is active. */
+  wide?: boolean;
 }
 
 export function ChatComposer({
@@ -75,6 +77,7 @@ export function ChatComposer({
   isDisabled,
   agentFallbackName,
   refill,
+  wide = false,
 }: ChatComposerProps) {
   const t = useT();
   const [text, setText] = useState("");
@@ -243,7 +246,12 @@ export function ChatComposer({
       }}
       data-testid="chat-composer"
     >
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
+      <div
+        className={[
+          "mx-auto flex w-full flex-col gap-2 transition-[max-width] duration-200",
+          wide ? "max-w-5xl" : "max-w-3xl",
+        ].join(" ")}
+      >
         {/*
           The input box uses the secondary variant: it sits on background, and the default variant would blend into
           the background color.

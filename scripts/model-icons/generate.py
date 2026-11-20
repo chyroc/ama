@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract the brand icons of three model vendors from @lobehub/icons-static-svg into inline paths.
+"""Extract the brand icons of four model vendors from @lobehub/icons-static-svg into inline paths.
 
 Output: `web/src/components/modelIconPaths.ts`, used by `ModelIcon.tsx` to draw the vendor
 logo in the model picker. **The output is generated; do not edit it by hand**. Re-running this
@@ -13,10 +13,10 @@ Idempotent: re-running against the same upstream version produces no diff.
 
 # Why inline instead of adding a dependency
 
-We only use 3 icons. `@lobehub/icons` (the React component version) pulls in three peer
+We only use 4 icons. `@lobehub/icons` (the React component version) pulls in three peer
 dependencies, antd 6 + @lobehub/ui + antd-style, 9 MB, which clash directly with this repo's
 HeroUI 3 + Tailwind 4. `@lobehub/icons-static-svg` is clean (plain SVG, zero peer
-dependencies), but we only need three files out of 2.3 MB, and importing SVG as an asset in
+dependencies), but we only need four files out of 2.3 MB, and importing SVG as an asset in
 Vite needs an extra plugin (this repo has none today), while `<img src>` would make the icons
 go over HTTP.
 
@@ -58,6 +58,7 @@ VENDORS = {
     "豆包": "doubao-color",
     "DeepSeek": "deepseek-color",
     "智谱": "zhipu-color",
+    "Kimi": "kimi-color",
 }
 
 

@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CUA Cloud Desktop Preview</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+      background: #0b0f19;
+      color: #e2e8f0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      user-select: none;
+    }
+    .layout {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+    /* CUA App left sidebar (shown only in full mode) */
+    .cua-sidebar {
+      width: 280px;
+      background: #111827;
+      border-right: 1px solid #1f2937;
+      display: flex;
+      flex-direction: column;
+      padding: 14px;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    body.desktop-only .cua-sidebar {
+      display: none;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #1f2937;
+    }
+    .brand-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #f8fafc;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #10b981;
+      box-shadow: 0 0 8px #10b981;
+    }
+    .badge {
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+    .step-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow-y: auto;
+      flex: 1;
+      font-size: 12px;
+    }
+    .step {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 9px 10px;
+      line-height: 1.45;
+    }
+    .step-meta {
+      font-size: 10px;
+      color: #94a3b8;
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .desktop-screen {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: linear-gradient(145deg, #0f172a 0%, #1e1b4b 100%);
+      position: relative;
+      overflow: hidden;
+    }
+    .ubuntu-topbar {
+      height: 28px;
+      background: rgba(15, 23, 42, 0.9);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      font-size: 11px;
+      color: #cbd5e1;
+    }
+    .browser-win {
+      margin: 16px;
+      flex: 1;
+      background: #ffffff;
+      color: #0f172a;
+      border-radius: 10px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid #334155;
+    }
+    .browser-bar {
+      height: 38px;
+      background: #f1f5f9;
+      border-bottom: 1px solid #e2e8f0;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      gap: 8px;
+    }
+    .win-dots { display: flex; gap: 6px; }
+    .win-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .url-box {
+      flex: 1;
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      color: #334155;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .browser-body {
+      flex: 1;
+      padding: 18px 22px;
+      overflow-y: auto;
+      background: #f8fafc;
+    }
+    .dash-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .dash-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #0f172a;
+    }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .kpi-card {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .kpi-label { font-size: 11px; color: #64748b; }
+    .kpi-val { font-size: 18px; font-weight: 700; color: #0f172a; margin-top: 4px; }
+    .kpi-sub { font-size: 11px; color: #10b981; margin-top: 2px; }
+    .kpi-sub.danger { color: #ef4444; }
+    .action-bar {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .btn {
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid #cbd5e1;
+      background: #ffffff;
+      color: #0f172a;
+      font-size: 12px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .btn.primary {
+      background: #2563eb;
+      color: #ffffff;
+      border-color: #2563eb;
+    }
+    .cursor-ring {
+      position: absolute;
+      width: 22px;
+      height: 22px;
+      border: 2px solid #3b82f6;
+      background: rgba(59, 130, 246, 0.2);
+      border-radius: 50%;
+      pointer-events: none;
+      transition: transform 0.25s ease-out;
+      z-index: 50;
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="cua-sidebar">
+      <div class="brand">
+        <div class="brand-title"><span class="dot"></span> CUA Cloud Desktop</div>
+        <span class="badge" id="mode-badge">Local Preview</span>
+      </div>
+      <div class="step-list" id="step-list">
+        <div class="step">
+          <div class="step-meta"><span>Step 1 · desktop access</span><span>Done</span></div>
+          Allocated cloud desktop instance <code>desk_local_preview_01</code> (Ubuntu + Chromium).
+        </div>
+        <div class="step">
+          <div class="step-meta"><span>Step 2 · browser.navigate</span><span>Done</span></div>
+          Opened service health dashboard in the remote browser.
+        </div>
+        <div class="step">
+          <div class="step-meta"><span>Step 3 · Interactive</span><span>Online</span></div>
+          Click controls inside the viewport to test interactive desktop preview.
+        </div>
+      </div>
+    </aside>
+
+    <main class="desktop-screen" id="desktop-area">
+      <div class="ubuntu-topbar">
+        <span>Ubuntu Desktop · desk_local_preview_01 (1920x1080)</span>
+        <span id="clock">12:00:00 UTC</span>
+      </div>
+
+      <div class="browser-win">
+        <div class="browser-bar">
+          <div class="win-dots">
+            <span class="win-dot" style="background:#ef4444"></span>
+            <span class="win-dot" style="background:#f59e0b"></span>
+            <span class="win-dot" style="background:#10b981"></span>
+          </div>
+          <div class="url-box" id="url-box">https://console.example.com/services/overview</div>
+        </div>
+        <div class="browser-body">
+          <div class="dash-header">
+            <div>
+              <div class="dash-title">Service Operations Console (Local Mock Preview)</div>
+              <div style="font-size:12px;color:#64748b;margin-top:2px;">Interactive CUA preview used only when VITE_API_MODE=local</div>
+            </div>
+            <span style="font-size:12px;padding:4px 10px;border-radius:6px;background:#fef2f2;color:#dc2626;border:1px solid #fecaca;font-weight:600;" id="alert-status">
+              Alert: Queue latency elevated
+            </span>
+          </div>
+
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-label">P95 Latency</div>
+              <div class="kpi-val" id="latency-val">420 ms</div>
+              <div class="kpi-sub danger" id="latency-sub">Above 250 ms SLO</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Throughput</div>
+              <div class="kpi-val">1,240 req/s</div>
+              <div class="kpi-sub">Healthy</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Success Rate</div>
+              <div class="kpi-val">99.94%</div>
+              <div class="kpi-sub">30d rolling</div>
+            </div>
+          </div>
+
+          <div class="action-bar">
+            <button class="btn primary" id="fix-btn" onclick="scaleWorkers()">Scale Worker Replicas</button>
+            <button class="btn" onclick="switchTab()">View Metrics Detail</button>
+          </div>
+        </div>
+      </div>
+      <div class="cursor-ring" id="cursor" style="transform: translate(320px, 210px);"></div>
+    </main>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    if (
+      params.get("view") === "desktop" ||
+      (!window.location.pathname.includes("cua-app") && params.get("view") !== "full")
+    ) {
+      document.body.classList.add("desktop-only");
+    }
+    function scaleWorkers() {
+      const status = document.getElementById("alert-status");
+      status.style.background = "#ecfdf5";
+      status.style.color = "#059669";
+      status.style.borderColor = "#a7f3d0";
+      status.textContent = "Resolved: Worker pool scaled";
+      document.getElementById("latency-val").textContent = "145 ms";
+      const sub = document.getElementById("latency-sub");
+      sub.className = "kpi-sub";
+      sub.textContent = "Within 250 ms SLO";
+      document.getElementById("fix-btn").textContent = "Scaled";
+    }
+    function switchTab() {
+      document.getElementById("url-box").textContent = "https://console.example.com/services/metrics?window=1h";
+      const list = document.getElementById("step-list");
+      const div = document.createElement("div");
+      div.className = "step";
+      div.innerHTML = '<div class="step-meta"><span>Action · click</span><span>Now</span></div>Switched to <code>/services/metrics</code> tab.';
+      list.appendChild(div);
+    }
+    document.getElementById("desktop-area").addEventListener("mousemove", (e) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const cursor = document.getElementById("cursor");
+      cursor.style.transform = `translate(${e.clientX - rect.left - 11}px, ${e.clientY - rect.top - 11}px)`;
+    });
+  </script>
+</body>
+</html>

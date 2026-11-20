@@ -27,7 +27,7 @@
 
 import { Button, Chip, Drawer, Tooltip, useMediaQuery, useOverlayState } from "@heroui/react";
 import { Icon } from "@iconify/react";
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AgentDeletedChip, AgentDisabledChip } from "@/components/Page";
 import { RunStatusChip } from "@/components/RunStatusChip";
 import { formatRelative } from "@/lib/format";
@@ -163,6 +163,10 @@ interface ChatSessionsProps {
   onSelect: (runId: string) => void;
   /** Clicked "new chat". */
   onNew: () => void;
+  /** Whether the desktop session sidebar is collapsed. */
+  collapsed?: boolean;
+  /** Toggle desktop session sidebar collapse state. */
+  onToggleCollapse?: () => void;
 }
 
 /**
@@ -177,36 +181,106 @@ function SessionList({
   onSelect,
   onNew,
   onNavigate,
+  onToggleCollapse,
 }: ChatSessionsProps & { onNavigate?: () => void }) {
   const t = useT();
+  const [searchQuery, setSearchQuery] = useState("");
+  const filteredConversations = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return conversations;
+    return conversations.filter(
+      (r) =>
+        (r.title || "").toLowerCase().includes(q) ||
+        (r.agentName || "").toLowerCase().includes(q) ||
+        r.id.toLowerCase().includes(q),
+    );
+  }, [conversations, searchQuery]);
+
   return (
     <>
       <div className="flex items-center justify-between px-1">
-        <p className="text-xs text-muted">{t("chat.recent")}</p>
-        <Tooltip>
-          <Tooltip.Trigger>
-            <Button
-              variant="ghost"
-              isIconOnly
-              aria-label={t("chat.new")}
-              onPress={() => {
-                onNew();
-                onNavigate?.();
-              }}
-              data-testid="chat-new"
-            >
-              <Icon icon="gravity-ui:plus" className="size-4" />
-            </Button>
-          </Tooltip.Trigger>
-          <Tooltip.Content>{t("chat.new")}</Tooltip.Content>
-        </Tooltip>
+        <div className="flex items-center gap-1.5">
+          <p className="text-xs font-medium text-muted">{t("chat.recent")}</p>
+          {conversations.length > 0 ? (
+            <span className="rounded-full bg-surface-secondary px-1.5 py-0.5 text-[11px] text-muted tabular-nums">
+              {conversations.length}
+            </span>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-0.5">
+          <Tooltip>
+            <Tooltip.Trigger>
+              <Button
+                variant="ghost"
+                size="sm"
+                isIconOnly
+                aria-label={t("chat.new")}
+                onPress={() => {
+                  onNew();
+                  onNavigate?.();
+                }}
+                data-testid="chat-new"
+              >
+                <Icon icon="gravity-ui:plus" className="size-4" />
+              </Button>
+            </Tooltip.Trigger>
+            <Tooltip.Content>{t("chat.new")}</Tooltip.Content>
+          </Tooltip>
+          {onToggleCollapse ? (
+            <Tooltip>
+              <Tooltip.Trigger>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  isIconOnly
+                  aria-label={t("chat.collapseSessions")}
+                  onPress={onToggleCollapse}
+                  data-testid="chat-sessions-collapse"
+                >
+                  <Icon icon="gravity-ui:chevrons-left" className="size-4" />
+                </Button>
+              </Tooltip.Trigger>
+              <Tooltip.Content>{t("chat.collapseSessions")}</Tooltip.Content>
+            </Tooltip>
+          ) : null}
+        </div>
       </div>
+
+      {conversations.length > 3 ? (
+        <div className="relative px-1">
+          <Icon
+            icon="gravity-ui:magnifier"
+            className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted"
+          />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={t("chat.searchSessionsPlaceholder")}
+            aria-label={t("chat.searchSessionsLabel")}
+            className="h-8 w-full r-row border border-border bg-surface-secondary/50 pr-7 pl-7 text-xs text-foreground placeholder:text-muted focus:border-accent focus:bg-surface focus:outline-none"
+            data-testid="chat-sessions-search"
+          />
+          {searchQuery ? (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              className="absolute top-1/2 right-2.5 -translate-y-1/2 text-muted hover:text-foreground"
+              aria-label={t("chat.clearSearch")}
+            >
+              <Icon icon="gravity-ui:xmark" className="size-3.5" />
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto" data-testid="chat-list">
         {conversations.length === 0 ? (
           <p className="px-3 py-2 text-xs text-muted">{t("chat.emptyTitle")}</p>
+        ) : filteredConversations.length === 0 ? (
+          <p className="px-3 py-2 text-xs text-muted">{t("chat.noMatchingSessions")}</p>
         ) : (
-          conversations.map((r) => (
+          filteredConversations.map((r) => (
             <ConversationRow
               key={r.id}
               run={r}
@@ -310,7 +384,7 @@ export function ChatSessionsTrigger(props: ChatSessionsProps) {
             aria-label={t("chat.mobileSessionsTitle")}
             data-testid="chat-sessions-drawer"
           >
-            <SessionList {...props} onNavigate={state.close} />
+            <SessionList {...props} onToggleCollapse={undefined} onNavigate={state.close} />
           </Drawer.Dialog>
         </Drawer.Content>
       </Drawer.Backdrop>
@@ -328,7 +402,7 @@ export function ChatSessionsTrigger(props: ChatSessionsProps) {
  */
 export function ChatSessionsSidebar(props: ChatSessionsProps) {
   const isDesktop = useMediaQuery(DESKTOP_QUERY);
-  if (!isDesktop) return null;
+  if (!isDesktop || props.collapsed) return null;
   return (
     <div className="flex w-64 shrink-0 flex-col gap-3 border-r border-border px-3 py-4">
       <SessionList {...props} />

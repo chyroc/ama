@@ -130,6 +130,15 @@ export interface TimelineItem {
    * The two paths must not be mixed: the former is in progress, the latter is blocked.
    */
   executing?: boolean;
+  /** Whether this tool call is authenticated via Volcengine Ark Vault (Write-Only zero plaintext in sandbox). */
+  vaultProtected?: boolean;
+  /** Structured Vault provenance displayed in the expanded tool audit banner. */
+  vaultAudit?: {
+    vaultId: string;
+    credentialId: string;
+    authMode: string;
+    mcpEndpoint: string;
+  };
 }
 
 /** stop_reason → translation key. This is a pure module; text comes from the t passed in by the caller. */
@@ -167,6 +176,42 @@ const TOOL_ICONS: Record<string, string> = {
 
 function toolIcon(name: string): string {
   return TOOL_ICONS[name] ?? "gravity-ui:wrench";
+}
+
+function extractVaultAudit(resultText: string): TimelineItem["vaultAudit"] {
+  if (!resultText || (!resultText.includes("_vault_security_audit") && !resultText.includes("vault_audit"))) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(resultText) as Record<string, unknown>;
+    const rawAudit = parsed?.["_vault_security_audit"] ?? parsed?.["vault_audit"];
+    if (!rawAudit || typeof rawAudit !== "object" || Array.isArray(rawAudit)) {
+      return undefined;
+    }
+    const audit = rawAudit as Record<string, unknown>;
+    const vaultId =
+      (typeof audit.vault_id === "string" && audit.vault_id) ||
+      (typeof audit.vaultId === "string" && audit.vaultId) ||
+      "";
+    const credentialId =
+      (typeof audit.credential_id === "string" && audit.credential_id) ||
+      (typeof audit.credentialId === "string" && audit.credentialId) ||
+      "";
+    const authMode =
+      (typeof audit.auth_mode === "string" && audit.auth_mode) ||
+      (typeof audit.authMode === "string" && audit.authMode) ||
+      "";
+    const mcpEndpoint =
+      (typeof audit.mcp_endpoint === "string" && audit.mcp_endpoint) ||
+      (typeof audit.mcpEndpoint === "string" && audit.mcpEndpoint) ||
+      "";
+    if (!vaultId && !credentialId) {
+      return undefined;
+    }
+    return { vaultId, credentialId, authMode, mcpEndpoint };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -415,6 +460,7 @@ function toolCallItem(call: ToolCall, t: TFunc): TimelineItem {
     Number.isFinite(usedAt) && Number.isFinite(doneAt) && doneAt >= usedAt
       ? doneAt - usedAt
       : undefined;
+  const vaultAudit = extractVaultAudit(resultText);
 
   return {
     key: use.id,
@@ -445,6 +491,8 @@ function toolCallItem(call: ToolCall, t: TFunc): TimelineItem {
       ? { result: call.confirmation.result, denyMessage: call.confirmation.deny_message }
       : undefined,
     executing,
+    vaultProtected: Boolean(vaultAudit),
+    vaultAudit,
     // Absorbed idles also go into raw: they no longer show as their own entry, but "view raw
     // payload" must still
     // show them, otherwise we would be hiding events Ark really sent.

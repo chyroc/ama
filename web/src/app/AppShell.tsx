@@ -26,17 +26,43 @@
 import { Avatar, Dropdown, Header, Button, Tooltip } from "@heroui/react";
 import { Icon } from "@iconify/react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Suspense, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  Suspense,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { BrandMark } from "@/components/BrandMark";
 import { AppShellScope, ListSkeleton } from "@/components/Page";
 import { api } from "@/data/api";
 import { useWorkspace } from "@/app/WorkspaceGate";
 import { preferencesPath } from "@/app/preferencesLink";
 import { useAuth } from "@/app/AuthGate";
+import { useUIBranding } from "@/lib/useUIBranding";
 import { useVisualViewport } from "@/lib/useVisualViewport";
 import { useT } from "@/prefs/PrefsContext";
 import type { MessageKey } from "@/prefs/messages";
 import type { Workspace } from "@/types/domain";
+
+export interface AppShellLayoutState {
+  navCollapsed: boolean;
+  setNavCollapsed: (collapsed: boolean) => void;
+  toggleNavCollapsed: () => void;
+}
+
+const AppShellLayoutContext = createContext<AppShellLayoutState>({
+  navCollapsed: false,
+  setNavCollapsed: () => {},
+  toggleNavCollapsed: () => {},
+});
+
+export function useAppShellLayout(): AppShellLayoutState {
+  return useContext(AppShellLayoutContext);
+}
 
 interface NavItem {
   to: string;
@@ -292,9 +318,10 @@ function NavGroup({
  * **The AMA wordmark gives way to the workspace name**: the logo already carries the brand, and
  * the question this spot at the top of the sidebar really needs to answer is "which workspace am
  * I in now" (Slack / Linear / Notion all do this). With the workspace name moved up from the
- * bottom-left, the bottom-left only holds personal info.
+ * bottom-left, the bottom-left only holds personal info. When `ui.brandName` is configured by the
+ * deployment, a small platform-name line is stacked above the workspace name.
  */
-function WorkspaceSwitcher() {
+function WorkspaceSwitcher({ brandName }: { brandName?: string }) {
   const t = useT();
   const { workspace } = useWorkspace();
   const navigate = useNavigate();
@@ -327,14 +354,21 @@ function WorkspaceSwitcher() {
         wide with 36px rows, and size-9 would overpower every nav item.
       */}
       <Dropdown.Trigger
-        className="flex h-9 w-full items-center gap-2 r-row px-3 text-left cursor-[var(--cursor-interactive)] hover:bg-surface-secondary"
+        className="flex w-full items-center gap-2 r-row px-3 py-1 text-left cursor-[var(--cursor-interactive)] hover:bg-surface-secondary"
         aria-label={t("nav.switchWorkspace")}
         data-testid="workspace-switcher"
       >
         <BrandMark className="size-7" />
-        {/* Only the workspace name, no key; see workspace settings for the key. min-w-0 is what
-            makes truncate work: names can be long, and without truncate they push the arrow out or wrap to two lines. */}
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">{workspace.name}</span>
+        {brandName ? (
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate text-xs text-muted" data-testid="brand-name">
+              {brandName}
+            </span>
+            <span className="truncate text-sm font-medium">{workspace.name}</span>
+          </span>
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">{workspace.name}</span>
+        )}
         {/* The dropdown arrow tells users this row can be expanded, not a static label for the current location */}
         <Icon icon="gravity-ui:chevron-down" className="size-3.5 shrink-0 text-muted" />
       </Dropdown.Trigger>
@@ -488,9 +522,59 @@ function CurrentUser() {
 export function AppShell({ children }: { children?: ReactNode } = {}) {
   const t = useT();
   const { workspace } = useWorkspace();
+  const uiBranding = useUIBranding();
+  const customBrandName = uiBranding?.brandName?.trim() || "";
   const base = `/w/${workspace.key}`;
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [navCollapsed, setNavCollapsedState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("ama:nav-collapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const setNavCollapsed = useCallback((next: boolean) => {
+    setNavCollapsedState(next);
+    try {
+      localStorage.setItem("ama:nav-collapsed", next ? "1" : "0");
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+  const toggleNavCollapsed = useCallback(() => {
+    setNavCollapsedState((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("ama:nav-collapsed", next ? "1" : "0");
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  }, []);
+  const layoutCtx = useMemo<AppShellLayoutState>(
+    () => ({ navCollapsed, setNavCollapsed, toggleNavCollapsed }),
+    [navCollapsed, setNavCollapsed, toggleNavCollapsed],
+  );
   const location = useLocation();
+  const isChatRoute = /^\/w\/[^/]+\/chat(\/|$)/.test(location.pathname);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "b") {
+        // Do not hijack Ctrl+B inside the web terminal (`.xterm`, where Ctrl+B is tmux's prefix)
+        // or inside rich-text / contenteditable editors.
+        const target = e.target instanceof HTMLElement ? e.target : null;
+        if (target && (target.closest(".xterm") || target.isContentEditable)) {
+          return;
+        }
+        e.preventDefault();
+        toggleNavCollapsed();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [toggleNavCollapsed]);
 
   /*
     **Close the narrow-screen drawer automatically after navigation.**
@@ -563,7 +647,27 @@ export function AppShell({ children }: { children?: ReactNode } = {}) {
         am I in"; the logo alone is enough for brand recognition. gap-6 separates it from the
         navigation, the same spacing as between the three nav groups.
       */}
-      <WorkspaceSwitcher />
+      <div className="flex items-center gap-1">
+        <div className="min-w-0 flex-1">
+          <WorkspaceSwitcher brandName={customBrandName || undefined} />
+        </div>
+        <Tooltip>
+          <Tooltip.Trigger>
+            <Button
+              variant="ghost"
+              size="sm"
+              isIconOnly
+              className="hidden shrink-0 text-muted hover:text-foreground md:inline-flex"
+              aria-label={t("nav.collapseSidebar")}
+              onPress={() => setNavCollapsed(true)}
+              data-testid="app-nav-collapse"
+            >
+              <Icon icon="gravity-ui:layout-side-content-left" className="size-4" />
+            </Button>
+          </Tooltip.Trigger>
+          <Tooltip.Content>{t("nav.collapseSidebarShortcut")}</Tooltip.Content>
+        </Tooltip>
+      </div>
 
       <nav className="flex flex-1 flex-col gap-6 overflow-y-auto">
         <div className="flex flex-col gap-1">
@@ -604,105 +708,134 @@ export function AppShell({ children }: { children?: ReactNode } = {}) {
       against "someone changing #root's height in the future"; then this is the last barrier.
       Do not assume it is useless just because "deleting it does not fail any test".
     */
-    <AppShellScope>
-      <div className="flex h-dvh overflow-hidden">
-      {/* Fixed sidebar on desktop */}
-      <div className="hidden md:flex h-full">{sidebar}</div>
+    <AppShellLayoutContext.Provider value={layoutCtx}>
+      <AppShellScope>
+        <div className="flex h-dvh overflow-hidden">
+          {/* Fixed sidebar on desktop */}
+          {!navCollapsed ? <div className="hidden md:flex h-full">{sidebar}</div> : null}
 
-      {/*
-        Narrow screens use a drawer, opened by a hamburger button.
-
-        The safe-area padding is on the drawer itself, not on the sidebar inside: the drawer is
-        `fixed inset-0`, its top and bottom edges are the physical screen edges, and without the
-        safe area the top nav items would be covered by the Dynamic Island and the personal info
-        row at the bottom by the Home Indicator.
-
-        **Left and right are not handled here**: what touches the left physical edge is the
-        sidebar inside, which has `bg-background`. Applying it on the drawer would make the
-        background stop at the outer edge of the safe area, leaving a strip of base color on the
-        left that looks like the sidebar does not fill; applying it on the sidebar lets the
-        background reach the edge while only the text moves right.
-        So `--safe-left` is in the sidebar's `pl` (see the sidebar section above), and both uses,
-        mounted directly on desktop and inside the drawer, **share one place**, never doubled.
-      */}
-      {mobileOpen ? (
-        <div
-          className="fixed inset-0 z-50 flex md:hidden"
-          style={{
-            paddingTop: "var(--safe-top)",
-            paddingBottom: "var(--safe-bottom)",
-          }}
-          data-testid="mobile-nav-drawer"
-        >
-          <div className="h-full">{sidebar}</div>
-          <button
-            type="button"
-            aria-label={t("nav.closeNav")}
-            className="flex-1 bg-overlay/60"
-            onClick={() => setMobileOpen(false)}
-          />
-        </div>
-      ) : null}
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/*
-          Narrow-screen top bar. **It is outside the scroll container**; that is the point of
-          this change.
-
-          It used to live inside `<main>`, so it scrolled away with the content, which on narrow
-          screens meant no fixed top bar (and so no stable navigation entry). Moved to be a
-          sibling of main, main owns the scrolling and the top bar always stays.
-
-          `--safe-top` lets the background extend under the Dynamic Island without the text being
-          covered: in index.html, `apple-mobile-web-app-status-bar-style=black-translucent` makes
-          content extend under the status bar, so this padding is required, not decoration.
-
-          The bottom border replaces the old `<Separator className="md:hidden" />` (drawing the
-          same line twice takes an extra 1px in the dvh layout and makes the top bar height
-          inaccurate).
-        */}
-        <header
-          className="flex shrink-0 items-center gap-2 border-b border-border bg-background px-4 pb-3 md:hidden"
-          style={{
-            paddingTop: "calc(var(--safe-top) + 0.75rem)",
-            paddingLeft: "calc(1rem + var(--safe-left))",
-            paddingRight: "calc(1rem + var(--safe-right))",
-          }}
-          data-testid="mobile-topbar"
-        >
-          <Tooltip>
-            <Tooltip.Trigger>
-              <Button
-                variant="ghost"
-                isIconOnly
-                aria-label={t("nav.openNav")}
-                onPress={() => setMobileOpen(true)}
-                data-testid="mobile-nav-open"
-              >
-                <Icon icon="gravity-ui:bars" className="size-5" />
-              </Button>
-            </Tooltip.Trigger>
-            <Tooltip.Content>{t("nav.openNav")}</Tooltip.Content>
-          </Tooltip>
-          <span className="truncate text-sm font-medium">{workspace.name}</span>
-        </header>
-
-        {/*
-          The only scroll area. `overscroll-contain` stops "keep dragging past the bottom" from
-          pulling the whole page (iOS rubber band); supported in Safari 16+.
-        */}
-        <main className="flex-1 overflow-y-auto overscroll-contain" data-testid="app-scroll">
           {/*
-            Suspense is the fallback for the lazily loaded /usage route (see router.tsx). Without
-            it, switching to that route makes React throw "A component suspended while responding
-            to synchronous input" and replaces the whole subtree with blank. The fallback uses the
-            same skeleton as the other pages, not null; null on a slow network looks like
-            "clicked the nav and nothing happened".
+            Narrow screens use a drawer, opened by a hamburger button.
+
+            The safe-area padding is on the drawer itself, not on the sidebar inside: the drawer is
+            `fixed inset-0`, its top and bottom edges are the physical screen edges, and without the
+            safe area the top nav items would be covered by the Dynamic Island and the personal info
+            row at the bottom by the Home Indicator.
+
+            **Left and right are not handled here**: what touches the left physical edge is the
+            sidebar inside, which has `bg-background`. Applying it on the drawer would make the
+            background stop at the outer edge of the safe area, leaving a strip of base color on the
+            left that looks like the sidebar does not fill; applying it on the sidebar lets the
+            background reach the edge while only the text moves right.
+            So `--safe-left` is in the sidebar's `pl` (see the sidebar section above), and both uses,
+            mounted directly on desktop and inside the drawer, **share one place**, never doubled.
           */}
-          <Suspense fallback={<ListSkeleton rows={3} />}>{children ?? <Outlet />}</Suspense>
-        </main>
-      </div>
-      </div>
-    </AppShellScope>
+          {mobileOpen ? (
+            <div
+              className="fixed inset-0 z-50 flex md:hidden"
+              style={{
+                paddingTop: "var(--safe-top)",
+                paddingBottom: "var(--safe-bottom)",
+              }}
+              data-testid="mobile-nav-drawer"
+            >
+              <div className="h-full">{sidebar}</div>
+              <button
+                type="button"
+                aria-label={t("nav.closeNav")}
+                className="flex-1 bg-overlay/60"
+                onClick={() => setMobileOpen(false)}
+              />
+            </div>
+          ) : null}
+
+          <div className="flex min-w-0 flex-1 flex-col">
+            {/*
+              Narrow-screen top bar. **It is outside the scroll container**; that is the point of
+              this change.
+
+              It used to live inside `<main>`, so it scrolled away with the content, which on narrow
+              screens meant no fixed top bar (and so no stable navigation entry). Moved to be a
+              sibling of main, main owns the scrolling and the top bar always stays.
+
+              `--safe-top` lets the background extend under the Dynamic Island without the text being
+              covered: in index.html, `apple-mobile-web-app-status-bar-style=black-translucent` makes
+              content extend under the status bar, so this padding is required, not decoration.
+
+              The bottom border replaces the old `<Separator className="md:hidden" />` (drawing the
+              same line twice takes an extra 1px in the dvh layout and makes the top bar height
+              inaccurate).
+            */}
+            <header
+              className="flex shrink-0 items-center gap-2 border-b border-border bg-background px-4 pb-3 md:hidden"
+              style={{
+                paddingTop: "calc(var(--safe-top) + 0.75rem)",
+                paddingLeft: "calc(1rem + var(--safe-left))",
+                paddingRight: "calc(1rem + var(--safe-right))",
+              }}
+              data-testid="mobile-topbar"
+            >
+              <Tooltip>
+                <Tooltip.Trigger>
+                  <Button
+                    variant="ghost"
+                    isIconOnly
+                    aria-label={t("nav.openNav")}
+                    onPress={() => setMobileOpen(true)}
+                    data-testid="mobile-nav-open"
+                  >
+                    <Icon icon="gravity-ui:bars" className="size-5" />
+                  </Button>
+                </Tooltip.Trigger>
+                <Tooltip.Content>{t("nav.openNav")}</Tooltip.Content>
+              </Tooltip>
+              {/* The mobile top bar has the width for the one-line "platform / workspace" form. */}
+              <span className="min-w-0 truncate text-sm">
+                <span className="text-muted">{customBrandName || t("brand.name")} / </span>
+                <span className="font-medium">{workspace.name}</span>
+              </span>
+            </header>
+
+            {/* Non-overlapping desktop expand bar when the sidebar is collapsed outside /chat. */}
+            {navCollapsed && !isChatRoute ? (
+              <div className="hidden shrink-0 items-center gap-2 border-b border-border bg-background px-4 py-1.5 md:flex">
+                <Tooltip>
+                  <Tooltip.Trigger>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      isIconOnly
+                      className="text-muted hover:text-foreground"
+                      aria-label={t("nav.expandSidebar")}
+                      onPress={() => setNavCollapsed(false)}
+                      data-testid="app-nav-expand-floating"
+                    >
+                      <Icon icon="gravity-ui:layout-side-content-left" className="size-4" />
+                    </Button>
+                  </Tooltip.Trigger>
+                  <Tooltip.Content>{t("nav.expandSidebarShortcut")}</Tooltip.Content>
+                </Tooltip>
+                <span className="truncate text-xs text-muted">{workspace.name}</span>
+              </div>
+            ) : null}
+
+            {/*
+              The only scroll area. `overscroll-contain` stops "keep dragging past the bottom" from
+              pulling the whole page (iOS rubber band); supported in Safari 16+.
+            */}
+            <main className="flex-1 overflow-y-auto overscroll-contain" data-testid="app-scroll">
+              {/*
+                Suspense is the fallback for the lazily loaded /usage route (see router.tsx). Without
+                it, switching to that route makes React throw "A component suspended while responding
+                to synchronous input" and replaces the whole subtree with blank. The fallback uses the
+                same skeleton as the other pages, not null; null on a slow network looks like
+                "clicked the nav and nothing happened".
+              */}
+              <Suspense fallback={<ListSkeleton rows={3} />}>{children ?? <Outlet />}</Suspense>
+            </main>
+          </div>
+        </div>
+      </AppShellScope>
+    </AppShellLayoutContext.Provider>
   );
 }

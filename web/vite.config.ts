@@ -62,6 +62,16 @@ export default defineConfig({
         target: process.env.AMA_PROXY_TARGET || "http://127.0.0.1:8080",
         changeOrigin: true,
       },
+      "/desktops": {
+        target: process.env.AMA_PROXY_TARGET || "http://127.0.0.1:8080",
+        changeOrigin: true,
+        ws: true,
+      },
+      "/cua-app": {
+        target: process.env.AMA_PROXY_TARGET || "http://127.0.0.1:8080",
+        changeOrigin: true,
+        ws: true,
+      },
     },
     // On this machine fs.inotify.max_user_instances is only 128 and already used up by other processes, so vite's default
     // file watching throws EMFILE right away. Use polling to bypass inotify, and ignore node_modules to keep the cost down.

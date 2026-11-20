@@ -162,17 +162,18 @@ test("模型选择器每项都有厂商标，收起时只显示一个", async ({
   const trigger = app.getByTestId("agent-model");
   await expect(trigger.locator("[data-testid^='model-icon-']")).toHaveCount(1);
 
-  // After expanding: each of the 10 models has an icon, none missing
+  // After expanding: each of the 13 models has an icon, none missing
   await trigger.click();
   const options = app.getByRole("option");
-  await expect(options).toHaveCount(10);
-  await expect(app.getByRole("listbox").locator("[data-testid^='model-icon-']")).toHaveCount(10);
+  await expect(options).toHaveCount(13);
+  await expect(app.getByRole("listbox").locator("[data-testid^='model-icon-']")).toHaveCount(13);
 
-  // Each of the three vendors uses the right logo (Doubao 5, DeepSeek 4, Zhipu 1)
+  // Each of the four vendors uses the right logo (Doubao 5, DeepSeek 4, Zhipu 1, Kimi 3)
   const listbox = app.getByRole("listbox");
   await expect(listbox.getByTestId("model-icon-豆包")).toHaveCount(5);
   await expect(listbox.getByTestId("model-icon-DeepSeek")).toHaveCount(4);
   await expect(listbox.getByTestId("model-icon-智谱")).toHaveCount(1);
+  await expect(listbox.getByTestId("model-icon-Kimi")).toHaveCount(3);
 });
 
 /**
