@@ -128,7 +128,7 @@ var platformReservedEnvs = map[string]bool{
 // message, instead of being silently ignored at run time. Both sides are needed: blocking on the
 // write path is for user experience, blocking at injection is the **security boundary**.
 func IsPlatformReservedEnv(key string) bool {
-	return platformReservedEnvs[strings.TrimSpace(key)]
+	return isReservedEnv(strings.TrimSpace(key))
 }
 
 // AliasableEnvKeys are the platform variable names **allowed to be referenced by an alias**.

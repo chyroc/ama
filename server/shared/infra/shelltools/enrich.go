@@ -29,6 +29,14 @@ func NewEnrichingExecer(
 	}
 }
 
+// NewEnrichingExecerWithEnvs also injects platform-owned values supplied by a downstream module.
+// These values win over user/session env and are scrubbed using the same single exit.
+func NewEnrichingExecerWithEnvs(
+	base Execer, sessionID string, envs SessionEnvSource, execEnvs ExecEnvSource, log *slog.Logger,
+) Execer {
+	return &enrichingExecer{base: base, inj: NewSessionInjectorWithEnvs(sessionID, envs, execEnvs, log)}
+}
+
 // enrichingExecer: see NewEnrichingExecer.
 type enrichingExecer struct {
 	base Execer

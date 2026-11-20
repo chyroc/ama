@@ -24,11 +24,17 @@ import (
 
 // SessionInjector: see the file header.
 type SessionInjector struct {
-	sessionID string
-	envs      SessionEnvSource
-	log       *slog.Logger
+	sessionID  string
+	envs       SessionEnvSource
+	execEnvs   ExecEnvSource
+	secretEnvs map[string]bool
+	log        *slog.Logger
 
 	mu sync.Mutex
+	// execEnvFP remembers the last injected credential fingerprint so refreshes are logged once.
+	execEnvFP string
+	// execEnvWarnLogged avoids repeating a credential-source failure on every tool call.
+	execEnvWarnLogged bool
 	// envWarnLogged makes a fetch failure log only once: logging on every command would flood the log.
 	envWarnLogged bool
 }
@@ -39,6 +45,17 @@ func NewSessionInjector(sessionID string, envs SessionEnvSource, log *slog.Logge
 		log = slog.Default()
 	}
 	return &SessionInjector{sessionID: sessionID, envs: envs, log: log}
+}
+
+// NewSessionInjectorWithEnvs adds a downstream execution-scoped source. The two sources are
+// deliberately separate: SessionEnvSource includes user-selected settings, while ExecEnvSource
+// supplies platform-owned values that always win over user settings.
+func NewSessionInjectorWithEnvs(
+	sessionID string, envs SessionEnvSource, execEnvs ExecEnvSource, log *slog.Logger,
+) *SessionInjector {
+	injector := NewSessionInjector(sessionID, envs, log)
+	injector.execEnvs = execEnvs
+	return injector
 }
 
 // Prepare computes the env to inject for this execution and the output scrub function.
@@ -58,20 +75,23 @@ func (i *SessionInjector) Prepare(ctx context.Context) (map[string]string, func(
 func (i *SessionInjector) prepareWithBase(
 	ctx context.Context, base map[string]string,
 ) (map[string]string, scrubber) {
+	platformEnvs := i.execEnvironment(ctx)
 	sessionEnvs, secretKeys, aliases := i.sessionEnvs(ctx)
 
-	if len(sessionEnvs) == 0 && len(base) == 0 {
+	if len(sessionEnvs) == 0 && len(base) == 0 && len(platformEnvs) == 0 {
 		return base, scrubber{}
 	}
 
-	// Merge priority from low to high: the tool's own env → session env.
-	// Within session env, core makes sure the platform-injected keys win last (user-defined env
-	// cannot replace the platform identity).
-	merged := make(map[string]string, len(base)+len(sessionEnvs))
+	// Merge priority from low to high: tool env → user/session env → platform-owned env.
+	// Platform credentials must win last: user settings cannot replace the platform identity.
+	merged := make(map[string]string, len(base)+len(sessionEnvs)+len(platformEnvs))
 	for k, v := range base {
 		merged[k] = v
 	}
 	for k, v := range sessionEnvs {
+		merged[k] = v
+	}
+	for k, v := range platformEnvs {
 		merged[k] = v
 	}
 
@@ -80,7 +100,7 @@ func (i *SessionInjector) prepareWithBase(
 	var aliasSecrets []string
 	for _, a := range aliases {
 		key := strings.TrimSpace(a.Key)
-		if key == "" || IsPlatformReservedEnv(key) {
+		if key == "" || isReservedEnv(key) {
 			continue
 		}
 		v, ok := merged[strings.TrimSpace(a.From)]
@@ -88,12 +108,17 @@ func (i *SessionInjector) prepareWithBase(
 			continue
 		}
 		merged[key] = v
-		if secretEnvNames[strings.TrimSpace(a.From)] {
+		if secretEnvNames[strings.TrimSpace(a.From)] || i.secretEnvs[strings.TrimSpace(a.From)] {
 			aliasSecrets = append(aliasSecrets, v)
 		}
 	}
 
 	var toScrub []string
+	for k, v := range platformEnvs {
+		if secretEnvNames[k] || i.secretEnvs[k] {
+			toScrub = append(toScrub, v)
+		}
+	}
 	for _, k := range secretKeys {
 		if v, ok := sessionEnvs[k]; ok && v != "" {
 			toScrub = append(toScrub, v)
@@ -101,6 +126,65 @@ func (i *SessionInjector) prepareWithBase(
 	}
 	toScrub = append(toScrub, aliasSecrets...)
 	return merged, newScrubber(toScrub...)
+}
+
+// execEnvironment fetches platform-owned values. Failure is isolated to this source: other
+// environment values and the tool itself still work. The secret marker is applied once, here,
+// rather than asking each downstream source to build a separate scrubber.
+func (i *SessionInjector) execEnvironment(ctx context.Context) map[string]string {
+	if i.execEnvs == nil {
+		return nil
+	}
+	values, err := i.execEnvs.ExecEnvs(ctx, i.sessionID)
+	if err != nil {
+		i.mu.Lock()
+		first := !i.execEnvWarnLogged
+		i.execEnvWarnLogged = true
+		i.mu.Unlock()
+		if first {
+			i.log.Warn("execution credential source failed; tools continue without those variables",
+				slog.String("ark_session_id", i.sessionID), slog.Any("err", err))
+		}
+		return nil
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	i.mu.Lock()
+	if i.secretEnvs == nil {
+		i.secretEnvs = make(map[string]bool)
+	}
+	i.mu.Unlock()
+	envs := make(map[string]string, len(values))
+	var fingerprintValue string
+	for _, value := range values {
+		key := strings.TrimSpace(value.Key)
+		if key == "" {
+			continue
+		}
+		envs[key] = value.Value
+		if value.Secret {
+			i.mu.Lock()
+			i.secretEnvs[key] = true
+			i.mu.Unlock()
+			if fingerprintValue == "" {
+				fingerprintValue = value.Value
+			}
+		}
+		if value.Reserved {
+			markReservedEnv(key)
+		}
+	}
+	if fp := credentialFingerprint(fingerprintValue); fp != "" {
+		i.mu.Lock()
+		changed := i.execEnvFP != fp
+		i.execEnvFP = fp
+		i.mu.Unlock()
+		if changed {
+			i.log.Info("execution credentials refreshed", slog.String("token_fp", fp))
+		}
+	}
+	return envs
 }
 
 // sessionEnvs gets session-level env and blocks overrides of platform reserved keys; on failure
