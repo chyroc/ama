@@ -1409,9 +1409,13 @@ type Skill struct {
 	//
 	// So the cost of this exception is contained: the key only disappears when "there are no attachments", and when there are no attachments the frontend
 	// does not render the attachment area anyway. When there are attachments the key is always present, and always a non-empty array.
-	Files     []SkillFile `json:"files,omitempty"`
-	CreatedAt string      `json:"createdAt"`
-	UpdatedAt string      `json:"updatedAt"`
+	Files []SkillFile `json:"files,omitempty"`
+	// Origin records the upstream source when this skill was installed externally.
+	// The fields are generic metadata for updates and auditing; no provider-specific
+	// client or credential belongs here. Nil preserves the original JSON contract.
+	Origin    *SkillOrigin `json:"origin,omitempty"`
+	CreatedAt string       `json:"createdAt"`
+	UpdatedAt string       `json:"updatedAt"`
 
 	// CreatedBy / UpdatedBy are the emails of the person who created this skill and of the most recent editor.
 	// **Exactly the same** meaning as the two on Agent (including both reasons for omitempty); see the long comment there;

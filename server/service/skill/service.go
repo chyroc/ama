@@ -104,6 +104,14 @@ type Config struct {
 	// **May be nil**: then an all-empty ref is returned, and the frontend does not render the entry.
 	Ark Ark
 
+	// Builtins replaces the default built-in skill catalog when a downstream has its own.
+	// Nil keeps the public default catalog.
+	Builtins BuiltinProvider
+
+	// Sources supplies read-only rules for externally sourced skills. Nil leaves all
+	// non-built-in sources editable, preserving the default behavior.
+	Sources SourcePolicy
+
 	// Logger defaults to slog.Default() when empty.
 	Logger *slog.Logger
 }
@@ -117,6 +125,8 @@ type Service struct {
 	revisions Revisions
 	blobs     func() BlobStore
 	ark       Ark
+	builtins  BuiltinProvider
+	sources   SourcePolicy
 	log       *slog.Logger
 }
 
@@ -146,6 +156,8 @@ func New(cfg Config) (*Service, error) {
 		revisions: cfg.Revisions,
 		blobs:     cfg.Blobs,
 		ark:       cfg.Ark,
+		builtins:  cfg.Builtins,
+		sources:   cfg.Sources,
 		log:       log,
 	}, nil
 }

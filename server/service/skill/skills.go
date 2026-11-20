@@ -45,7 +45,7 @@ func (s *Service) ListSkills(ctx context.Context, workspaceID string) ([]apimode
 	if err != nil {
 		return nil, err
 	}
-	builtin := BuiltinSkills()
+	builtin := s.builtinSkills()
 	// Preallocate the final length, so append does not copy again when growing.
 	out := make([]apimodel.Skill, 0, len(builtin)+len(own))
 	out = append(out, builtin...)
@@ -57,7 +57,7 @@ func (s *Service) ListSkills(ctx context.Context, workspaceID string) ([]apimode
 // **Built-in skills short-circuit before the database query**: they are not in the database, so
 // querying would always give ErrNotFound.
 func (s *Service) GetSkill(ctx context.Context, id string) (apimodel.Skill, error) {
-	if sk, ok := BuiltinSkill(id); ok {
+	if sk, ok := s.builtinSkill(id); ok {
 		return sk, nil
 	}
 	sk, err := s.store.GetSkill(ctx, id)
@@ -87,7 +87,7 @@ func (s *Service) CreateSkill(ctx context.Context, workspaceID string, draft api
 	// Name clashes with built-in skills must be blocked too: built-in skills are visible in every
 	// workspace, a clash would show two skills with the same name in the list, and the binding UI
 	// could not tell them apart by name at all.
-	if BuiltinSkillNameTaken(name) {
+	if s.builtinNameTaken(name) {
 		return apimodel.Skill{}, fmt.Errorf("%w: 技能名「%s」是平台内置技能，请换一个", persistmodel.ErrConflict, name)
 	}
 	taken, err := s.store.SkillNameTaken(ctx, workspaceID, name)
@@ -163,6 +163,11 @@ func (s *Service) UpdateSkillWithReason(
 		return apimodel.Skill{}, fmt.Errorf("%w: 技能不存在", persistmodel.ErrNotFound)
 	}
 	// Record a snapshot before the change, for rolling back mistakes. Nothing is recorded if the content did not change, same as UpdateAgent.
+	if reason := s.readOnlyReason(sk.Source); reason != "" {
+		return apimodel.Skill{}, fmt.Errorf(
+			"%w: %s，正文不可改；要在它基础上改请先复制一份（Fork）", persistmodel.ErrPrecondition, reason)
+	}
+
 	if before := SnapshotSkill(sk); !SameSkillDraft(before, draft) {
 		s.revisions.Record(ctx, apimodel.RevisionKindSkill, sk.WorkspaceID, sk.ID,
 			sk.DisplayTitle, before, reason)
@@ -223,7 +228,7 @@ func (s *Service) CreateSkillFromPackage(
 		return apimodel.Skill{}, fmt.Errorf("%w: 请填写标识", persistmodel.ErrInvalidArgument)
 	}
 	// Same reason as CreateSkill: built-in skills are visible in every workspace, so names must not clash.
-	if BuiltinSkillNameTaken(name) {
+	if s.builtinNameTaken(name) {
 		return apimodel.Skill{}, fmt.Errorf("%w: 技能名「%s」是平台内置技能，请换一个", persistmodel.ErrConflict, name)
 	}
 	taken, err := s.store.SkillNameTaken(ctx, workspaceID, name)
@@ -281,6 +286,7 @@ func (s *Service) CreateSkillFromPackage(
 		Source:        source,
 		LatestVersion: version,
 		Tags:          nonNil(nil),
+		Origin:        opts.Origin,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 		// Who created it. This path is the **shared** exit of upload / Fork, all triggered by a user
@@ -374,7 +380,7 @@ func (s *Service) SkillFiles(ctx context.Context, skillID string) ([]apimodel.Sk
 	// Built-in skills are not in the database; return their embedded attachments directly (nil for
 	// CLI-only built-in skills, embedded files for script-based built-in skills).
 	if IsBuiltinSkill(skillID) {
-		return BuiltinSkillFiles(skillID), nil
+		return s.builtinFiles(skillID), nil
 	}
 	files, err := s.store.SkillFiles(ctx, skillID)
 	if err != nil {
@@ -437,7 +443,7 @@ func (s *Service) SkillFileContent(
 		if _, exists := BuiltinSkill(skillID); !exists {
 			return apimodel.SkillFileContent{}, fmt.Errorf("%w: 技能不存在", persistmodel.ErrNotFound)
 		}
-		files := BuiltinSkillFiles(skillID)
+		files := s.builtinFiles(skillID)
 		if len(files) == 0 {
 			return apimodel.SkillFileContent{}, fmt.Errorf("%w: 平台内置技能没有附件", persistmodel.ErrNotFound)
 		}
@@ -585,6 +591,11 @@ func (s *Service) UpdateSkillFile(
 	if err != nil {
 		return apimodel.Skill{}, fmt.Errorf("%w: 技能不存在", persistmodel.ErrNotFound)
 	}
+	if reason := s.readOnlyReason(sk.Source); reason != "" {
+		return apimodel.Skill{}, fmt.Errorf(
+			"%w: %s，附件不可改；要在它基础上改请先复制一份（Fork）", persistmodel.ErrPrecondition, reason)
+	}
+
 	files, err := s.store.SkillFiles(ctx, skillID)
 	if err != nil {
 		return apimodel.Skill{}, err

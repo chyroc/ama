@@ -10,6 +10,8 @@ package apimodel
 type SkillCreateOptions struct {
 	// An empty Source means SkillCustom.
 	Source SkillSource
+	// Origin records external source metadata at creation time, with no backfill window.
+	Origin *SkillOrigin
 	// An empty LatestVersion means "1".
 	LatestVersion string
 }

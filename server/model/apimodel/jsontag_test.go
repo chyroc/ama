@@ -93,6 +93,7 @@ var allowedOmitEmpty = map[string]string{
 
 	// ---- B. Byte-for-byte seed comparison; keys must not appear out of nowhere ----
 	"Skill.Files":                  "B：seed.json 里没有这个键，且前端是 `files?: SkillFile[]`（`skill.files ?? []`）",
+	"Skill.Origin":                 "B：自建与内置技能没有来源；缺失与 null 不同，不能凭空给存量 JSON 加 origin 键",
 	"Agent.OpenVikingEnabled":      "B：seed.json 与存量数据没有这个键，前端是 `openVikingEnabled?: boolean`，缺失与 false 完全等价",
 	"AgentDraft.OpenVikingEnabled": "B：同 Agent.OpenVikingEnabled，老前端不传时默认关闭",
 
