@@ -248,17 +248,9 @@ func run(ctx context.Context, runtime *app.Runtime) error {
 		return err
 	}
 	logLoginMethods(cfg, authSvc, log)
-	if authSvc.APIKeyEnabled() {
-		// Say it out loud: it is a permanent key that bypasses login; configured in the wrong place it is a backdoor.
-		log.Warn("已启用固定 API Key 通道，请确认这是预期的（线上应只给 CI/脚本用）",
-			slog.String("email", cfg.APIKey.Email))
-	}
-	// This line is the **only** way for ops to know "can the ama command in containers work":
-	// the two modes are exactly the same in service features; the only difference is whether that variable is injected into the container.
-	if !authSvc.ManagedKeyEnabled() {
-		log.Warn("未配置 auth.managedKeySecret：勾了「ama」内置技能的 agent " +
-			"在容器里跑 ama 会失败（报「没有凭据」）。生成一把：openssl rand -base64 32")
-	}
+	app.LogLoginAvailability(log, app.LoginAvailability{
+		FixedAPIKey: authSvc.APIKeyEnabled(), ManagedKey: authSvc.ManagedKeyEnabled(), LoginConfigured: true,
+	})
 
 	// Origin allowlist for the terminal WebSocket.
 	//
@@ -270,15 +262,7 @@ func run(ctx context.Context, runtime *app.Runtime) error {
 	// The check is written as "is it configured" rather than "does the object exist": the latter is always true (it is a slice field),
 	// and would make the log say "wired up" while the feature is actually unusable (the repo's rule "do not trust logs that only check
 	// the object is non-nil" records this; it was learned the hard way).
-	if len(cfg.Server.TerminalWSOrigins) == 0 {
-		log.Warn("未配置 server.terminalWSOrigins：终端的 WebSocket 通道对浏览器不可用" +
-			"（CheckOrigin 会拒绝一切带 Origin 的连接），前端将静默回退到 SSE+POST——" +
-			"那条路连打时回显可能乱序、每字符一个往返。" +
-			"线上填 https://ama.example.com；本地填 http://127.0.0.1:<dev.sh 的 PORT>")
-	} else {
-		log.Info("终端 WebSocket 已启用",
-			slog.Any("allowed_origins", cfg.Server.TerminalWSOrigins))
-	}
+	app.LogTerminalWebSocket(log, cfg.Server.TerminalWSOrigins)
 
 	// Host executor domain service: must be built before core.New, since agent domain save validation gets it through
 	// core.Config.HostBindings. hostWakes is this process's NOTIFY fan-out registry.
@@ -1730,12 +1714,12 @@ func newGitHubClient(cfg *config.Config, log *slog.Logger) auth.GitHubClient {
 // the latter is always true, and would make the log say "enabled" while the feature is actually unusable.
 func logLoginMethods(cfg *config.Config, authSvc *auth.Service, log *slog.Logger) {
 	if !authSvc.LocalEnabled() && !authSvc.OIDCEnabled() && !authSvc.GitHubEnabled() {
-		log.Error("没有启用任何登录方式：auth.local.enabled 为 false、auth.oidc 与 auth.github 都未配置——" +
-			"**谁都登不进网页**（只有 API Key 能调接口）。至少配一种：" +
-			"auth.local.enabled: true（邮箱密码），auth.oidc.issuer + auth.oidc.clientId（SSO），" +
-			"或 auth.github.enabled + auth.github.clientId")
+		app.LogLoginAvailability(log, app.LoginAvailability{
+			MissingLoginHint: "auth.local.enabled=false 且 auth.oidc/auth.github 未配置，浏览器用户无法登录；至少配置一种登录方式",
+		})
 		return
 	}
+	app.LogLoginAvailability(log, app.LoginAvailability{LoginConfigured: true, LoginMethod: "configured providers"})
 	if authSvc.GitHubEnabled() {
 		g := cfg.Auth.GitHub
 		log.Info("GitHub 登录（device flow）已启用",
