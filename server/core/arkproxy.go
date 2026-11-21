@@ -92,11 +92,7 @@ func (s *Service) arkProxyDo(
 	if s.runner == nil {
 		return nil, fmt.Errorf("%w: 服务端未接入方舟", ErrPrecondition)
 	}
-	key, err := resolve()
-	if err != nil {
-		return nil, err
-	}
-	return s.runner.RawDo(ctx, key, req)
+	return ArkProxyDo(ctx, req, resolve, s.runner.RawDo, ErrPrecondition)
 }
 
 func (s *Service) arkProxyStream(
@@ -105,9 +101,5 @@ func (s *Service) arkProxyStream(
 	if s.runner == nil {
 		return nil, fmt.Errorf("%w: 服务端未接入方舟", ErrPrecondition)
 	}
-	key, err := resolve()
-	if err != nil {
-		return nil, err
-	}
-	return s.runner.RawStream(ctx, key, req)
+	return ArkProxyStream(ctx, req, resolve, s.runner.RawStream, ErrPrecondition)
 }
