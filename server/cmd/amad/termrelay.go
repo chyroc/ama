@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/chyroc/ama/server/core"
 	"github.com/chyroc/ama/server/shared/infra/pg"
@@ -61,77 +60,22 @@ func newTerminalRelay(
 	if err != nil {
 		return nil, nil, err
 	}
-	return &terminalRelay{q: q}, &workerWakeups{q: q}, nil
+	return &terminalRelay{Queue: q}, &workerWakeups{q: q}, nil
 }
 
-// terminalRelay adapts pgmq.Queue to core.TerminalRelay.
-//
-// It does only one real thing: translate pgmq.Message into core.RelayMessage. This translation looks redundant,
-// but it is exactly the cost of "core does not depend on a specific queue": when switching to another implementation, this is what changes.
-type terminalRelay struct{ q pgmq.Queue }
+// Terminal and worker wake adapters are the public core PGMQ implementations.
+// They share one persistent queue; wake payloads stay non-nil empty bytes.
 
-func (r *terminalRelay) Publish(ctx context.Context, topic string, payload []byte, ttl time.Duration) error {
-	return r.q.Publish(ctx, topic, payload, ttl)
-}
-
-func (r *terminalRelay) Consume(
-	ctx context.Context, topic string, fn func(context.Context, core.RelayMessage) error,
-) error {
-	return r.q.Consume(ctx, topic, func(c context.Context, m pgmq.Message) error {
-		return fn(c, core.RelayMessage{Payload: m.Payload})
-	})
-}
-
-// Compile-time check that this shim really satisfies the interface on the core side.
-// Without it the error would appear at the wiring site, pointing to "type mismatch" instead of here.
-var _ core.TerminalRelay = (*terminalRelay)(nil)
-
-// workerWakeups adapts the same pgmq.Queue to core.WorkerWakeups.
-//
-// # Why reuse the terminal relay's queue
-//
-// Both need the same thing: **deliver a signal to "another pod"**. The terminal relay delivers "to the pod holding the PTY",
-// and worker wake-up delivers "to the pod that holds the poll right for this env".
-// Underneath both are PG LISTEN/NOTIFY (measured p50 0.08ms); only topic and payload differ.
-//
-// Reuse instead of starting a new one: pgmq's Consume is isolated by topic, so the two never clash;
-// and each extra queue adds one more set of "connect, reconnect, clean up" to maintain, with exactly the same failure modes.
-//
-// ⚠️ **Redis pub/sub cannot replace it**: on a proxy-based Redis cluster, pub/sub does not cross replicas,
-// the proxy layer does not route subscriptions, and pods are spread across several data centers. It **does work**, and exactly because it works
-// it is dangerous: it loses messages occasionally, and only across data centers. For the full argument see repository/schema/mq_messages.sql.
+type terminalRelay = core.PGMQTerminalRelay
 type workerWakeups struct{ q pgmq.Queue }
 
-// Wake: see core.WorkerWakeups.
-//
-// ⚠️ The payload is an **empty slice `[]byte{}`, not nil**. The signal itself carries no information
-// (the topic already has envID; receiving it means "this environment should wake up"), but
-// `mq_messages.payload` is `bytea **not null**`: passing nil is treated by pgx as SQL NULL,
-// and the whole insert fails with `null value in column "payload" violates not-null constraint`
-// (SQLSTATE 23502).
-//
-// **Unit tests cannot find this trap**: the fake on the core side never touches the database,
-// and all six wake-up cases are green; in production every message send fails once and wake-up **does not work at all**,
-// and since it is degrade-open (a failure only logs one Warn), the only symptom is "responses got slower",
-// pointing to nothing. It was only found by testing for real; see bytea not null on the shared/infra/pgmq side.
-//
-// The short ttl is deliberate, same as the terminal keystroke one: a backlog of old wake-ups flooding in after a pod rebuild only triggers a string of
-// useless polls, which is exactly what this change is meant to save.
-//
-// ⚠️ topic and ttl are both taken from core, **not written again here**: if the two sides differ, the result is
-// "the wake-up was sent but nobody received it": zero errors, only slower responses. That kind of drift is a trap this repo
-// has recorded again and again, so we make it impossible at compile time.
 func (w *workerWakeups) Wake(ctx context.Context, envID string) error {
-	return w.q.Publish(ctx, core.WorkerWakeTopic(envID), []byte{}, core.WorkerWakeTTL)
+	return core.PGMQWorkerWakeups{Queue: w.q}.Wake(ctx, envID)
 }
-
-// WatchWakeups: see core.WorkerWakeups.
 func (w *workerWakeups) WatchWakeups(
 	ctx context.Context, envID string, fn func(context.Context) error,
 ) error {
-	return w.q.Consume(ctx, core.WorkerWakeTopic(envID), func(c context.Context, _ pgmq.Message) error {
-		return fn(c)
-	})
+	return core.PGMQWorkerWakeups{Queue: w.q}.WatchWakeups(ctx, envID, fn)
 }
 
 var _ core.WorkerWakeups = (*workerWakeups)(nil)
