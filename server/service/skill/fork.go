@@ -37,7 +37,7 @@ func (s *Service) ForkSkill(
 	// The source may be a built-in skill (not in the database; the source of truth is code constants).
 	var src apimodel.Skill
 	if IsBuiltinSkill(sourceID) {
-		b, ok := BuiltinSkill(sourceID)
+		b, ok := s.builtinSkill(sourceID)
 		if !ok {
 			return apimodel.Skill{}, fmt.Errorf("%w: 技能不存在", persistmodel.ErrNotFound)
 		}
@@ -98,7 +98,7 @@ func (s *Service) freeSkillName(ctx context.Context, workspaceID, base string) (
 			cand = fmt.Sprintf("%s-copy-%d", base, i+1)
 		}
 		// Is there a limit on total name length? No hard limit, but name clashes with built-in skills must be avoided too.
-		if BuiltinSkillNameTaken(cand) {
+		if s.builtinNameTaken(cand) {
 			continue
 		}
 		taken, err := s.store.SkillNameTaken(ctx, workspaceID, cand)

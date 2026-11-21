@@ -49,6 +49,7 @@ func TestDownstreamBuiltinAndSourcePolicies(t *testing.T) {
 	service, err := New(Config{
 		Store: store, NextID: func(string) string { return "skill_test" }, Revisions: testRevisions{},
 		Builtins: testBuiltins{skill: builtin}, Sources: testSourcePolicy{},
+		Blobs: func() BlobStore { return coremem.NewMemBlobStore() },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +61,13 @@ func TestDownstreamBuiltinAndSourcePolicies(t *testing.T) {
 	files, err := service.SkillFiles(ctx, builtin.ID)
 	if err != nil || len(files) != 1 || string(files[0].Content) != "example" {
 		t.Fatalf("downstream built-in files not used: %+v %v", files, err)
+	}
+	forked, err := service.ForkSkill(ctx, "ws_test", builtin.ID)
+	if err != nil {
+		t.Fatalf("downstream built-in skill must be forkable: %v", err)
+	}
+	if forked.Name != "example-copy" || forked.Origin != nil {
+		t.Fatalf("fork must be a custom copy without origin: %#v", forked)
 	}
 	if _, err := store.CreateSkill(ctx, apimodel.Skill{
 		ID: "skill_external", WorkspaceID: "ws_test", Name: "external", Source: "external-example", Tags: []string{},
