@@ -974,7 +974,6 @@ func (p *WorkerPool) pollLoop(
 	// (if a case goes down the "process exit" branch, what it expects is exactly no resend).
 	// Pinning this check with a name that cannot be shadowed is more reliable than relying on "the
 	// next person remembers not to shadow ctx".
-	workerCtx := ctx
 
 	// The API given to each work item is wrapped with a guard: on process exit, StopWork is **not
 	// allowed**. For why, see shutdownSafeAPI.
@@ -1191,199 +1190,41 @@ func (p *WorkerPool) pollLoop(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-
-			// One ctx log context per work item, carrying the run/Ark session/work id. That way all
-			// logs in this round for "take work → ack → tool execution → return result → failover"
-			// can be tied together by one ma_session_id. This is the most important search key when
-			// debugging "the tool should have run but did not".
-			//
-			// ⚠️ **It must be a new goroutine-private variable wctx, not `ctx = xlog.With(ctx)`
-			// overwriting the shared outer ctx**: pollLoop starts several work goroutines
-			// concurrently, and each writing the same ctx variable is a data race (seen with
-			// -race). The new variable only adds values and passes through the same cancel signal;
-			// downstream workCtx and all logs reuse it, which satisfies "change ctx first so child
-			// functions can reuse it".
 			wctx := xlog.With(ctx,
-				xlog.KRunID, it.SessionIDValue(),
-				xlog.KMSessionID, it.SessionIDValue(),
-				xlog.KWorkID, it.ID,
-				xlog.KWorkerID, workerID)
+				xlog.KRunID, it.SessionIDValue(), xlog.KMSessionID, it.SessionIDValue(),
+				xlog.KWorkID, it.ID, xlog.KWorkerID, workerID)
 			activeNow := 0
 			if health != nil {
 				activeNow = int(health.activeWork.Load()) + 1
 			}
 			xlog.Info(wctx, "开始处理一条 work（环境内并发槽占用 %d/%d）", activeNow, cap(sem))
 			defer func() { <-sem }()
-			// Track the number of in-flight work items (= slots in use). Printed when the
-			// environment health watchdog sees a stall, to tell apart "slots are full of hung work"
-			// from "polling network is stuck" (see workerpollhealth.go).
-			health.workStarted()
-			defer health.workDone()
-			// panic fallback: one crashing work item must not take down the whole worker (that
-			// would stall all later conversations in this environment, and outside the HTTP layer
-			// nobody catches the panic stack).
-			defer func() {
-				if r := recover(); r != nil {
-					logger.Error("处理 work panic",
-						slog.String("work_id", it.ID), slog.Any("panic", r))
-				}
-			}()
-			// ⚠️ **Build a new worker for every work item; do not reuse the outer one.**
-			//
-			// Because ToolsFunc needs to know "which Ark session this is", and the SDK does not
-			// pass the session id into ToolsFunc (AgentToolContext only has Workdir). The outer
-			// worker is environment-level and shared by concurrent work items, so there is no way
-			// to record "who is current" on it; recording it would mix them up.
-			//
-			// We used to recover the id from the last segment of workdir, but **HandleItem
-			// hardcodes workdir to the root directory** (`handleItem(ctx, item, true)`, the
-			// opposite of Run's false), so the last segment became `ama-worker-sessions` and
-			// recovering failed outright → every tool call errored, and no container could ever be
-			// created. See the comment on dockertools.Provider.ToolsFuncForSession for details.
-			//
-			// Building a worker only assembles a few fields (no network, see
-			// NewEnvironmentWorkerForClient), so one per work item costs next to nothing.
-			//
-			// ⚠️ **Each work item needs its own ctx; do not use the outer one directly.**
-			//
-			// This is the seam for the "zombie work" fix: when results can never be delivered, or
-			// this session's run has already reached a final state, we must be able to stop **only
-			// this one**. With the outer ctx it would become "stop the whole environment's worker",
-			// interrupting other healthy conversations in the same environment.
-			//
-			// Derived from workerCtx rather than Background: process exit must still propagate
-			// down, otherwise this work would not go away on shutdown.
-			//
-			// ⚠️ **Deliberately not named `ctx`**: that would shadow the outer one and turn the "is
-			// the process exiting" checks below into always false. See the comment on workerCtx at
-			// the top of pollLoop (that fallback would silently become dead code, and tests might
-			// still be green).
-			workCtx, cancelWork := context.WithCancel(wctx)
-			defer cancelWork()
-
-			// Two gates, both required. For why, and why one is not enough, see the file header of
-			// core/workersendguard.go.
-			//
-			// One, delivery gate: after a permanent 4xx (400 payload invalid / 404 session
-			// expired), stop sending SendEvent for this session and stop this work. **429 is not
-			// permanent.**
-			//
-			// ⚠️ The order is "gate on the outside": workAPI already has rate-limit backoff and the
-			// exit guard, and only wrapping outside can short-circuit **before hitting the
-			// network**. Wrapped inside, every call would first wait on the rate-limit gate, which
-			// saves nothing.
-			sendGuard := newWorkSendGuard(workAPI, it.SessionIDValue(), cancelWork, logger)
-			// failover wraps outside sendGuard: when the watchdog decides "tool results have not
-			// come back for a long time = the executor is hung", it stops heartbeats and blocks
-			// StopWork, handing the work back to Ark to be reassigned after 45s to a healthy worker
-			// that really runs it (if not taken within 90s the server marks it stopped, see the
-			// arkReclaimOlderThan comment), instead of ending or erroring. The SDK's heartbeats and
-			// final StopWork both go through it. See workerfailover.go.
-			failover := newWorkFailover(sendGuard, it.ID, logger)
-
-			// Two, final-state gate: when that run in the database reaches terminated, stop this
-			// work. **It must query the database**: the instance that finishes that run is usually
-			// not the one running this work.
-			go p.watchRunTerminated(workCtx, it.SessionIDValue(), cancelWork, logger)
-
-			// Three, progress watchdog: once a tool call is out and has no result after
-			// workToolProgressBound, it fails over. Events are read with pollLoop's api (not slowed
-			// down by per-work gates), so the supervisor can still read events when "the executor
-			// is hung".
-			go p.watchWorkToolProgress(workCtx, failover, api, it, cancelWork, logger)
-
-			// Run one work item (production = our own handleWorkItem: the tool result ledger uses
-			// PG, isolated per session; heartbeats and the final StopWork are inside too, through
-			// the failover wrapper). See core/workerhandle.go and pgtoolresult.go.
-			//
-			// The check uses `workerCtx` (the worker's lifetime); **do not change it to workCtx**.
-			// That is the rule written in the workerCtx comment at the top of pollLoop.
-			if p.processWork == nil {
-				logger.Error("worker 未装配 processWork，跳过这条 work",
-					slog.String("work_id", it.ID))
-				return
-			}
-			if err := p.processWork(workCtx, it, failover, it.SessionIDValue(), logger); err != nil &&
-				workerCtx.Err() == nil {
-				logger.Warn("处理 work 失败",
-					slog.String("work_id", it.ID), slog.Any("err", err))
-				xlog.Warn(wctx, "处理 work 失败（将进入收尾对账）：%v", err)
-			} else if failover.isAbandoned() {
-				// failover let go: this work has been handed back to Ark for reassignment, and this
-				// executor no longer reports results. Log a separate line so it is not mixed up
-				// with "finished normally" and the failover is visible.
-				xlog.Warn(wctx, "这条 work 已 failover 交回方舟重派（执行者判定卡死），本实例不报结果")
-			} else {
-				xlog.Info(wctx, "一条 work 处理结束（正常）")
-			}
-
-			// Final reconciliation: every tool_use Ark started must have a result returned; for
-			// missing ones, send an error result.
-			//
-			// ⚠️ **This step must come after HandleItem, and run whether it succeeded or failed.**
-			// None of the ways a runner exits (idle timeout, lease lost, event stream breaking the
-			// moment a tool_use was sent, pod replaced) sends the missing tool_result, and missing
-			// one means the whole turn hangs forever at requires_action. See the file header of
-			// workertoolaudit.go for details.
-			//
-			// # Why use a ctx without cancellation
-			//
-			// ⚠️ It is **not** because "HandleItem cancels our ctx": it cancels the workCtx it
-			// derives itself (`workCtx, cancel := context.WithCancel(ctx)`); this outer ctx is not
-			// affected. A self-review once got this wrong, so it is written down to avoid changing
-			// it again for that wrong reason.
-			//
-			// The real reason: this step must be able to finish even while **the process is
-			// shutting down**. Once the worker's ctx is cancelled, the `ctx.Err() == nil` below
-			// skips the resend (on purpose, see below), but when `refresh` replaces a worker, or an
-			// upper layer cancels for another reason, reconciliation should still finish instead of
-			// being cut off halfway. It only needs a bounded timeout of its own, not to be
-			// cancelled together with upstream.
-			//
-			// # But no resend on process exit
-			//
-			// The check is **workerCtx** (this worker's lifetime), not the ctx here. On process
-			// exit that work is **left on purpose for a new instance to reclaim** (see
-			// shutdownSafeAPI). Resending results would push the turn forward before the reclaim:
-			// the tool did not actually run, yet the agent gets "could not run". That turns a
-			// restart that could heal itself into a real failed turn.
-			//
-			// ⚠️ **Using workerCtx instead of ctx is deliberate**; do not change it back: if a
-			// per-work ctx shows up in this goroutine (it is also cancelled on normal finish), a
-			// bare `ctx` would make this check always false, and the fallback would silently become
-			// dead code. See the workerCtx comment at the top of pollLoop.
-			//
-			// ⚠️ **It must be passed sendGuard, not workAPI.** This was the direct cause of a
-			// production incident: the gate is built **outside** workAPI, so passing workAPI means
-			// sneaking under the gate. In the same work item the gate applied to the runner but not
-			// to the fallback.
-			//
-			// In production (session sesn-20260101000010-ex010) the shape was: the runner hit a 400
-			// and set the gate, the work was stopped, and then the fallback used workAPI to send
-			// both results again as is, each getting a 500. Ark redelivered this work every 2.2
-			// seconds, so in 372 seconds it produced **210 resends that were bound to fail** + 15
-			// 429s (those 15 came from the fallback's ListEvents, which is why the gate also wraps
-			// reads; see workSendGuard.ListEvents). The evidence is hard: in that window, "skip
-			// this delivery" in `workersendguard.go` appeared **0 times**, while "resending tool
-			// result failed" appeared 210 times: not one fallback request went through the gate.
-			//
-			// With the gate passed, the fallback logs "resend failed" (the gate returns the error
-			// it remembered). **That is right**: it honestly reports "this result was not
-			// delivered". Turning it into a fake success would leave a fake "resent" line in the
-			// logs, and that is exactly the only useful information when debugging a
-			// requires_action hang. See the SendEvent comment in workersendguard.go. Work that
-			// failover let go **gets no error results**: those tool_use calls are left for the
-			// healthy worker Ark reassigns after 45s to really run (that is the whole point of
-			// failover). Sending error results would turn "waiting for reassignment" into "got a
-			// fake result". The reassigned worker does this reconciliation itself when it finishes,
-			// so the fallback is still there.
-			if workerCtx.Err() == nil && !failover.isAbandoned() {
-				auditCtx, cancelAudit := context.WithTimeout(
-					context.WithoutCancel(workerCtx), toolAuditTimeout)
-				auditToolCalls(auditCtx, sendGuard, it.SessionIDValue(),
-					logger.With(slog.String("work_id", it.ID)))
-				cancelAudit()
-			}
+			ProcessClaimedWork(ctx, it, api, WorkProcessingHooks{
+				Started: health.workStarted,
+				Done:    health.workDone,
+				Setup: func(cancelWork context.CancelFunc) (selfhosted.API, func() bool, func(context.Context, context.CancelFunc)) {
+					sendGuard := newWorkSendGuard(workAPI, it.SessionIDValue(), cancelWork, logger)
+					failover := newWorkFailover(sendGuard, it.ID, logger)
+					return failover, failover.isAbandoned, func(workCtx context.Context, cancel context.CancelFunc) {
+						p.watchWorkToolProgress(workCtx, failover, api, it, cancel, logger)
+					}
+				},
+				Process: func(workCtx context.Context, api selfhosted.API) error {
+					if p.processWork == nil {
+						logger.Error("worker 未装配 processWork，跳过这条 work", slog.String("work_id", it.ID))
+						return nil
+					}
+					return p.processWork(workCtx, it, api, it.SessionIDValue(), logger)
+				},
+				Terminated: func(workCtx context.Context, cancelWork context.CancelFunc) {
+					p.watchRunTerminated(workCtx, it.SessionIDValue(), cancelWork, logger)
+				},
+				Audit: func(auditCtx context.Context, api selfhosted.API) {
+					auditToolCalls(auditCtx, api, it.SessionIDValue(), logger.With(slog.String("work_id", it.ID)))
+				},
+				AuditTimeout: toolAuditTimeout,
+				Logger:       logger,
+			})
 		}()
 	}
 }
