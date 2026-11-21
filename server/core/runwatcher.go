@@ -64,7 +64,6 @@ import (
 	"time"
 
 	"github.com/chyroc/ama/server/model/apimodel"
-	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 	"github.com/chyroc/ama/server/shared/infra/ma"
 )
 
@@ -343,30 +342,11 @@ func (w *RunWatcher) tick(ctx context.Context) {
 // Failures are only logged: the next round tries again, which is better than making the whole
 // subscription path fail.
 func (w *RunWatcher) retireMissingRun(ctx context.Context, runID string) {
-	w.log.Info("方舟侧已无此会话，标记终止并停止订阅", slog.String("run", runID))
-
-	// Use a ctx without cancellation: the process may be shutting down, and if this step is not
-	// done the next startup hits the same thing again.
-	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-
-	run, err := w.cfg.Service.store.GetRun(writeCtx, runID)
-	if err != nil {
-		// The run is gone too (deleted), so there is even less to do.
-		return
-	}
-	run.Status = apimodel.RunTerminated
-	if run.ErrorSummary == "" {
-		// Give the user a message they can understand. **Do not write "service error"**: this
-		// is not an outage; the execution environment was reclaimed (container TTL 1 hour), and
-		// sending a new message to start a new session is enough.
-		run.ErrorSummary = "会话的执行环境已被回收，这条会话不能再继续了；重新发起一次对话即可。"
-	}
-	w.cfg.Service.closeRunAt(&run, retireEndedAt(run))
-	if _, err := w.cfg.Service.store.SaveRun(writeCtx, run); err != nil {
-		w.log.Warn("标记会话终止失败，下一轮还会再试",
-			slog.String("run", runID), slog.Any("err", err))
-	}
+	RetireMissingRun(ctx, runID, w.log, RetireMissingRunHooks{
+		Get:   w.cfg.Service.store.GetRun,
+		Save:  w.cfg.Service.store.SaveRun,
+		Close: w.cfg.Service.closeRunAt,
+	})
 }
 
 // retireEndedAt computes an honest end time for a session retired by the fallback.
@@ -447,120 +427,14 @@ func (w *RunWatcher) watchOne(ctx context.Context, runID string) {
 	go func() {
 		defer w.wg.Done()
 		defer w.watching.Delete(runID)
-		// **Releasing the lease must happen**; otherwise this session waits a full lease (15
-		// minutes) before being subscribed again, which shows up as "after closing the page,
-		// events are still not stored for a while", the very symptom this feature fixes. Use a
-		// ctx without cancellation: when the process is shutting down ctx is already Done, a
-		// write with it fails right away, and the lease leaks in the DB (same as the
-		// scheduler's finish).
-		defer func() {
-			relCtx, relCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer relCancel()
-			if err := w.cfg.Service.store.ReleaseRunWatch(relCtx, runID); err != nil {
-				w.log.Warn("释放会话订阅租约失败，下次要等它过期",
-					slog.String("run", runID), slog.Any("err", err))
-			}
-		}()
-
-		// The subscription's lifetime does not follow this tick: the stream must keep
-		// listening after tick returns. For the fallback timeout see watchTurnTimeout.
-		runCtx, cancel := context.WithTimeout(
-			context.WithoutCancel(ctx), watchTurnTimeout)
-		defer cancel()
-
-		// It must be woken up when the process shuts down; otherwise wg.Wait() waits until the
-		// fallback timeout.
-		stop := context.AfterFunc(ctx, cancel)
-		defer stop()
-
-		w.log.Info("开始常驻订阅", slog.String("run", runID))
-
-		// Last rescue: when the work was stopped by Ark and poll reclaim has no hope left, the
-		// single holder of this PG claim sends the missing tool_result. For the rule and why it
-		// lives here, see runrescue.go.
-		go w.rescueTick(runCtx, runID)
-
-		// **We must recognize the terminal frame ourselves and close the stream.**
-		//
-		// Ark **does not close SSE** after end_turn (it keeps a long connection per session,
-		// waiting for the next user message), so StreamRunEvents does not return on its own.
-		// Without this step every subscription hangs for the full watchTurnTimeout (10
-		// minutes). Under a resident scan that quickly piles up goroutines and connections, and
-		// the logs only show "subscription started", never the end.
-		//
-		// ⚠️ feishu's resume.go misses exactly this step (it relies on runTimeout as a
-		// fallback); that path is rare, so the symptom is mild. **Do not copy it**; copy the
-		// two places in inbound.go / scheduler.go instead.
-		//
-		// The rule is exactly the same as turnEnded: the idle of requires_action does not count
-		// as ended.
-		// drained records "whether one message was sent from the queue when this turn ended".
-		//
-		// If one was sent, a new turn has started and the session is still active: on cleanup
-		// below the lease must be released right away so the next tick can subscribe again,
-		// instead of waiting a scan period.
-		drained := false
-		err := w.cfg.Service.StreamRunEvents(runCtx, runID, func(raw []byte) error {
-			if arkframe.TurnEnded(raw) {
-				// **This moment is the only reliable signal of "the next message can be sent".**
-				//
-				// "The run becomes idle" cannot replace it: requires_action is also idle on the
-				// Ark side, but it means "stuck waiting for a tool result" and the agent will
-				// continue; a queued message inserted then would interrupt it. turnEnded already
-				// makes that distinction.
-				//
-				// ⚠️ But turnEnded is one notch wider than draining: **a user interrupt also counts
-				// as turnEnded** (stop_reason is user_interrupt), and then the queue head must
-				// never be taken; see the notes on drainAllowed.
-				//
-				// Draining happens **before** closing the stream: the stream is still open, so the
-				// events caused by the message just sent can be received by this subscription
-				// directly, without waiting for the next tick to subscribe again.
-				if drainAllowed(raw) {
-					drained = w.cfg.Service.DrainPendingMessage(runCtx, runID, w.owner)
-				}
-
-				// Cancel ctx so StreamRunEvents returns. **Do not return an error here**: that
-				// would be logged as a warning "subscriber failed", while this is a normal finish.
-				//
-				// ⚠️ Disconnect even if one message was just drained: that message makes Ark start
-				// a new turn, and part of this subscription's fallback timeout is already used up.
-				// Letting the next tick subscribe again with a full budget is cleaner than
-				// extending it here forever.
-				cancel()
-			}
-			return nil
+		WatchClaimedRun(ctx, runID, w.owner, w.log, RunWatchLifecycleHooks{
+			Store:         w.cfg.Service.store,
+			Stream:        w.cfg.Service.StreamRunEvents,
+			Drain:         w.cfg.Service.DrainPendingMessage,
+			Rescue:        w.rescueTick,
+			RetireMissing: w.retireMissingRun,
+			IsNotFound:    ma.IsNotFound,
+			TurnTimeout:   watchTurnTimeout,
 		})
-		// Our own disconnect is a normal finish, not a fault. runCtx expiring (fallback timeout)
-		// does not count either: that path only means this turn was very long, and the events
-		// were still stored.
-		if err != nil && runCtx.Err() == nil {
-			// **The Ark side has no such session at all**: retrying will never succeed, so it
-			// must be settled on the spot; otherwise it is resubscribed every 30 seconds,
-			// spamming WARN in an endless loop.
-			//
-			// This was hit as soon as it ran on a real machine (every round of the first run):
-			// run_4 / run_5 in the seed data have fake session ids, and production has a real
-			// source too: a session idle longer than the container TTL (1 hour) is reclaimed
-			// by the platform, the Ark-side session is gone, while the status in our DB still
-			// says running (with no subscriber nobody pushes it to a terminal state; that is
-			// the very gap this feature fills, so it became a victim of that gap itself).
-			if ma.IsNotFound(err) {
-				w.retireMissingRun(ctx, runID)
-				return
-			}
-			w.log.Warn("常驻订阅异常结束",
-				slog.String("run", runID), slog.Any("err", err))
-			return
-		}
-		if drained {
-			// Say "another message was sent from the queue"; otherwise the log only shows one
-			// subscription ending, while a new turn has actually started, which is confusing
-			// when debugging "why does this session keep running". The lease is released in the
-			// defer above, so the next tick can subscribe again.
-			w.log.Info("常驻订阅结束，已从队列发出下一条", slog.String("run", runID))
-			return
-		}
-		w.log.Info("常驻订阅结束", slog.String("run", runID))
 	}()
 }
