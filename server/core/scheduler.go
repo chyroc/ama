@@ -532,96 +532,14 @@ func (s *Scheduler) deliver(
 func (s *Scheduler) finish(
 	ctx context.Context, sch apimodel.Schedule, runID string, finished time.Time, fireErr error,
 ) {
-	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancel()
-
-	// **Re-read** before changing: between the claim and now, the user may have changed this task in
-	// the UI (edited the prompt, clicked pause). Writing back the in-memory copy from when fire started
-	// would overwrite those changes.
-	cur, err := s.cfg.Service.store.GetSchedule(writeCtx, sch.ID)
-	if err != nil {
-		if !errors.Is(err, ErrNotFound) {
-			s.log.Warn("回写调度状态前重读失败", slog.String("schedule", sch.ID), slog.Any("err", err))
-		}
-		// The task was deleted: this round's result has nowhere to go; end normally.
-		return
-	}
-
-	// oneshot is deleted after running (success or failure).
-	//
-	// **Success or failure** is deliberate: if a failed one were kept, it would run and fail again
-	// next cycle, and "remind me in 1 hour" would become a reminder every 30 seconds.
-	//
-	// Once deleted there is no lease to release: the row is gone, and so are the two lease columns.
-	if cur.Spec.Kind == apimodel.ScheduleOneshot {
-		if err := s.cfg.Service.store.DeleteSchedule(writeCtx, cur.ID); err != nil {
-			s.log.Warn("删除一次性任务失败，它可能会被重复触发",
-				slog.String("schedule", cur.ID), slog.Any("err", err))
-		}
-		return
-	}
-
-	cur.LastRunAt = apimodel.FormatISO(finished)
-	cur.UpdatedAt = apimodel.FormatISO(finished)
-	if runID != "" {
-		cur.LastRunID = runID
-	}
-	cur.RunCount++
-	if fireErr != nil {
-		cur.FailCount++
-		cur.ConsecutiveFailures++
-		cur.LastError = fireErr.Error()
-	} else {
-		cur.ConsecutiveFailures = 0
-		cur.LastError = ""
-	}
-
-	switch {
-	case cur.Status != apimodel.ScheduleActive:
-		// The user paused it while this round ran; do not schedule the next one.
-		cur.NextRunAt = ""
-	case cur.ConsecutiveFailures >= apimodel.MaxConsecutiveFailures:
-		// Auto-pause after repeated failures (anti-avalanche): a task with a broken prompt or a deleted
-		// agent fails every cycle, each time really creating an Ark session, burning tokens, and maybe
-		// posting a failure card to the group.
-		cur.Status = apimodel.SchedulePaused
-		cur.NextRunAt = ""
-		s.log.Warn("连续失败次数达上限，自动暂停这条定时任务",
-			slog.String("schedule", cur.ID),
-			slog.Int("failures", cur.ConsecutiveFailures))
-	default:
-		// Count the next one from **the time it finished**, which is exactly what "interval does not use a
-		// fixed grid" comes down to.
-		next, nerr := ComputeNextRun(cur.Spec, finished)
-		if nerr != nil {
-			// The expression can no longer compute the next time (broken by a manual edit?). Pause it so
-			// it does not fail forever.
-			cur.Status = apimodel.SchedulePaused
-			cur.NextRunAt = ""
-			cur.LastError = "算不出下次触发时刻：" + nerr.Error()
-		} else {
-			cur.NextRunAt = next
-		}
-	}
-
-	if _, err := s.cfg.Service.store.SaveSchedule(writeCtx, cur); err != nil {
-		// The cost of this write failing is "next_run_at stays empty -> never claimed again", so report it
-		// explicitly.
-		s.log.Error("回写调度状态失败，这条任务可能不会再被触发",
-			slog.String("schedule", cur.ID), slog.Any("err", err))
-	}
-
-	// **Release the lease after SaveSchedule.** The other way around, for a moment next_run_at is still
-	// the old (due) value while the lease is already gone, and another instance would grab it right away
-	// and run it again: the same task runs two rounds back to back and the user gets two results.
-	//
-	// Not releasing has an equally concrete cost: the lease takes 15 minutes to expire, and tasks with
-	// a shorter interval ("every 5 minutes") cannot be claimed until then, showing up as **the interval
-	// silently stretched to 15 minutes**, with nothing visible in the log.
-	if err := s.cfg.Service.store.ReleaseScheduleClaim(writeCtx, cur.ID); err != nil {
-		s.log.Warn("释放认领租约失败，这条任务要等租约过期才能再跑",
-			slog.String("schedule", cur.ID), slog.Any("err", err))
-	}
+	FinishSchedule(ctx, sch, runID, finished, fireErr, s.log, FinishScheduleHooks{
+		Get:      s.cfg.Service.store.GetSchedule,
+		Delete:   s.cfg.Service.store.DeleteSchedule,
+		Save:     s.cfg.Service.store.SaveSchedule,
+		Release:  s.cfg.Service.store.ReleaseScheduleClaim,
+		Next:     ComputeNextRun,
+		NotFound: ErrNotFound,
+	})
 }
 
 // lostRoundBefore decides "is this claim catching up on a task whose last round did not finish",
