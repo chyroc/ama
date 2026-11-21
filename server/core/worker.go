@@ -490,22 +490,15 @@ func (p *WorkerPool) ensureSessionRunForWork(
 // for 1 hour (far longer than the life of a work item plus reclaim wait), and clear rows old
 // enough.
 const (
-	toolResultCleanupInterval = 10 * time.Minute
-	toolResultRetention       = time.Hour
+	toolResultCleanupInterval = DefaultToolResultCleanupInterval
+	toolResultRetention       = DefaultToolResultRetention
 )
 
 func (p *WorkerPool) cleanupToolResults(ctx context.Context) {
 	if p.cfg.ToolResults == nil {
 		return
 	}
-	n, err := p.cfg.ToolResults.DeleteOldToolResults(ctx, time.Now().Add(-toolResultRetention))
-	if err != nil {
-		p.log.Warn("清理工具结果账本失败（不影响处理，下轮再试）", slog.Any("err", err))
-		return
-	}
-	if n > 0 {
-		p.log.Info("清理陈年工具结果账本", slog.Int64("删除行数", n))
-	}
+	CleanupOldToolResults(ctx, p.cfg.ToolResults.DeleteOldToolResults, toolResultRetention, time.Now(), p.log)
 }
 
 // setupDocker connects to the Docker daemon, builds a dockertools.Provider, and installs all the
