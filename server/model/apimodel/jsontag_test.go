@@ -136,6 +136,7 @@ func roots() []any {
 		apimodel.WorkspaceHost{},
 		apimodel.WorkspaceIntegrationInput{},
 		apimodel.WorkspaceIntegrationView{},
+		apimodel.MigrateBlobReport{},
 		apimodel.UserFile{},
 		apimodel.WeixinAccount{},
 		apimodel.WeixinLogin{},
