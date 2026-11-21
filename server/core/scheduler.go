@@ -244,75 +244,31 @@ func (s *Scheduler) Run(ctx context.Context) error {
 
 // tick scans one round: (optionally) elect a leader -> claim -> start a goroutine per task.
 func (s *Scheduler) tick(ctx context.Context) {
-	// Gate one: if Redis is configured, grab the lock first; if we cannot, skip this tick.
-	//
-	// The lock is held **only for this scan** and released when the scan ends, not held long term:
-	// holding it long term ties "who is leader" to one instance, and if it dies others must wait for the
-	// TTL to take over; the claim itself is already atomic, and leader election only saves duplicate
-	// scans, so one tick is a fine enough granularity.
-	if s.cfg.Leases != nil {
-		lease, ok, err := s.cfg.Leases.Acquire(ctx, leaderKey, leaderTTL)
-		if err != nil {
-			// Failing to grab the lock (Redis hiccup) **must not degrade into not scanning**: then
-			// every scheduled task would stop whenever Redis is down, while correctness never depended
-			// on it. So log a warning and scan as usual; the PG claim covers duplicates.
-			s.log.Warn("抢调度锁失败，本轮照常扫（重复由 PG 认领兜住）", slog.Any("err", err))
-		} else if !ok {
-			// Another instance is scanning. This is a normal result, not an error.
-			return
-		} else {
-			defer func() {
-				if err := lease.Release(context.WithoutCancel(ctx)); err != nil {
-					s.log.Warn("释放调度锁失败，下一拍要等它过期", slog.Any("err", err))
-				}
+	ScanSchedules(ctx, ScheduleTickHooks{
+		Leases:    s.cfg.Leases,
+		LeaderKey: leaderKey,
+		LeaderTTL: leaderTTL,
+		Claim: func(ctx context.Context, owner string, now time.Time) ([]apimodel.Schedule, error) {
+			return s.cfg.Service.store.ClaimDueSchedules(ctx, owner, now, claimLease, claimBatch)
+		},
+		LostRound: s.lostRoundBefore,
+		InFlight: func(id string) bool {
+			_, busy := s.inflight.LoadOrStore(id, struct{}{})
+			return busy
+		},
+		Fire: func(sch apimodel.Schedule) {
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				defer s.inflight.Delete(sch.ID)
+				s.fireOne(ctx, sch)
 			}()
-		}
-	}
-
-	now := s.now().UTC()
-	claimed, err := s.cfg.Service.store.ClaimDueSchedules(ctx, s.owner, now, claimLease, claimBatch)
-	if err != nil {
-		s.log.Warn("认领定时任务失败，下个周期重试", slog.Any("err", err))
-		return
-	}
-	if len(claimed) == 0 {
-		return
-	}
-	s.log.Info("认领到到期的定时任务", slog.Int("count", len(claimed)))
-
-	for _, sch := range claimed {
-		// **Leave a Warn when a zombie is reclaimed.** The NextRunAt returned by the claim is always
-		// empty (claiming clears it), so here we cannot tell "normally due" from "zombie", but LastRunAt
-		// plus the task period can: a task running normally is never claimed much more than one period
-		// after it last finished.
-		//
-		// This log line is the **only trace** that "the previous round was lost": that round wrote
-		// no RunCount, no FailCount, no LastError; all four counters act as if nothing happened (that
-		// is exactly what a past production incident looked like: the task stopped for many hours while
-		// status stayed active and consecutiveFailures stayed 0).
-		// Without it, reclaiming makes the failure **fixed more thoroughly and also more hidden**: the
-		// task heals itself, and nobody ever learns "why it broke".
-		if lost, since := s.lostRoundBefore(sch, now); lost {
-			s.log.Warn("这条任务上一轮没跑完就断了（进程被重建？），本次是补领",
-				slog.String("schedule", sch.ID),
-				slog.String("last_run_at", sch.LastRunAt),
-				slog.Duration("since_last_run", since))
-		}
-		if _, busy := s.inflight.LoadOrStore(sch.ID, struct{}{}); busy {
-			// The previous round is still running (the narrow window where the lease expired but the
-			// work is not done). Skip it, but schedule it back, otherwise this task's next_run_at stays
-			// empty and it is never claimed again.
-			s.log.Warn("上一轮还在跑，跳过本次触发", slog.String("schedule", sch.ID))
-			s.rescheduleOnly(ctx, sch)
-			continue
-		}
-		s.wg.Add(1)
-		go func(sch apimodel.Schedule) {
-			defer s.wg.Done()
-			defer s.inflight.Delete(sch.ID)
-			s.fireOne(ctx, sch)
-		}(sch)
-	}
+		},
+		Reschedule: func(sch apimodel.Schedule) { s.rescheduleOnly(ctx, sch) },
+		Owner:      s.owner,
+		Now:        s.now,
+		Logger:     s.log,
+	})
 }
 
 // fireOne runs one round of a task.
