@@ -45,6 +45,22 @@ const (
 	ledgerStateSent    = "sent"
 )
 
+// PgToolResultStore binds one session and implements selfhosted.ToolResultStore.
+type PgToolResultStore = pgToolResultStore
+
+// NewPGToolResultStore creates a session-scoped SDK result store backed by PostgreSQL.
+func NewPGToolResultStore(
+	ledger ToolResultLedger, sessionID string, ctx context.Context, logger *slog.Logger,
+) *PgToolResultStore {
+	return newPGToolResultStore(ledger, sessionID, ctx, logger)
+}
+
+const (
+	LedgerStateStarted = ledgerStateStarted
+	LedgerStateResult  = ledgerStateResult
+	LedgerStateSent    = ledgerStateSent
+)
+
 // pgToolResultStore is bound to one session and implements selfhosted.ToolResultStore.
 type pgToolResultStore struct {
 	ledger    ToolResultLedger
