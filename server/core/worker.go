@@ -625,37 +625,16 @@ func (p *WorkerPool) ensureWorker(ctx context.Context, workspaceID, agentID, env
 	// Passing the wrong agent gets another key, which is invalid for this environment (the
 	// environment belongs to someone else's project). The symptom is that the worker starts, but
 	// poll keeps failing and all tool calls hang at requires_action.
-	key, err := p.svc.arkKey(ctx, workspaceID, agentID)
-	if err != nil {
-		p.log.Warn("空间没有可用的方舟凭证，worker 不启动（该空间的工具调用会卡住）",
-			slog.String("workspace", workspaceID), slog.Any("err", err))
-		p.mu.Lock()
-		delete(p.running, id)
-		p.mu.Unlock()
-		cancel()
-		return
-	}
-
-	// Do not start a worker again for an environment with invalid credentials (401/403) during the
-	// backoff period.
-	//
-	// ⚠️ **The check must be here, not in the reconnect loop below**: the Ark client is built once
-	// by runOne with key.APIKey (outside the loop), so retries inside the loop always use the same
-	// invalid key. Only by coming back here and going through arkKey above again can the new key
-	// the user switched to get in. The full argument is in the file header of workerauthbackoff.go.
-	//
-	// The check includes the fingerprint: once the key changes it is let through at once (wait at
-	// most one refresh cycle, ≤30 seconds), without waiting for the backoff to expire.
-	fingerprint := ArkKeyFingerprint(key.APIKey)
-	if blocked, left := p.auth.blocked(envID, fingerprint, time.Now()); blocked {
-		// ⚠️ This **must only be Debug**. refresh runs every 30 seconds; with Warn, one environment
-		// with a misconfigured key floods 120 lines an hour, exactly the kind of noise this change
-		// set out to remove. "Why this environment is not working" has already been said by
-		// logAuthBackoff at failure time, with all four fields.
-		p.log.Debug("方舟凭据仍在认证退避期内，本轮跳过这个环境",
-			slog.String("workspace", workspaceID),
-			slog.String("environment", envID),
-			slog.Duration("剩余", left.Round(time.Second)))
+	key, allowed := WorkerStartAllowed(ctx, workspaceID, envID, WorkerStartGateHooks{
+		Resolve: func(ctx context.Context) (ArkBindingKey, error) {
+			return p.svc.arkKey(ctx, workspaceID, agentID)
+		},
+		Blocked: func(fingerprint string, now time.Time) (bool, time.Duration) {
+			return p.auth.blocked(envID, fingerprint, now)
+		},
+		Logger: p.log,
+	})
+	if !allowed {
 		p.mu.Lock()
 		delete(p.running, id)
 		p.mu.Unlock()
