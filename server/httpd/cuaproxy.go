@@ -596,12 +596,20 @@ func isHTTPSRequest(r *http.Request) bool {
 	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
 }
 
-// registerCUAProxy mounts the authenticated CUA reverse proxy on mux when enabled.
+// registerCUAProxy keeps the in-package test and embedding entry point stable.
 func registerCUAProxy(
+	mux *http.ServeMux, log *slog.Logger, cfg CUAConfig, protect func(http.Handler) http.Handler,
+) {
+	RegisterCUAProxy(mux, log, cfg, protect)
+}
+
+// RegisterCUAProxy mounts the optional authenticated CUA reverse proxy on mux.
+func RegisterCUAProxy(
 	mux *http.ServeMux,
 	log *slog.Logger,
 	cfg CUAConfig,
 	protect func(http.Handler) http.Handler,
+	authorize ...CUADesktopAuthorizer,
 ) {
 	if !cfg.Enabled {
 		return
@@ -783,8 +791,6 @@ func registerCUAProxy(
 				if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") && strings.HasSuffix(r.URL.Path, "/") {
 					w.Header().Add("Set-Cookie", "cua_desktop_ticket="+freshTicket+"; Path=/desktops/"+targetID+"/; HttpOnly; SameSite=Lax")
 				}
-			} else if c, err := r.Cookie("cua_desktop_ticket"); err == nil && c != nil {
-				freshTicket = c.Value
 			}
 
 			leaseMgr.Touch(targetID, freshTicket)
@@ -907,6 +913,10 @@ func registerCUAProxy(
 	if protect != nil {
 		desktopProtected = protect(desktopHandler)
 		appProtected = protect(proxy)
+	}
+	if len(authorize) > 0 && authorize[0] != nil {
+		desktopProtected = CUAAuthorizerMiddleware(authorize[0], desktopProtected)
+		appProtected = CUAAuthorizerMiddleware(authorize[0], appProtected)
 	}
 	mux.Handle(PathCUAProxyPrefix, desktopProtected)
 	mux.Handle(PathCUAAppPrefix, appProtected)

@@ -132,6 +132,9 @@ type CUAConfig struct {
 	UpstreamURL string
 	GatewayURL  string
 	APIKey      string
+	// Authorize limits which desktops the current user may access. Nil preserves the host's
+	// existing authentication-only behavior; internal distributions should install membership checks.
+	Authorize CUADesktopAuthorizer
 }
 
 func (c Config) validate() error {
@@ -199,7 +202,7 @@ func New(cfg Config) (*Server, error) {
 	// header or we blocked it ourselves.
 	registerWebSocketProbe(mux, log)
 	if cfg.CUA.Enabled {
-		registerCUAProxy(mux, log, cfg.CUA, cfg.AuthHandler.Protect)
+		RegisterCUAProxy(mux, log, cfg.CUA, cfg.AuthHandler.Protect, cfg.CUA.Authorize)
 	}
 
 	// The terminal WebSocket endpoint. **Registered on the bare mux, deliberately not through

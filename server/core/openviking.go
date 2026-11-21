@@ -54,10 +54,10 @@ type openVikingConfig struct {
 }
 
 func (s *Service) resolveOpenVikingConfig(workspaceID string, agent apimodel.Agent) openVikingConfig {
-	var serverCfg OpenVikingServerConfig
-	if s != nil {
-		serverCfg = s.openViking
-	}
+	return resolveOpenVikingConfig(s.openViking, workspaceID, agent)
+}
+
+func resolveOpenVikingConfig(serverCfg OpenVikingServerConfig, workspaceID string, agent apimodel.Agent) openVikingConfig {
 
 	agentEnv := make(map[string]string, len(agent.Envs))
 	for _, e := range agent.Envs {
@@ -413,7 +413,13 @@ func (s *Service) captureOpenVikingTurn(
 	if err != nil || len(events) == 0 {
 		return err
 	}
+	return captureOpenVikingEvents(ctx, cfg, runID, envID, vaultIDs, events, endSeq)
+}
 
+func captureOpenVikingEvents(
+	ctx context.Context, cfg openVikingConfig, runID, envID string, vaultIDs []string,
+	events []apimodel.RunEvent, endSeq int,
+) error {
 	// Find the start of the turn that ended at endSeq (after the previous terminal session.status_idle).
 	startSeq := 0
 	for _, ev := range events {
@@ -452,15 +458,24 @@ func (s *Service) captureOpenVikingTurn(
 		return nil
 	}
 
-	var batch []openVikingChatMessage
-	if userText != "" {
-		batch = append(batch, openVikingChatMessage{Role: "user", Content: userText})
-	}
-	if assistantText != "" {
-		batch = append(batch, openVikingChatMessage{Role: "assistant", Content: assistantText})
-	}
-
 	// 1. Ensure session exists (409 ALREADY_EXISTS is normal and expected on follow-up turns).
+	return captureOpenVikingTurn(ctx, cfg, runID, envID, vaultIDs, userParts, assistantParts)
+}
+
+func captureOpenVikingTurn(
+	ctx context.Context, cfg openVikingConfig, runID, envID string, vaultIDs []string,
+	userParts, assistantParts []string,
+) error {
+	batch := make([]openVikingChatMessage, 0, 2)
+	if len(userParts) > 0 {
+		batch = append(batch, openVikingChatMessage{Role: "user", Content: strings.Join(userParts, "\n\n")})
+	}
+	if len(assistantParts) > 0 {
+		batch = append(batch, openVikingChatMessage{Role: "assistant", Content: strings.Join(assistantParts, "\n\n")})
+	}
+	if len(batch) == 0 {
+		return nil
+	}
 	createBody := map[string]any{"session_id": runID}
 	if meta := buildOpenVikingSessionMetadata(envID, vaultIDs); len(meta) > 0 {
 		createBody["metadata"] = meta
