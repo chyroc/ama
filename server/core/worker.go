@@ -36,11 +36,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"log"
 	"log/slog"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -1705,14 +1703,7 @@ func arkWorkerID() string {
 // The rule is copied from the SDK's isFatal4xx. 408/409/429 are excluded: they are transient and
 // succeed after backoff.
 func arkFatalStatus(err error) bool {
-	var apiErr *selfhosted.APIError
-	if !errors.As(err, &apiErr) {
-		return false
-	}
-	return apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 &&
-		apiErr.StatusCode != http.StatusRequestTimeout &&
-		apiErr.StatusCode != http.StatusConflict &&
-		apiErr.StatusCode != http.StatusTooManyRequests
+	return ArkFatalStatus(err)
 }
 
 // arkResolvedStatus decides "this work already has an owner", copied from the SDK's
@@ -1721,23 +1712,12 @@ func arkFatalStatus(err error) bool {
 // These three status codes are not errors: losing the race in concurrent claiming looks like this,
 // and logging them as warn would flood the logs.
 func arkResolvedStatus(err error) bool {
-	return selfhosted.IsStatus(err, http.StatusNotFound) ||
-		selfhosted.IsStatus(err, http.StatusConflict) ||
-		selfhosted.IsStatus(err, http.StatusPreconditionFailed)
+	return ArkResolvedStatus(err)
 }
 
 // arkBackoff is the exponential backoff on poll failure, copied from the SDK's backoff.
 func arkBackoff(n int) time.Duration {
-	if n <= 0 {
-		return time.Second
-	}
-	if n > 6 {
-		return arkBackoffCap
-	}
-	if d := time.Duration(1<<n) * time.Second; d <= arkBackoffCap {
-		return d
-	}
-	return arkBackoffCap
+	return ArkBackoff(n)
 }
 
 // arkPollIdleJitter has been replaced by the step backoff in core/workerbackoff.go.
@@ -1777,16 +1757,7 @@ func pollWorkThroughGate(
 	gate *arkRateLimitGate,
 	req selfhosted.PollWorkRequest,
 ) (*selfhosted.WorkItem, error) {
-	if gate != nil {
-		if !gate.Wait(ctx) {
-			return nil, ctx.Err()
-		}
-	}
-	item, err := api.PollWork(ctx, req)
-	if gate != nil {
-		gate.Observe(err)
-	}
-	return item, err
+	return PollWorkThroughGate(ctx, api, gate, req)
 }
 
 // shutdown stops all workers.
