@@ -56,7 +56,7 @@ import (
 
 const (
 	// pollHealthTick is the check interval of the environment health watchdog.
-	pollHealthTick = 10 * time.Second
+	pollHealthTick = DefaultPollHealthTick
 
 	// pollStallBound is "how long a lock holder can go without completing a PollWork before it
 	// counts as dead".
@@ -65,7 +65,7 @@ const (
 	// block ≤1s + stepped backoff sleep (at most 60s, see workerbackoff.go). 90s is chosen: 30s of
 	// margin over the idlest 60s sleep, yet far earlier than the 30-minute reapStaleRuns, so a
 	// takeover happens in a window users barely notice.
-	pollStallBound = 90 * time.Second
+	pollStallBound = DefaultPollStallBound
 )
 
 // pollHealth is the liveness heartbeat of one pollLoop instance, written by the main loop and read by
@@ -141,41 +141,7 @@ func (p *WorkerPool) runPollHealthWatchdogWithClock(
 	tick, bound time.Duration,
 	nowFunc func() time.Time,
 ) {
-	ticker := time.NewTicker(tick)
-	defer ticker.Stop()
-
-	log := p.healthLogger(envID, workerID)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if !h.stalledAt(nowFunc(), bound) {
-				continue
-			}
-
-			active := h.activeWork.Load()
-			log.Error("环境 worker 持锁但长时间无法领活（pollLoop 卡死），主动放锁并重启本环境 worker",
-				slog.String("environment", envID),
-				slog.String("worker_id", workerID),
-				slog.Int("在飞work数", int(active)),
-				slog.Duration("卡死判定", bound),
-				slog.String("含义", "多半是并发槽被不响应取消的 work 占满；"+
-					"已放锁让其它实例接管，本实例 ≤30s 内由 refresh 重建"))
-
-			if lease != nil {
-				relCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-				if err := lease.Release(relCtx); err != nil {
-					log.Warn("僵死放锁失败（锁会自行过期）", slog.Any("err", err))
-				}
-				cancel()
-			}
-			if envCancel != nil {
-				envCancel()
-			}
-			return
-		}
-	}
+	RunPollHealthWatchdog(ctx, h, envID, workerID, lease, envCancel, tick, bound, nowFunc, p.healthLogger(envID, workerID))
 }
 
 // healthLogger returns a logger with fixed fields; when WorkerPool is nil it uses the default logger
