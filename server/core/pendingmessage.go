@@ -258,17 +258,13 @@ func countWaiting(msgs []apimodel.PendingMessage) int {
 // the same thing.
 func (s *Service) ensureRunWritable(ctx context.Context, run apimodel.Run) error {
 	agent, err := s.store.GetAgent(ctx, run.AgentID)
-	switch {
-	case err == nil && agent.Status.IsDisabled():
-		return fmt.Errorf("%w: 关联的 Agent 已停用，这个会话只能查看历史；要继续对话请先到 Agent 详情页启用它", ErrPrecondition)
-	case err == nil:
-		return nil
-	case errors.Is(err, ErrNotFound):
-		return fmt.Errorf("%w: 关联的 Agent 已被删除，这个会话只能查看历史，不能再发消息", ErrPrecondition)
-	default:
+	if freeze := AgentMessageFreezeError(agent, err, ErrNotFound, ErrPrecondition); freeze != nil {
+		return freeze
+	}
+	if err != nil && !errors.Is(err, ErrNotFound) {
 		// fail-open, same reason as AppendRunEvents: a database blip should not look like "your agent was deleted".
 		s.log().Warn("查 agent 失败，本次排队不做冻结判断",
 			"run", run.ID, "error", err.Error())
-		return nil
 	}
+	return nil
 }

@@ -874,27 +874,10 @@ func (s *Service) AppendRunEvents(ctx context.Context, runID string, raw []json.
 	// each group.
 	if !isInterruptOnly(raw) {
 		agent, aerr := s.store.GetAgent(ctx, run.AgentID)
-		switch {
-		case aerr == nil && agent.Status.IsDisabled():
-			// Disabled and "deleted" share 422 and the "can only view history" wording: for the user the
-			// action is the same for both (go to the agent detail page and change something), and the
-			// history is still there.
-			//
-			// Empty/unknown values do not get here; see the comment on apimodel.AgentStatus.IsDisabled.
-			// That check is the only guard against "existing agents getting stopped by mistake".
-			return nil, fmt.Errorf("%w: 关联的 Agent 已停用，这个会话只能查看历史；要继续对话请先到 Agent 详情页启用它", ErrPrecondition)
-		case aerr == nil:
-			// The agent still exists and is enabled; continue as usual.
-		case errors.Is(aerr, ErrNotFound):
-			// **Never use ErrNotFound.** NOT_FOUND_CODES in http.ts turns not_found into null, and the
-			// page shows a silent empty state whose cause cannot be found from the symptom. The run does
-			// exist here; this is "this operation is not allowed right now", which is exactly what
-			// ErrPrecondition (422) means.
-			//
-			// This Chinese sentence is part of the contract: LocalApiClient.sendMessage copies it word for
-			// word, and e2e asserts on it.
-			return nil, fmt.Errorf("%w: 关联的 Agent 已被删除，这个会话只能查看历史，不能再发消息", ErrPrecondition)
-		default:
+		if freeze := AgentMessageFreezeError(agent, aerr, ErrNotFound, ErrPrecondition); freeze != nil {
+			return nil, freeze
+		}
+		if aerr != nil && !errors.Is(aerr, ErrNotFound) {
 			// fail-open, same reason as markAgentDeleted: a database hiccup should not look like "your agent was deleted".
 			s.log().Warn("查 agent 失败，本次发送不做冻结判断", "run", runID, "error", aerr.Error())
 		}
