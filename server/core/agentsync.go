@@ -47,7 +47,6 @@ import (
 
 	"github.com/chyroc/ama/server/model/apimodel"
 	"github.com/chyroc/ama/server/model/persistmodel"
-	"github.com/chyroc/ama/server/shared/infra/ma"
 )
 
 const (
@@ -603,24 +602,7 @@ func arkSyncShortfall(
 // per-step error types. **Anything not recognized goes to the agent stage**: that is the
 // most general one and will not send the user in the wrong direction.
 func arkSyncStageOf(err error) apimodel.AgentSyncStage {
-	// An account without Managed Agents activated is the same kind of issue as "invalid key"
-	// (account/credential config, fixed in the Ark console), so it goes to credential.
-	// arkFailure's message for it has **no** "failed to prepare the Ark runtime environment"
-	// prefix, so string matching below alone would put it in the most general agent stage.
-	if ma.IsManagedAgentNotOpen(err) {
-		return apimodel.AgentSyncStageCredential
-	}
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "方舟运行环境"):
-		return apimodel.AgentSyncStageEnvironment
-	case strings.Contains(msg, "API Key"), strings.Contains(msg, "方舟 API Key"):
-		return apimodel.AgentSyncStageCredential
-	case strings.Contains(msg, "技能"):
-		return apimodel.AgentSyncStageSkills
-	default:
-		return apimodel.AgentSyncStageAgent
-	}
+	return ArkSyncStageOf(err)
 }
 
 // userMessageOf takes the part of the error meant for the user.
@@ -629,14 +611,7 @@ func arkSyncStageOf(err error) apimodel.AgentSyncStage {
 // the part after the colon as is (same as userMessage in handler.go). This does the same,
 // because this sentence goes into the failure_reason column and into the HTTP response as is.
 func userMessageOf(err error) string {
-	if err == nil {
-		return ""
-	}
-	msg := err.Error()
-	if i := strings.LastIndex(msg, ": "); i >= 0 && i+2 < len(msg) {
-		return msg[i+2:]
-	}
-	return msg
+	return UserMessageOf(err)
 }
 
 // LatestAgentSyncTask gets the result of an agent's latest sync, for frontend polling.
