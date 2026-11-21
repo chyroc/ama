@@ -41,7 +41,6 @@ import (
 	"time"
 
 	"github.com/chyroc/ama/server/model/apimodel"
-	"github.com/chyroc/ama/server/model/persistmodel"
 )
 
 // rescueAfter is "how long a run must be silent before the patrol is allowed to rescue it".
@@ -91,11 +90,7 @@ func (w *RunWatcher) rescueTick(ctx context.Context, runID string) {
 
 // ageSinceActivity computes how long since the run's last real activity; returns 0 if the time cannot be parsed (better not to rescue).
 func ageSinceActivity(run apimodel.Run) time.Duration {
-	at, err := time.Parse("2006-01-02T15:04:05.000Z", persistmodel.LastActivityOf(run))
-	if err != nil {
-		return 0
-	}
-	return time.Since(at)
+	return AgeSinceRunActivity(run, time.Now())
 }
 
 // shouldRescue is the pure "should we post" check, pulled out so it is easy to test.

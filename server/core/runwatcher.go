@@ -387,10 +387,7 @@ func (w *RunWatcher) retireMissingRun(ctx context.Context, runID string) {
 // that is too large is better than dropping endedAt entirely, because a missing endedAt makes
 // the frontend treat this terminated run as "not finished yet".
 func retireEndedAt(run apimodel.Run) time.Time {
-	if t, err := time.Parse("2006-01-02T15:04:05.000Z", persistmodel.LastActivityOf(run)); err == nil {
-		return t
-	}
-	return time.Now().UTC()
+	return RetireRunEndedAt(run, time.Now().UTC())
 }
 
 // reapStaleRuns pushes sessions that "have been quiet for a long time but still show an active
