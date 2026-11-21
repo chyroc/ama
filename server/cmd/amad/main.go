@@ -850,7 +850,7 @@ func (c channelConversations) AgentFollowUpQueues(ctx context.Context, agentID s
 	if err != nil {
 		return false
 	}
-	return apimodel.NormalizeFollowUpMode(agent.FollowUp) == apimodel.FollowUpQueue
+	return channel.FollowUpQueues(agent.FollowUp)
 }
 
 // AgentShowsProgress flattens apimodel.ProgressDetail into a bool.
@@ -868,7 +868,7 @@ func (c channelConversations) AgentShowsProgress(ctx context.Context, agentID st
 	if err != nil {
 		return true
 	}
-	return apimodel.NormalizeProgressDetail(agent.ProgressDetail) != apimodel.ProgressDetailBrief
+	return channel.ShowsProgress(agent.ProgressDetail)
 }
 
 // InterruptRun only sends the interrupt, no new message. The new message of steering is sent by the feishu side through the normal path
