@@ -858,103 +858,28 @@ func (p *WorkerPool) runLeasedPoll(
 	if len(envCancelOpt) > 0 {
 		envCancel = envCancelOpt[0]
 	}
-	// Spread out a little before the first lock attempt, so the first pod to start does not grab
-	// the leases of every env at once (see workerLeaseSpread).
-	if d := p.leaseSpreadDelay(); d > 0 && !arkSleep(ctx, d) {
-		return nil
-	}
-	for {
-		lease, ok, err := p.acquirePollLease(ctx, envID)
-		if err != nil {
-			// Redis error. **This must not stop polling**: this layer is an optimization, and if it
-			// is down we fall back to "every pod polls", not "nobody polls". But leave a trace,
-			// otherwise "why did RPM go up again" cannot be traced to its source.
-			logger.Warn("抢 poll 权失败，本轮照常 poll（退化成每个实例都 poll）",
-				slog.Any("err", err))
-		} else if !ok {
-			// The lock is held by another pod. This is **normal**: it is polling this environment.
-			// Retry at a fixed interval, no backoff (reason in workerLeaseRetryGap). Leave a Debug
-			// trace: this path used to be fully silent, so when an environment stalled there was no
-			// way to find out even "who is still waiting for the lock". Debug is turned on when
-			// needed and does not flood logs normally. A real "lock holder hung" is detected by the
-			// environment health watchdog on the holder side, which releases the lock
-			// (workerpollhealth.go); it does not rely on this.
-			logger.Debug("poll 权在别的实例手上，本实例待命重试", slog.String("environment", envID))
-			if !arkSleep(ctx, p.leaseRetry) {
-				logger.Info("worker 停止")
-				return nil
-			}
-			continue
-		}
-
-		// Poll only while holding the lease; when the lease is lost, stop this round at once and
-		// let the new holder have it alone.
-		leaseCtx, cancelLease := context.WithCancel(ctx)
-		var leaseWG sync.WaitGroup
-		if lease != nil {
-			logger.Info("拿到 poll 权，开始 poll 这个环境")
-			leaseWG.Add(1)
+	return RunLeasedPoll(ctx, envID, logger, LeasedPollHooks{
+		Spread:       p.leaseSpreadDelay,
+		RetryGap:     p.leaseRetry,
+		ReconnectGap: p.reconnectGap,
+		Acquire:      p.acquirePollLease,
+		Renew:        p.keepPollLease,
+		PrepareHealth: func(ctx context.Context, lease Lease, cancel context.CancelFunc, logger *slog.Logger) (*sync.WaitGroup, *pollHealth) {
+			health := newPollHealth(time.Now())
+			var wg sync.WaitGroup
+			wg.Add(1)
 			go func() {
-				defer leaseWG.Done()
-				p.keepPollLease(leaseCtx, lease, cancelLease, logger)
+				defer wg.Done()
+				p.runPollHealthWatchdog(ctx, health, envID, workerID, lease, envCancel, logger)
 			}()
-		}
-
-		// Environment-level liveness heartbeat + watchdog. It must be independent of pollLoop: when
-		// pollLoop hangs (concurrency slots are full of work that does not respond to cancel, so it
-		// never reaches PollWork), this goroutine must still detect "holding the lock but not
-		// getting work", release the lock so another pod can take over, and restart this
-		// environment's worker. See workerpollhealth.go.
-		health := newPollHealth(time.Now())
-		var healthWG sync.WaitGroup
-		healthWG.Add(1)
-		go func() {
-			defer healthWG.Done()
-			p.runPollHealthWatchdog(leaseCtx, health, envID, workerID, lease, envCancel, logger)
-		}()
-
-		err = p.pollLoop(leaseCtx, api, envID, workerID, concurrency, logger, health)
-
-		// The watchdog is collected together with this round of polling.
-		cancelLease()
-		healthWG.Wait()
-
-		// Cleanup order: first stop the renewal loop, then release the lock.
-		//
-		// ⚠️ Release with a **ctx that cannot be cancelled**: on the shutdown path the original ctx
-		// is often already cancelled, and releasing with it fails; then we can only wait for the
-		// TTL to expire (up to 20 seconds with nobody polling this environment). Same as in
-		// lark.Receiver.Run.
-		cancelLease()
-		leaseWG.Wait()
-		if lease != nil {
-			if relErr := lease.Release(context.WithoutCancel(ctx)); relErr != nil {
-				logger.Warn("释放 poll 权失败（会自己过期）", slog.Any("err", relErr))
-			}
-		}
-
-		if err != nil && ctx.Err() == nil {
-			// Invalid credentials (401/403): **exit this worker, do not reconnect here**.
-			//
-			// ⚠️ Returning here does not mean "give up on this environment". The error goes back to
-			// runOne, which records a backoff (only that layer has the key fingerprint); then this
-			// worker exits and its p.running entry is deleted. The next refresh (≤30 seconds)
-			// resolves credentials again and decides whether to start it. **Only that path can get
-			// the new key the user switched to**, while the client in this loop was built with the
-			// old key, so ten thousand reconnects all give the same 401. The full argument is in
-			// the file header of workerauthbackoff.go.
-			if arkAuthStatus(err) {
-				return err
-			}
-			logger.Warn("worker 异常退出，5 秒后重连", slog.Any("err", err))
-		}
-		select {
-		case <-ctx.Done():
-			logger.Info("worker 停止")
-			return nil
-		case <-time.After(p.reconnectGap()):
-		}
-	}
+			return &wg, health
+		},
+		Poll: func(ctx context.Context, health *pollHealth) error {
+			return p.pollLoop(ctx, api, envID, workerID, concurrency, logger, health)
+		},
+		IsAuthError: arkAuthStatus,
+		Sleep:       arkSleep,
+	})
 }
 
 // reconnectGap is how long to wait before retrying after pollLoop exits abnormally.
