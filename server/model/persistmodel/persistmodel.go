@@ -745,3 +745,18 @@ type HostDispatch struct {
 	// UpdatedAt is the most recent state change time.
 	UpdatedAt time.Time
 }
+
+// WorkspaceIntegration stores a reference, not a snapshot of a credential.
+// ProviderID and CredentialID are the only lookup keys; live names and status come from
+// the provider. An empty CredentialID is stored as "", never NULL, so the unique key
+// (workspace, provider, credential) also deduplicates provider-level bindings.
+type WorkspaceIntegration struct {
+	ID           string
+	WorkspaceID  string
+	ProviderID   string
+	CredentialID string
+	// BoundBy is audit information, not the identity used by the credential.
+	BoundBy   string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}

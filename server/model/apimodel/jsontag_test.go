@@ -134,6 +134,8 @@ func roots() []any {
 		apimodel.GlobalArkSecret{},
 		apimodel.Host{},
 		apimodel.WorkspaceHost{},
+		apimodel.WorkspaceIntegrationInput{},
+		apimodel.WorkspaceIntegrationView{},
 		apimodel.UserFile{},
 		apimodel.WeixinAccount{},
 		apimodel.WeixinLogin{},
