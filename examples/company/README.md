@@ -19,10 +19,19 @@ downstream database pool factory
   → pg.Connector (public)
   → pg.NewWithDB (public)
   → public transactions and SQLSTATE error handling
+
+downstream binding store and credential directory
+  → WorkspaceIntegrationStore / WorkspaceIntegrationCredentialLookup (public)
+  → WorkspaceIntegrationService (public)
+  → application credential references, never personal credential sharing
 ```
 
-`examples/company/extension.go` is the complete adapter. `extension_test.go` runs without a
-network or real credentials.
+`examples/company/extension.go` contains the configuration and database adapters.
+`examples/company/credentials.go` shows how to keep a private row type and credential protocol
+outside AMA while reusing workspace binding rules. A real adapter must also connect
+`WorkspaceExists` to its own workspace store; the placeholder in this example is not an
+authorization check. `extension_test.go` and `credentials_test.go`
+run without a network or real credentials.
 
 ## Why configuration loading has two parts
 
