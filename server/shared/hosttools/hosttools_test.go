@@ -498,6 +498,12 @@ func TestFetchArchive(t *testing.T) {
 	// (verifies that 5xx and 4xx take different branches).
 	flakyHits := 0
 	srv500 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A local port-discovery request to / is not a download. Do not count it as
+		// the intentional first 500; keep the real download's two-request retry path.
+		if r.UserAgent() == "persona-ports" {
+			http.NotFound(w, r)
+			return
+		}
 		flakyHits++
 		if flakyHits == 1 {
 			http.Error(w, "busy", http.StatusInternalServerError)

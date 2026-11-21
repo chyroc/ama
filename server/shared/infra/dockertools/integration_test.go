@@ -17,6 +17,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -234,6 +235,16 @@ func TestRealDockerTimeoutKillsProcess(t *testing.T) {
 // (so even root cannot chown).
 func TestRealDockerDataMountsAndCapDrop(t *testing.T) {
 	ro, rw := t.TempDir(), t.TempDir()
+	// t.TempDir is 0700 and owned by the host user. The test container's root is
+	// another UID, so it cannot traverse that parent directory. Give these disposable
+	// fixtures explicit permissions: read-only input stays unwritable, while the
+	// writable target really permits the bind-mounted container write under test.
+	if err := os.Chmod(ro, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(rw, 0o777); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(ro, "leads.csv"), []byte("id,channel\n1,search\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +260,10 @@ func TestRealDockerDataMountsAndCapDrop(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return res.Stdout + res.Stderr
+		if res.ExitCode != nil && *res.ExitCode != 0 {
+			t.Errorf("容器命令失败 %q: stdout=%q stderr=%q exit=%d", cmd, res.Stdout, res.Stderr, *res.ExitCode)
+		}
+		return res.Stdout + res.Stderr + fmt.Sprintf(" [exit=%v]", res.ExitCode)
 	}
 
 	if out := run("cat /data/ro/leads.csv"); !strings.Contains(out, "1,search") {
@@ -264,7 +278,8 @@ func TestRealDockerDataMountsAndCapDrop(t *testing.T) {
 
 	run("echo report > /data/rw/out.txt")
 	if b, err := os.ReadFile(filepath.Join(rw, "out.txt")); err != nil || strings.TrimSpace(string(b)) != "report" {
-		t.Errorf("可写挂载应当落到宿主机，实际 %q %v", b, err)
+		t.Errorf("可写挂载应当落到宿主机，实际 %q %v；容器内路径检查: %s", b, err,
+			run("pwd; id; ls -ld /data /data/ro /data/rw; cat /proc/mounts | grep ' /data ' || true"))
 	}
 
 	if out := run("grep CapEff /proc/self/status"); !strings.Contains(out, "0000000000000000") {
