@@ -40,13 +40,13 @@ type toolRouter struct {
 	// and tests can plug in a stub.
 	host sessionToolProvider
 	log  *slog.Logger
+
+	containerErr error
+	hostErr      error
 }
 
 func newToolRouter(store HostToolStore, container sessionToolProvider, host sessionToolProvider, log *slog.Logger) *toolRouter {
-	if log == nil {
-		log = slog.Default()
-	}
-	return &toolRouter{store: store, container: container, host: host, log: log}
+	return newToolRouterWithErrors(store, container, host, errContainerProviderNotConfigured, errHostProviderNotConfigured, log)
 }
 
 func (r *toolRouter) ToolsFuncForSession(
@@ -75,9 +75,9 @@ func (r *toolRouter) ToolsFuncForSession(
 	if chosen == nil {
 		return func(*agenttoolset.AgentToolContext) (*toolset.Set, error) {
 			if useHost {
-				return nil, errHostProviderNotConfigured
+				return nil, r.hostErr
 			}
-			return nil, errContainerProviderNotConfigured
+			return nil, r.containerErr
 		}
 	}
 	return chosen.ToolsFuncForSession(ctx, arkSessionID)
