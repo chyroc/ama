@@ -40,7 +40,6 @@ package core
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -131,14 +130,7 @@ type BlobSizer interface {
 }
 
 // skillArchive is where a skill's archive lives in object storage, and its size.
-type skillArchive struct {
-	// URL is the presigned download link. ⚠️ It carries a signature; do not write it into logs
-	// or environment variables.
-	URL string
-	// Bytes is the package size in bytes; the container side uses it to check "was it fully
-	// downloaded".
-	Bytes int
-}
+type skillArchive = SkillArchive
 
 // ensureSkillArchive makes sure the current content of a skill has a matching zip in object
 // storage, and signs a download link.
@@ -159,52 +151,21 @@ func (s *Service) ensureSkillArchive(
 	}
 	signer, ok := s.blobs.(BlobPresigner)
 	if !ok {
-		// The BlobStore interface has no signing ability (that lives on the concrete
-		// implementation). If the assertion fails, treat this path as absent: fall back to
-		// base64, no error.
 		return nil, nil
 	}
-
-	// The fingerprint is the main part of the key: the same content always gives the same key,
-	// so it is naturally idempotent. **Reuse SkillFingerprint instead of computing another
-	// one**: it already covers "all fields that affect the package content" (body + path and
-	// bytes of each attachment), and a second one would surely drift.
-	hash := SkillFingerprint(sk, files)
-	key := attachmentObjectKey(blobPrefixSkillArchive, hash+".zip", apimodel.NowISO())
-
-	// If it was already uploaded, do not pack again. This is by far the most common case
-	// (skill content rarely changes, while this path runs every time a container is created).
-	// Packing a 100 MiB skill is not cheap.
-	size, err := s.skillArchiveSize(ctx, key)
-	if err != nil {
-		return nil, err
-	}
-	if size < 0 {
-		// ⚠️ **BuildFullSkillZip, not BuildSkillZip.**
-		//
-		// The latter decides downgrades by **Ark's** three limits (50 MiB / 500 files / 25 MiB
-		// per file), while the container side has none of those limits; it is exactly the end
-		// that needs the complete skill.
-		//
-		// We measured the cost of using the wrong one: any skill over Ark's limits gets no
-		// package here → skillinject falls back to base64 → and base64 cannot fit large packages
-		// (60 MiB takes 853 commands, about 12.8 minutes). The net effect is that "raising the
-		// limit to 100 MiB" does nothing for the range above 25 MiB, with only one Warn.
-		zip, err := BuildFullSkillZip(sk, files)
-		if err != nil {
-			return nil, fmt.Errorf("打技能包失败: %w", err)
-		}
-		if err := s.blobs.Put(ctx, key, zip, "application/zip"); err != nil {
-			return nil, fmt.Errorf("技能包写对象存储失败: %w", err)
-		}
-		size = len(zip)
-	}
-
-	url, err := signer.PresignedGetURL(key, skillArchiveURLTTL, reader)
-	if err != nil {
-		return nil, fmt.Errorf("签技能包下载链接失败: %w", err)
-	}
-	return &skillArchive{URL: url, Bytes: size}, nil
+	return EnsureSkillArchive(ctx, SkillArchiveHooks{
+		Enabled:  true,
+		Hash:     SkillFingerprint(sk, files),
+		BuildZip: func() ([]byte, error) { return BuildFullSkillZip(sk, files) },
+		Size:     s.skillArchiveSize,
+		Put: func(ctx context.Context, key string, zip []byte) error {
+			return s.blobs.Put(ctx, key, zip, "application/zip")
+		},
+		Sign: func(key string, ttl time.Duration) (string, error) {
+			return signer.PresignedGetURL(key, ttl, reader)
+		},
+		NowISO: apimodel.NowISO(),
+	})
 }
 
 // skillArchiveSize checks whether a package is in object storage, and returns its byte count
@@ -218,18 +179,9 @@ func (s *Service) ensureSkillArchive(
 func (s *Service) skillArchiveSize(ctx context.Context, key string) (int, error) {
 	sizer, ok := s.blobs.(BlobSizer)
 	if !ok {
-		// The BlobStore interface has no Size. Fall back to "treat as not present"; the cost is
-		// re-packing and uploading every time (idempotent, same content), and it still works.
 		return -1, nil
 	}
-	n, err := sizer.Size(ctx, key)
-	if err != nil {
-		if isBlobNotFound(err) {
-			return -1, nil
-		}
-		return 0, fmt.Errorf("查技能包失败: %w", err)
-	}
-	return int(n), nil
+	return SkillArchiveSize(ctx, sizer.Size, isBlobNotFound, key)
 }
 
 // warmSkillArchive packs the skill package the container will need and uploads it to object
