@@ -44,6 +44,9 @@ type NamedCredentialHooks struct {
 	// its secret. It does not relax validation for newly created credentials.
 	LegacyEmptyName bool
 	UnknownReason   string
+	// PublicIDName and SecretName only affect user-facing validation text.
+	PublicIDName string
+	SecretName   string
 	// PrepareNew applies provider-specific fields, such as a fixed site, before the
 	// first verification and single insert. It must not change ID, actor or public identity.
 	PrepareNew func(NamedCredentialRecord) NamedCredentialRecord
@@ -73,6 +76,12 @@ func NewNamedCredentialProvider(hooks NamedCredentialHooks) *NamedCredentialProv
 	}
 	if hooks.UnknownReason == "" {
 		hooks.UnknownReason = "服务端没有装配验证器，这次没能验证"
+	}
+	if hooks.PublicIDName == "" {
+		hooks.PublicIDName = "公开身份"
+	}
+	if hooks.SecretName == "" {
+		hooks.SecretName = "Secret"
 	}
 	return &NamedCredentialProvider{hooks: hooks}
 }
@@ -197,7 +206,7 @@ func (p *NamedCredentialProvider) Add(
 	publicID = strings.TrimSpace(publicID)
 	plaintextSecret = strings.TrimSpace(plaintextSecret)
 	if publicID == "" || plaintextSecret == "" {
-		return zero, fmt.Errorf("%w: 公开身份与 Secret 都要填", ErrInvalidArgument)
+		return zero, fmt.Errorf("%w: %s 与 %s 都要填", ErrInvalidArgument, p.hooks.PublicIDName, p.hooks.SecretName)
 	}
 	existing, err := p.hooks.Store.List(ctx, actor)
 	if err != nil {
@@ -246,8 +255,8 @@ func (p *NamedCredentialProvider) Update(
 		return zero, err
 	}
 	if given := strings.TrimSpace(publicID); given != "" && given != record.PublicID {
-		return zero, fmt.Errorf("%w: 公开身份创建后不能修改（当前是 %s）。要换一个账号请新建一条凭据，再删掉这条——直接改会让引用这条凭据的 agent 在不知情的情况下换了身份",
-			ErrInvalidArgument, record.PublicID)
+		return zero, fmt.Errorf("%w: %s 创建后不能修改（当前是 %s）。要换一个账号请新建一条凭据，再删掉这条——直接改会让引用这条凭据的 agent 在不知情的情况下换了身份",
+			ErrInvalidArgument, p.hooks.PublicIDName, record.PublicID)
 	}
 	label := strings.TrimSpace(name)
 	if label == "" && p.hooks.LegacyEmptyName {
