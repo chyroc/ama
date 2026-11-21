@@ -42,8 +42,6 @@ package core
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -51,7 +49,6 @@ import (
 	"time"
 
 	"github.com/chyroc/ama/server/model/apimodel"
-	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 )
 
 const (
@@ -381,106 +378,31 @@ func (s *Scheduler) fireOne(ctx context.Context, sch apimodel.Schedule) {
 func (s *Scheduler) runOnce(
 	ctx context.Context, sch apimodel.Schedule, log *slog.Logger,
 ) (string, string, error) {
-	run, err := s.cfg.Service.CreateConversation(ctx, sch.WorkspaceID, sch.AgentID)
-	if err != nil {
-		return "", "", fmt.Errorf("建会话失败: %w", err)
-	}
-
-	// Change trigger to schedule.
-	//
-	// CreateConversation hardcodes manual (that is the meaning for the chat page path), so change it
-	// once here. **Without the change this run would show up in the chat page's left-hand conversation
-	// list** (ChatPage filters by `trigger === "manual"`), and users would see a pile of conversations
-	// they never opened.
-	trigger := apimodel.TriggerSchedule
-	if stored, gerr := s.cfg.Service.store.GetRun(ctx, run.ID); gerr == nil {
-		stored.Trigger = trigger
-		// TriggerDetail holds the task name: that column in the run history list shows it directly,
-		// so users can see at a glance which scheduled task produced this run.
-		stored.TriggerDetail = sch.Name
-		// ScheduleID is **the half meant for machines**, alongside the name above rather than instead
-		// of it: names can change and repeat, and after a rename looking up history by name breaks
-		// (and breaking reports no error; the list just has fewer rows).
-		// The detail page's "past runs" list queries by this ID; see apimodel.Run.ScheduleID.
-		stored.ScheduleID = sch.ID
-		if sch.Name != "" {
-			stored.Title = sch.Name
-		}
-		if _, serr := s.cfg.Service.store.SaveRun(ctx, stored); serr != nil {
-			// Failing to tag it is not fatal: this round runs as usual, only the source label in history
-			// is wrong.
-			log.Warn("回写触发来源失败", slog.Any("err", serr))
-		}
-	}
-
-	// Subscribe first (detail one). Event storage hangs off this path.
-	var (
-		mu      sync.Mutex
-		builder strings.Builder
-	)
-	// **We must decide "this round is over" ourselves and close the stream.**
-	//
-	// Ark **does not close the SSE connection** after end_turn (it keeps a long connection per session,
-	// waiting for the next user message), so StreamRunEvents never returns on its own. The measured
-	// symptom: the agent finished replying in 5 seconds, but this goroutine hung until fireTimeout (10
-	// minutes) before waking. The lease was held the whole time, so an "every 5 minutes" task actually
-	// became "every 10 minutes", and the log only ever showed "claimed task", never "finished". **This
-	// trap only shows up against real Ark**: fakeRunner's Stream returns after sending all frames, so in
-	// tests streamDone closes right away.
-	//
-	// The check uses session.status_idle, with the same meaning as applyEventToRun in core/chat.go.
-	// An idle with requires_action **does not count as over** (the agent is waiting for confirmation and
-	// will continue), so stop_reason must be checked.
-	streamCtx, stopStream := context.WithCancel(ctx)
-	defer stopStream()
-
-	streamDone := make(chan struct{})
-	var streamErr error
-	go func() {
-		defer close(streamDone)
-		streamErr = s.cfg.Service.StreamRunEvents(streamCtx, run.ID, func(raw []byte) error {
-			if text, ok := arkframe.AgentText(raw); ok && text != "" {
-				mu.Lock()
-				builder.WriteString(text)
-				mu.Unlock()
+	return RunScheduleOnce(ctx, sch, RunScheduleOnceHooks{
+		Create: func(ctx context.Context, sch apimodel.Schedule) (apimodel.Run, error) {
+			return s.cfg.Service.CreateConversation(ctx, sch.WorkspaceID, sch.AgentID)
+		},
+		Tag: func(ctx context.Context, sch apimodel.Schedule, run apimodel.Run) error {
+			stored, err := s.cfg.Service.store.GetRun(ctx, run.ID)
+			if err != nil {
+				return nil
 			}
-			if arkframe.TurnEnded(raw) {
-				// Cancel ctx so StreamRunEvents returns. **Do not return an error here**:
-				// that would be logged as "subscriber error" with a warning, while this is actually a
-				// normal shutdown.
-				stopStream()
+			stored.Trigger = apimodel.TriggerSchedule
+			stored.TriggerDetail = sch.Name
+			stored.ScheduleID = sch.ID
+			if sch.Name != "" {
+				stored.Title = sch.Name
 			}
-			return nil
-		})
-	}()
-
-	// Give the subscription a moment to set up. No complex handshake: StreamRunEvents fills in past
-	// events first, so even sending early loses nothing (same handling as feishu/inbound.go).
-	time.Sleep(50 * time.Millisecond)
-
-	event, err := scheduleUserMessage(sch, sch.Prompt)
-	if err != nil {
-		return run.ID, "", err
-	}
-	if _, err := s.cfg.Service.AppendRunEvents(ctx, run.ID, []json.RawMessage{event}); err != nil {
-		return run.ID, "", fmt.Errorf("发送指令失败: %w", err)
-	}
-
-	<-streamDone
-	if streamErr != nil && !errors.Is(streamErr, context.Canceled) {
-		log.Warn("事件流异常结束", slog.Any("err", streamErr))
-	}
-
-	mu.Lock()
-	text := strings.TrimSpace(builder.String())
-	mu.Unlock()
-
-	if text == "" {
-		// Not a single word produced: the agent may be stuck on a tool, or timed out. This counts as a
-		// failure: an empty report is more confusing than no report.
-		return run.ID, "", fmt.Errorf("这一轮没有产生任何回复（可能超时或执行环境有问题）")
-	}
-	return run.ID, text, nil
+			_, err = s.cfg.Service.store.SaveRun(ctx, stored)
+			return err
+		},
+		Stream: s.cfg.Service.StreamRunEvents,
+		Append: func(ctx context.Context, runID string, events []json.RawMessage) error {
+			_, err := s.cfg.Service.AppendRunEvents(ctx, runID, events)
+			return err
+		},
+		Logger: log,
+	})
 }
 
 // deliver sends the result out according to the delivery address.
