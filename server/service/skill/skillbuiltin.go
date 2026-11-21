@@ -319,7 +319,7 @@ func BuiltinSkills() []apimodel.Skill {
 			Description:   "调用火山方舟线上托管的 Seedance MA 智能体进行视频分镜策划、文生/图生视频、多镜头合成，以及单图与系列组图生成。",
 			Instructions:  builtinInstructionsSeedanceMA,
 			Source:        apimodel.SkillBuiltin,
-			LatestVersion: "2",
+			LatestVersion: "3",
 			Tags:          []string{"内置", "Seedance", "视频生成", "组图生成"},
 			Files:         cloneBuiltinSeedanceMAFileMeta(),
 			CreatedAt:     builtinSkillTime,
@@ -765,7 +765,7 @@ python3 ./skills/seedance-ma/scripts/seedance_ma.py watch \
 ### 第三步：视频生成完成后的回复与飞书发送
 
 当 ` + "`data.outcome == \"completed\"`" + ` 时：
-1. **AMA 前端会自动从工具调用结果中提取 ` + "`video_url`" + `、` + "`storyboard_prompt`" + `、` + "`ratio`" + `、` + "`duration`" + `，并在对话流中直接渲染内嵌的视频播放器卡片**（同时脚本会将 MP4 下载到 ` + "`data.local_path`" + ` 并提取首帧封面 ` + "`cover.png`" + `）。
+1. **AMA 前端会自动从工具调用结果中提取 ` + "`video_url`" + `、` + "`storyboard_prompt`" + `、` + "`ratio`" + `、` + "`duration`" + `，并在对话流中直接渲染内嵌的视频播放器卡片**（同时脚本会将 MP4 下载到 ` + "`data.local_path`" + ` 并提取首帧封面 ` + "`cover.png`" + `）。` + "`local_path`" + ` 与 ` + "`cover_path`" + ` 是已解析的绝对路径，供平台直接读取，不能在前端猜容器的工作目录。
 2. **飞书会话发送视频**：若当前对话来自飞书（上下文中含 ` + "`<harness:lark>`" + `），进入视频输出目录（默认 ` + "`./outputs/videos`" + `），使用当前对话中的群 ID（` + "`--chat-id oc_example`" + `）或用户 ID（` + "`--user-id ou_example`" + `）配合 ` + "`lark-cli im +messages-send --as bot --video ./<mp4文件名> --video-cover ./cover.png`" + ` 发送给当前会话。
 3. 回复正文中简要介绍本次视频的创意定位与分镜时间轴设计即可，不需要把冗长的预签名 URL 裸贴在正文里。
 

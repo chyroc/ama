@@ -1520,6 +1520,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    if hasattr(args, "output_dir"):
+        # The preview API accepts absolute paths; do not make each frontend guess the executor workdir.
+        args.output_dir = str(pathlib.Path(args.output_dir).resolve())
     if args.subcommand == "status":
         return cmd_status(args)
     if args.subcommand == "generate":
