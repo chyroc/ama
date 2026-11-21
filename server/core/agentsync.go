@@ -35,8 +35,6 @@ package core
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -110,13 +108,7 @@ const (
 // swallowed. Same technique as newTerminalID / arkWorkerID: a random suffix prevents
 // collisions.
 func newAgentSyncTaskID() string {
-	var b [9]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// If random bytes are unavailable, fall back to a timestamp. **Do not panic**: a sync
-		// task should not fail to enqueue because of this.
-		return fmt.Sprintf("astask_%d", time.Now().UnixNano())
-	}
-	return "astask_" + hex.EncodeToString(b[:])
+	return NewAgentSyncTaskID()
 }
 
 // EnqueueAgentSync queues one "sync to Ark" for an agent.
