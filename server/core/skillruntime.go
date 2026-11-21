@@ -27,8 +27,9 @@ func AppendBuiltinSkillEnvs(
 	if envs == nil {
 		envs = make(map[string]string)
 	}
-	// Callers normally pass the user environment assembled by their own reserved-key filter.
-	// AppendUserEnvs is a second filter for standalone users, not a license to inject reserved keys.
+	// Filter only the agent's own entries. The envs map may already contain
+	// server-computed values; filtering that map again would discard those
+	// credentials as if a user had supplied them.
 	AppendUserEnvs(context.Background(), agent.ID, agent.Envs, envs, shelltools.IsPlatformReservedEnv, nil)
 	if contains(agent.SkillIDs, BuiltinSkillIDCUA) && cfg.CUA.Enabled {
 		setEmptyEnv(envs, "AP_CUA_SKILL_API_BASE_URL", trimURL(cfg.CUA.GatewayURL))
