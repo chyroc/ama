@@ -24,14 +24,26 @@ downstream binding store and credential directory
   → WorkspaceIntegrationStore / WorkspaceIntegrationCredentialLookup (public)
   → WorkspaceIntegrationService (public)
   → application credential references, never personal credential sharing
+
+downstream named credential store and verifier
+  → NamedCredentialStore / Verify hook (public)
+  → NamedCredentialProvider (public)
+  → stable application identities and owner-only mutation
+
+downstream resident task implementations
+  → app.Task (public)
+  → app.NewTaskModule (public)
+  → start only after every module finishes setup
 ```
 
 `examples/company/extension.go` contains the configuration and database adapters.
 `examples/company/credentials.go` shows how to keep a private row type and credential protocol
 outside AMA while reusing workspace binding rules. A real adapter must also connect
 `WorkspaceExists` to its own workspace store; the placeholder in this example is not an
-authorization check. `extension_test.go` and `credentials_test.go`
-run without a network or real credentials.
+authorization check. `examples/company/namedcredentials.go` adds a private named-credential
+row and platform verifier behind the common CRUD service, and composes downstream background
+loops with `app.NewTaskModule`. `extension_test.go`, `credentials_test.go`, and
+`namedcredentials_test.go` run without a network or real credentials.
 
 ## Why configuration loading has two parts
 
