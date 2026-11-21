@@ -1567,37 +1567,7 @@ func (a *shutdownSafeAPI) StopWork(ctx context.Context, req selfhosted.StopWorkR
 func (p *WorkerPool) discardWork(
 	ctx context.Context, api selfhosted.API, item selfhosted.WorkItem, workerID string, logger *slog.Logger,
 ) {
-	if item.ID == "" {
-		return
-	}
-	if err := api.AckWork(ctx, selfhosted.AckWorkRequest{
-		EnvironmentID: item.EnvironmentID,
-		WorkID:        item.ID,
-		WorkerID:      workerID,
-	}); err != nil {
-		// Not acked = this work is still queued = the next round will get it again. Without logging
-		// this, the upstream "discard" would become a recurring claim that is not true.
-		logger.Warn("丢弃 work 时 ack 失败，它仍在队列里、下一轮会被再次领到",
-			slog.String("work_id", item.ID),
-			slog.String("environment_id", item.EnvironmentID),
-			slog.Any("err", err))
-		return
-	}
-	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), arkStopTimeout)
-	defer cancel()
-	if err := api.StopWork(stopCtx, selfhosted.StopWorkRequest{
-		EnvironmentID: item.EnvironmentID,
-		WorkID:        item.ID,
-	}); err != nil {
-		// ack succeeded but stop did not: this work is stuck in starting until the reclaim window
-		// (45 seconds) expires and it is taken back. Milder than the one above, but still worth a
-		// trace, otherwise "why did this work come back after 45 seconds" cannot be traced to its
-		// source.
-		logger.Warn("丢弃 work 时 stop 失败，它会卡到 reclaim 窗口过期后重来",
-			slog.String("work_id", item.ID),
-			slog.String("environment_id", item.EnvironmentID),
-			slog.Any("err", err))
-	}
+	DiscardWork(ctx, api, item, workerID, arkStopTimeout, logger)
 }
 
 // A few poll constants and error classes, matching the SDK's lib/environments/poller.go.
