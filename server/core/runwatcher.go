@@ -64,7 +64,6 @@ import (
 	"time"
 
 	"github.com/chyroc/ama/server/model/apimodel"
-	"github.com/chyroc/ama/server/model/persistmodel"
 	"github.com/chyroc/ama/server/shared/gopkg/arkframe"
 	"github.com/chyroc/ama/server/shared/infra/ma"
 )
@@ -425,74 +424,13 @@ func retireEndedAt(run apimodel.Run) time.Time {
 // refreshes lastActivityAt, so this UPDATE misses, and the just-revived session is not killed
 // again.
 func (w *RunWatcher) reapStaleRuns(ctx context.Context) {
-	// Write to the DB with a ctx without cancellation: the process may be shutting down, and if
-	// this step is skipped the zombies stay until the next startup.
-	// The read goes in too, so ctx does not become Done halfway through the read.
-	reapCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
-
-	staleBefore := apimodel.FormatISO(time.Now().UTC().Add(-runStaleAfter))
-	stale, err := w.cfg.Service.store.ListStaleActiveRuns(reapCtx, staleBefore)
-	if err != nil {
-		w.log.Warn("列出卡死的会话失败，本轮跳过回收", slog.Any("err", err))
-		return
-	}
-	if len(stale) == 0 {
-		return
-	}
-
-	reaped, skipped := 0, 0
-	for _, run := range stale {
-		if reaped >= reapMaxPerTick {
-			skipped++
-			continue
-		}
-		// Set terminated, not idle: idle means "this turn is answered, waiting for the next
-		// message", while this session **was cut off while stuck**. The Ark side is also stuck
-		// in requires_action, and a new message would get 400 RequiresActionRejected.
-		// terminated is the truth; the frontend then shows "terminated" instead of leaving the
-		// user waiting on a session that cannot send messages. Same choice as retireMissingRun.
-		run.Status = apimodel.RunTerminated
-		if run.ErrorSummary == "" {
-			// Give the user a message they can understand and that **tells them what to do
-			// next**. Do not write "service error": in most cases the execution environment was
-			// replaced (deploy, scale-down) so the tool result could not be returned, and
-			// starting a new turn fixes it.
-			run.ErrorSummary = "这轮对话的工具结果没有返回（执行环境可能已被回收或替换），" +
-				"会话已自动结束；重新发起一次对话即可。"
-		}
-		w.cfg.Service.closeRunAt(&run, retireEndedAt(run))
-
-		ok, err := w.cfg.Service.store.RetireStaleRun(reapCtx, run, staleBefore)
-		if err != nil {
-			w.log.Warn("回收卡死的会话失败，下一轮还会再试",
-				slog.String("run", run.ID), slog.Any("err", err))
-			continue
-		}
-		if !ok {
-			// Meanwhile it came back to life by itself (a late tool_result arrived), or another
-			// instance retired it first. Both are normal results, not errors.
-			continue
-		}
-		reaped++
-		// Log each one: zombies are **evidence of a fault**, not daily noise. Stating the run
-		// and how long it was stuck lets the next investigation answer "is this occasional or
-		// growing".
-		w.log.Warn("回收卡死的会话：工具结果一直没回来，已标记终止",
-			slog.String("run", run.ID),
-			slog.String("workspace", run.WorkspaceID),
-			slog.String("last_activity", persistmodel.LastActivityOf(run)),
-			slog.Duration("stale_after", runStaleAfter))
-	}
-
-	if reaped > 0 || skipped > 0 {
-		w.log.Warn("卡死会话回收完成",
-			slog.Int("found", len(stale)),
-			slog.Int("reaped", reaped),
-			// **Say when it was truncated**; otherwise "silently retired fewer" reads as "all
-			// cleaned up".
-			slog.Int("skipped_over_cap", skipped))
-	}
+	ReapStaleRuns(ctx, w.log, ReapStaleRunsHooks{
+		List:   w.cfg.Service.store.ListStaleActiveRuns,
+		Retire: w.cfg.Service.store.RetireStaleRun,
+		Close:  w.cfg.Service.closeRunAt,
+		Max:    reapMaxPerTick,
+		After:  runStaleAfter,
+	})
 }
 
 // watchOne attaches a resident subscription to one session, running asynchronously.
