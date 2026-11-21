@@ -100,17 +100,17 @@ func injectOpenVikingRecall(
 
 // CaptureTurn archives the event range ending at endSeq. The caller supplies a snapshot after
 // the terminal event has been persisted, so it works with both PG and in-memory stores.
-func (h *MemoryHooks) CaptureTurn(ctx context.Context, run apimodel.Run, endSeq int, events []apimodel.RunEvent) {
+func (h *MemoryHooks) CaptureTurn(ctx context.Context, run apimodel.Run, endSeq int, events []apimodel.RunEvent) error {
 	if h == nil || h.GetAgent == nil || run.ID == "" || run.AgentID == "" {
-		return
+		return nil
 	}
 	agent, err := h.GetAgent(ctx, run.AgentID)
 	if err != nil {
-		return
+		return err
 	}
 	cfg := resolveOpenVikingConfig(h.Config, run.WorkspaceID, agent)
 	if !cfg.Enabled {
-		return
+		return nil
 	}
 	envID := ""
 	if h.GetEnvID != nil {
@@ -122,7 +122,9 @@ func (h *MemoryHooks) CaptureTurn(ctx context.Context, run apimodel.Run, endSeq 
 	}
 	if err := capture(ctx, h.Config, h.VaultIDs, run.ID, envID, agent, openVikingTurnEvents(events, endSeq)); err != nil {
 		h.log().Debug("OpenViking 回合记忆归档跳过", "run", run.ID, "error", err.Error())
+		return err
 	}
+	return nil
 }
 
 // CaptureOpenVikingTurn creates the remote session if needed, appends the turn, then commits it.
