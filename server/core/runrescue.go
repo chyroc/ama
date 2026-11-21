@@ -63,29 +63,7 @@ const rescueCheckEvery = 30 * time.Second
 // system), so hanging it inside there naturally avoids concurrent duplicate posts. When runCtx
 // ends (subscription disconnected / safety timeout), the goroutine stops with it.
 func (w *RunWatcher) rescueTick(ctx context.Context, runID string) {
-	ticker := time.NewTicker(rescueCheckEvery)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			// Re-read the database every time: lastActivityAt is refreshed by real progress, and once it is refreshed we should not rescue.
-			run, err := w.cfg.Service.store.GetRun(ctx, runID)
-			if err != nil {
-				return // run is gone; the subscription side handles retire/cleanup
-			}
-			if run.Status != apimodel.RunRequiresAction {
-				// running has not reached the tool yet, idle/terminated already ended; neither needs rescue.
-				continue
-			}
-			age := ageSinceActivity(run)
-			if age < rescueAfter {
-				continue
-			}
-			w.rescueStoppedWork(ctx, run, age)
-		}
-	}
+	RescueRunTick(ctx, runID, w.cfg.Service.store.GetRun, w.rescueStoppedWork)
 }
 
 // ageSinceActivity computes how long since the run's last real activity; returns 0 if the time cannot be parsed (better not to rescue).
