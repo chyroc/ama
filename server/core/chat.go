@@ -1008,7 +1008,7 @@ func (s *Service) AppendRunEvents(ctx context.Context, runID string, raw []json.
 // longer only makes "send message" look slow. Long waits for a whole round of tools to finish
 // (possibly over a hundred seconds) **are not handled here**; they belong to queuing. See the
 // comment on sendEventsThroughWindow for the difference.
-const windowRetryBudget = time.Second
+const windowRetryBudget = DefaultWindowRetryBudget
 
 // windowRetryStep is the interval between two retries.
 //
@@ -1016,7 +1016,7 @@ const windowRetryBudget = time.Second
 // milliseconds, and backoff is for "do not hammer an overloaded service", while the other side
 // here is fully healthy and only briefly rejecting. A small fixed interval sends the moment
 // the window closes; within the budget it is at most about 25 tries, no load at all for Ark.
-const windowRetryStep = 40 * time.Millisecond
+const windowRetryStep = DefaultWindowRetryStep
 
 // sendEventsThroughWindow sends events and retries within the budget when it hits the "tool
 // execution window".
@@ -1052,59 +1052,9 @@ const windowRetryStep = 40 * time.Millisecond
 func (s *Service) sendEventsThroughWindow(
 	ctx context.Context, key ArkBindingKey, sessionID string, raw []json.RawMessage,
 ) ([]json.RawMessage, error) {
-	budget := s.windowRetry
-	if budget <= 0 {
-		budget = windowRetryBudget
-	}
-	deadline := time.Now().Add(budget)
-	for attempt := 0; ; attempt++ {
-		accepted, err := s.runner.SendEvents(ctx, key, sessionID, raw)
-		if err == nil {
-			if attempt > 0 {
-				// A successful retry must leave a trace: without it, "this message actually waited 200ms
-				// before being sent" is completely invisible in the logs, and if the window gets longer later
-				// (for example tools get slower) there is no way to notice.
-				s.log().Info("撞上工具执行窗口，重试后发送成功",
-					"session", sessionID, "attempts", attempt+1)
-			}
-			return accepted, nil
-		}
-		// Only retry the "a different moment would work" kind (currently two codes, see
-		// ma.IsTransientSendRejection). Other errors (invalid format, auth failure, Ark down) will not
-		// get better however many times we retry, and waiting would only make the user stare at a
-		// request that is bound to fail for one more second.
-		if !ma.IsTransientSendRejection(err) {
-			return nil, err
-		}
-		// If ctx is gone (user closed the page / upstream timeout), stop trying and hand back the last error.
-		if ctx.Err() != nil {
-			return nil, err
-		}
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			// Budget used up: hand back RequiresActionRejected, which arkFailure turns into 409.
-			// Getting here means the tool really ran for a long time; that is for the queue to handle,
-			// not this layer.
-			s.log().Info("工具执行窗口在重试预算内没有关闭，交给调用方排队",
-				"session", sessionID, "attempts", attempt+1)
-			return nil, err
-		}
-		// Sleep until "the next step" or "budget used up", whichever comes first.
-		//
-		// This clamp is needed: tests squeeze the budget to milliseconds, and when the fixed step is
-		// larger than the budget, "wait one full step" would jump past the deadline. Then not even one
-		// retry happens, and the test looks like "retry did not work", while the real reason is just
-		// that the interval is larger than the budget.
-		wait := windowRetryStep
-		if remaining < wait {
-			wait = remaining
-		}
-		select {
-		case <-ctx.Done():
-			return nil, err
-		case <-time.After(wait):
-		}
-	}
+	return SendEventsThroughWindow(ctx, func() ([]json.RawMessage, error) {
+		return s.runner.SendEvents(ctx, key, sessionID, raw)
+	}, ma.IsTransientSendRejection, s.windowRetry, windowRetryStep, sessionID, s.log())
 }
 
 // ---------------------------------------------------------------------------
