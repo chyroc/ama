@@ -1558,7 +1558,7 @@ func openBlobStore(ctx context.Context, cfg *config.Config, log *slog.Logger) (*
 		return nil, nil, err
 	}
 	if client != nil {
-		return client, &blobStore{client: client}, nil
+		return client, newBlobStore(client), nil
 	}
 	if !cfg.Server.UseMemStore() {
 		return nil, nil, errors.New("没配对象存储（s3.bucket / AMA_S3_BUCKET 为空）。" +

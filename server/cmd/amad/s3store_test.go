@@ -91,7 +91,7 @@ func TestS3BlobStoreContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := &blobStore{client: client}
+	b := newBlobStore(client)
 	testBlobStoreContract(t, b)
 
 	// Size's "missing" must also be translated to core's sentinel.
@@ -107,7 +107,7 @@ func TestS3BlobStorePresignReaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := &blobStore{client: client}
+	b := newBlobStore(client)
 	ctx := context.Background()
 	if err := b.Put(ctx, "skill-archives/2026/10/x.zip", []byte("PK zip"), "application/zip"); err != nil {
 		t.Fatal(err)

@@ -55,8 +55,11 @@ func newS3Client(ctx context.Context, cfg *config.Config, log *slog.Logger) (*s3
 	return client, nil
 }
 
-// blobStore adapts *s3.Client to core.BlobStore (plus two optional capabilities).
-type blobStore struct{ client *s3.Client }
+// blobStore uses the common core adapter; this wiring chooses the signing endpoint by reader.
+type blobStore struct {
+	client *s3.Client
+	core.BlobObjectAdapter
+}
 
 // Pins three things at compile time: the adapter satisfies **all** of core's ports.
 //
@@ -69,44 +72,23 @@ var (
 	_ core.BlobSizer     = (*blobStore)(nil)
 )
 
-func (b *blobStore) Put(ctx context.Context, key string, content []byte, contentType string) error {
-	return b.client.Put(ctx, key, content, contentType)
-}
-
-func (b *blobStore) Get(ctx context.Context, key string) ([]byte, error) {
-	data, err := b.client.Get(ctx, key)
-	if errors.Is(err, s3.ErrNotFound) {
-		return nil, fmt.Errorf("%w: %v", core.ErrBlobNotFound, err)
+func newBlobStore(client *s3.Client) *blobStore {
+	if client == nil {
+		return nil
 	}
-	return data, err
-}
-
-func (b *blobStore) Delete(ctx context.Context, key string) error {
-	return b.client.Delete(ctx, key)
-}
-
-func (b *blobStore) Bucket() string { return b.client.Bucket() }
-
-// PresignedGetURL picks the signing address by reader; see core.LinkReader.
-func (b *blobStore) PresignedGetURL(key string, ttl time.Duration, reader core.LinkReader) (string, error) {
-	switch reader {
-	case core.LinkForSandbox:
-		return b.client.PresignGetForSandbox(key, ttl)
-	case core.LinkForPublic:
-		return b.client.PresignGetForPublic(key, ttl)
-	default:
-		// A new reader kind was added but not wired here: return an error instead of signing with any address,
-		// because a link signed with the wrong Host cannot be reached, and that symptom does not point here.
-		return "", fmt.Errorf("不认识的链接读者 %d", reader)
-	}
-}
-
-func (b *blobStore) Size(ctx context.Context, key string) (int64, error) {
-	n, err := b.client.Size(ctx, key)
-	if errors.Is(err, s3.ErrNotFound) {
-		return 0, fmt.Errorf("%w: %v", core.ErrBlobNotFound, err)
-	}
-	return n, err
+	return &blobStore{client: client, BlobObjectAdapter: core.BlobObjectAdapter{
+		Client: client, NotFound: s3.ErrNotFound,
+		Presign: func(key string, ttl time.Duration, reader core.LinkReader) (string, error) {
+			switch reader {
+			case core.LinkForSandbox:
+				return client.PresignGetForSandbox(key, ttl)
+			case core.LinkForPublic:
+				return client.PresignGetForPublic(key, ttl)
+			default:
+				return "", fmt.Errorf("不认识的链接读者 %d", reader)
+			}
+		},
+	}}
 }
 
 // userFileObjects adapts *s3.Client to userfile.ObjectStore.
