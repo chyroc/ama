@@ -6,6 +6,17 @@ import (
 	"github.com/chyroc/ama/server/model/apimodel"
 )
 
+func TestBuiltinServiceAccountIntegrationsAreClassified(t *testing.T) {
+	for _, id := range []string{
+		apimodel.IntegrationServiceAccount,
+		apimodel.IntegrationCodebaseApp,
+	} {
+		if !apimodel.IsServiceAccountIntegration(id) {
+			t.Errorf("built-in provider %q must not depend on downstream registration", id)
+		}
+	}
+}
+
 func TestRegisterServiceAccountIntegration(t *testing.T) {
 	const id = "example-service-account"
 	if !apimodel.IsPersonalIntegration(id) {

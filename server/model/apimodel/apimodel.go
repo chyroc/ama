@@ -632,9 +632,13 @@ const (
 // (obtained via OAuth, representing a real person) and cloud platform service accounts (hand-typed AK/SK, representing an app) on the same side,
 // while the sharing safety of the two is completely opposite.
 //
-// Currently there are none: the open-source version only has personal authorization sources (AMA / Feishu user).
-// When a source "representing an app" is added in the future, register it here.
-var serviceAccountIntegrations = map[string]bool{}
+// Built-in provider slots are classified here as well as in downstream startup wiring.
+// Classifying only during downstream startup makes standalone users of this module treat
+// an application credential as a person's credential.
+var serviceAccountIntegrations = map[string]bool{
+	IntegrationServiceAccount: true,
+	IntegrationCodebaseApp:    true,
+}
 
 // IntegrationKindOf reports which kind an authorization source id belongs to.
 //
