@@ -37,5 +37,11 @@ its modules. This matters when multiple teams or multiple deployments share the 
 context to stop a process without sending a signal to the test runner. A task should return nil
 when its context is canceled for normal shutdown.
 
+`NewTaskModule` registers already assembled background loops. Nil tasks are skipped, while
+non-nil tasks start only after every module's Setup has returned. Keep task construction in the
+distribution's own module: private execution services, credentials and lease implementations do
+not become fields of this generic lifecycle module. Return a literal nil interface for an optional
+implementation; an interface containing a typed nil pointer is not empty and will panic on Run.
+
 See `examples/company` for the corresponding configuration and database adapters. That example is
 sanitized; private SDKs and deployment-specific configuration stay in the downstream module.

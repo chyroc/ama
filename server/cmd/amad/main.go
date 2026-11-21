@@ -687,13 +687,10 @@ func run(ctx context.Context, runtime *app.Runtime) error {
 		Leases: schedulerLeases(rdb),
 		Logger: log,
 	})
-	if scheduler != nil {
-		runtime.Go(scheduler.Run)
-		if rdb == nil {
-			log.Warn("未配置 Redis，定时任务调度器不做选主 —— " +
-				"每个实例都会扫一遍，重复触发由 PostgreSQL 的原子认领兜住" +
-				"（功能正常，只是多几次无用查询）")
-		}
+	if scheduler != nil && rdb == nil {
+		log.Warn("未配置 Redis，定时任务调度器不做选主 —— " +
+			"每个实例都会扫一遍，重复触发由 PostgreSQL 的原子认领兜住" +
+			"（功能正常，只是多几次无用查询）")
 	}
 
 	// Agent Ark sync executor: brings the agent up to date on the Ark side right after it is saved.
@@ -709,13 +706,10 @@ func run(ctx context.Context, runtime *app.Runtime) error {
 		Leases:  schedulerLeases(rdb),
 		Logger:  log,
 	})
-	if agentSyncer != nil {
-		runtime.Go(agentSyncer.Run)
-		if rdb == nil {
-			log.Warn("未配置 Redis，agent 方舟同步执行器不做选主 —— " +
-				"每个实例都会扫一遍，重复同步由 PostgreSQL 的原子认领兜住" +
-				"（功能正常，只是多几次无用查询）")
-		}
+	if agentSyncer != nil && rdb == nil {
+		log.Warn("未配置 Redis，agent 方舟同步执行器不做选主 —— " +
+			"每个实例都会扫一遍，重复同步由 PostgreSQL 的原子认领兜住" +
+			"（功能正常，只是多几次无用查询）")
 	}
 
 	// Permanent session subscriptions: attach a subscription to sessions "still running but watched by nobody", storing events into history.
@@ -797,7 +791,7 @@ func run(ctx context.Context, runtime *app.Runtime) error {
 	if weixinPoller != nil {
 		runtime.Go(weixinPoller.Run)
 	}
-	return nil
+	return app.NewTaskModule("schedule-and-agent-sync", scheduler, agentSyncer).Setup(ctx, runtime)
 }
 
 // channelConversations adapts *core.Service to the Conversations interfaces of the chat channels
