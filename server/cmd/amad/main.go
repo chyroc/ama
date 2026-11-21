@@ -172,6 +172,14 @@ func run(ctx context.Context, runtime *app.Runtime) error {
 	if err != nil {
 		return err
 	}
+	if err := app.NewBlobStoreModule(app.BlobStoreModuleConfig{
+		Required: !cfg.Server.UseMemStore(),
+		Open: func(context.Context) (app.BlobStoreSelection, error) {
+			return app.BlobStoreSelection{Client: s3Client}, nil
+		},
+	}).Setup(ctx, runtime); err != nil {
+		return err
+	}
 
 	// Worker-side datasource tools (query_sql / read_object): the credentials live in this
 	// process, not in the agent's environment. Nothing enabled → nil, and the agent is exactly
