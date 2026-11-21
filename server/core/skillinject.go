@@ -21,7 +21,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/chyroc/ama/server/model/apimodel"
 	"github.com/chyroc/ama/server/shared/hosttools"
@@ -252,20 +251,7 @@ func (l *SkillFileLoader) skillsFor(
 // When the body is empty, fall back to a minimal Markdown: the only goal is for the directory
 // and file to exist, so "a bound skill" does not become "no such skill in the container". The
 // description is included because it decides when the model uses this skill.
-func renderSkillMD(sk apimodel.Skill) string {
-	if strings.TrimSpace(sk.Instructions) != "" {
-		return sk.Instructions
-	}
-	title := sk.DisplayTitle
-	if strings.TrimSpace(title) == "" {
-		title = sk.Name
-	}
-	md := "# " + title + "\n"
-	if strings.TrimSpace(sk.Description) != "" {
-		md += "\n" + sk.Description + "\n"
-	}
-	return md
-}
+func renderSkillMD(sk apimodel.Skill) string { return RenderSkillMarkdown(sk) }
 
 // HostSkillsFor is the native host-machine version of SkillsFor: it converts the shelltools
 // shape (file content []byte) into the hosttools shape (content string, sent via JSON rather
