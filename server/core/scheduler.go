@@ -287,43 +287,14 @@ func (s *Scheduler) tick(ctx context.Context) {
 // Three, **there must be a per-fire timeout**. Without it, one stuck turn halts that task
 // permanently.
 func (s *Scheduler) fireOne(ctx context.Context, sch apimodel.Schedule) {
-	log := s.log.With(
-		slog.String("schedule", sch.ID),
-		slog.String("agent", sch.AgentID),
-		slog.String("schedule_name", sch.Name))
-
-	// Log at start: creating the session / sending the message may hang a long time before the
-	// success or failure log (creating a session builds Ark resources and starts a container); without
-	// this line you could only guess from "claimed N tasks" whether this round actually started.
-	log.Info("定时任务开始执行")
-
-	// This round's lifetime is decoupled from tick; see details two and three.
-	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fireTimeout)
-	defer cancel()
-
-	started := s.now().UTC()
-	runID, text, err := s.runOnce(runCtx, sch, log)
-	finished := s.now().UTC()
-
-	if err != nil {
-		log.Error("定时任务执行失败", slog.Any("err", err))
-		s.finish(runCtx, sch, runID, finished, err)
-		return
-	}
-
-	// Delivery. **A delivery failure also counts as this round failing**: what the user wants is "see
-	// the report in the group at 9:30"; if the agent succeeds but the report is not sent, to them it is
-	// the same as not running.
-	if derr := s.deliver(runCtx, sch, text, runID, log); derr != nil {
-		log.Error("投递结果失败", slog.Any("err", derr))
-		s.finish(runCtx, sch, runID, finished, derr)
-		return
-	}
-
-	log.Info("定时任务执行完成",
-		slog.String("run", runID),
-		slog.Duration("elapsed", finished.Sub(started)))
-	s.finish(runCtx, sch, runID, finished, nil)
+	FireSchedule(ctx, sch, s.log.With(
+		slog.String("schedule", sch.ID), slog.String("agent", sch.AgentID), slog.String("schedule_name", sch.Name)), FireScheduleHooks{
+		Run:     s.runOnce,
+		Deliver: s.deliver,
+		Finish:  s.finish,
+		Now:     s.now,
+		Timeout: fireTimeout,
+	})
 }
 
 // runOnce creates a session, sends the prompt, and collects the agent's final text reply.
