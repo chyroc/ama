@@ -313,66 +313,18 @@ func (w *RunWatcher) tick(ctx context.Context) {
 		return
 	}
 
-	started, skipped := 0, 0
-	for _, run := range runs {
-		if ctx.Err() != nil {
-			return
-		}
-		// This instance is already listening to this one (started last round, not done yet).
-		if _, busy := w.watching.Load(run.ID); busy {
-			continue
-		}
-		// Someone is already listening: the browser has the chat page open, the feishu turn is
-		// running, or a scheduled task is waiting for the result.
-		// No need to start another: events are already being stored, and one more only wastes
-		// a connection.
-		//
-		// ⚠️ This check **is only valid within this process** (activeStreams is an in-process
-		// reference count). Whether other instances have subscribers is invisible here; the PG
-		// claim below decides that.
-		if w.cfg.Service.hasActiveStream(run.ID) {
-			// Even while the browser SSE stream is open, if a session has been stuck in
-			// requires_action for >= rescueAfter (e.g. its Ark work item stopped), run
-			// rescueStoppedWork so the user watching the page does not wait forever.
-			if run.Status == apimodel.RunRequiresAction {
-				if age := ageSinceActivity(run); age >= rescueAfter {
-					w.rescueStoppedWork(ctx, run, age)
-				}
-			}
-			continue
-		}
-		if started >= watchMaxConcurrent {
-			skipped++
-			continue
-		}
-		// Gate two: PG atomic claim. **Correctness lives here**, not in the Redis lock above.
-		//
-		// Failing to claim means another instance is subscribing to it (or it just became
-		// terminal), so skip it. This is a normal result, not an error. If the lease expires
-		// without renewal, whoever scans it next round takes over.
-		claimed, err := w.cfg.Service.store.ClaimRunWatch(
-			ctx, run.ID, w.owner, time.Now(), watchLeaseFor)
-		if err != nil {
-			w.log.Warn("认领会话订阅失败，跳过这条",
-				slog.String("run", run.ID), slog.Any("err", err))
-			continue
-		}
-		if !claimed {
-			continue
-		}
-		started++
-		w.watchOne(ctx, run.ID)
-	}
-
-	if started > 0 || skipped > 0 {
-		// Log only when work was actually done; otherwise idle-loop logs drown out useful ones.
-		w.log.Info("会话常驻订阅巡检完成",
-			slog.Int("active", len(runs)),
-			slog.Int("started", started),
-			// **Say when it was truncated**: otherwise "silently subscribed fewer" reads as
-			// "all subscribed".
-			slog.Int("skipped_over_cap", skipped))
-	}
+	ScanRunWatches(ctx, runs, w.owner, w.log, RunWatchScanHooks{
+		Watching: func(runID string) bool {
+			_, busy := w.watching.Load(runID)
+			return busy
+		},
+		HasActiveStream: w.cfg.Service.hasActiveStream,
+		Claim:           w.cfg.Service.store.ClaimRunWatch,
+		Watch:           w.watchOne,
+		Rescue:          w.rescueStoppedWork,
+		MaxConcurrent:   watchMaxConcurrent,
+		LeaseFor:        watchLeaseFor,
+	})
 }
 
 // retireMissingRun pushes a session that "no longer exists on the Ark side" to a terminal
