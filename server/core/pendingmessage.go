@@ -85,14 +85,14 @@ const (
 	//
 	// It only covers the short "claim → send" step (one Ark call, seconds). 2 minutes is a loose
 	// value; if the holder is rebuilt, another instance takes over after at most this long.
-	pendingClaimLease = 2 * time.Minute
+	pendingClaimLease = DefaultPendingClaimLease
 
 	// pendingMaxAttempts is how many times a message is sent automatically at most.
 	//
 	// Once reached, it is marked failed and the original text is kept for the user. Without a
 	// limit, a message that "can never be sent" (e.g. the linked agent was disabled) would be
 	// retried at the end of every turn, flooding error logs forever.
-	pendingMaxAttempts = 3
+	pendingMaxAttempts = DefaultPendingMaxAttempts
 )
 
 // EnqueuePendingMessage appends a message to the end of this session's queue.
@@ -189,70 +189,20 @@ func (s *Service) CancelPendingMessage(ctx context.Context, runID, id string) er
 // "this feature does not exist" (the message stays in the queue and is retried next turn); it
 // should not mark the subscription path as failed.
 func (s *Service) DrainPendingMessage(ctx context.Context, runID, owner string) bool {
-	m, ok, err := s.store.ClaimNextPendingMessage(
-		ctx, runID, owner, time.Now(), pendingClaimLease)
-	if err != nil {
-		s.log().Warn("认领排队消息失败", "run", runID, "error", err.Error())
-		return false
-	}
-	if !ok {
-		// Nothing pending. This is the normal result for most turns; do not log (it would drown out useful logs).
-		return false
-	}
-
-	// Retry limit reached: mark failed, keep the original text for the user.
-	//
-	// Checked **after** claiming: claiming does attempts+1, so what we see here is "which attempt
-	// this is, counting this one".
-	if m.Attempts > pendingMaxAttempts {
-		s.log().Warn("排队消息反复发不出去，放弃",
-			"run", runID, "message", m.ID, "attempts", m.Attempts)
-		s.failPending(ctx, m.ID, fmt.Sprintf(
-			"自动发送 %d 次都没成功，这条消息没有发出。", pendingMaxAttempts))
-		return false
-	}
-
-	event, err := json.Marshal(map[string]any{
-		"type":    "user.message",
-		"content": []map[string]any{{"type": "text", "text": m.Text}},
+	return DrainPendingMessage(ctx, runID, owner, PendingMessageDrainHooks{
+		Store: s.store,
+		Append: func(ctx context.Context, runID string, events []json.RawMessage) error {
+			_, err := s.AppendRunEvents(ctx, runID, events)
+			return err
+		},
+		FailReason: userMessage,
+		IsPermanent: func(err error) bool {
+			return errors.Is(err, ErrPrecondition) || errors.Is(err, ErrInvalidArgument)
+		},
+		Logger:      s.log(),
+		Lease:       pendingClaimLease,
+		MaxAttempts: pendingMaxAttempts,
 	})
-	if err != nil {
-		s.failPending(ctx, m.ID, "拼消息事件失败")
-		return false
-	}
-
-	if _, err := s.AppendRunEvents(ctx, runID, []json.RawMessage{event}); err != nil {
-		// **Tell "did not work this time" from "will never work".**
-		//
-		// A precondition failure (agent deleted/disabled, no Ark key configured) will not get better
-		// however many times we retry, so mark it failed right away instead of running all three
-		// attempts, each of which calls Ark. Everything else (hit the window, network blip, 5xx)
-		// goes back to the queue and is retried next turn.
-		if errors.Is(err, ErrPrecondition) || errors.Is(err, ErrInvalidArgument) {
-			s.log().Warn("排队消息发不出去且重试无益，放弃",
-				"run", runID, "message", m.ID, "error", err.Error())
-			s.failPending(ctx, m.ID, userMessage(err))
-			return false
-		}
-		// **No need to put it back explicitly**: once the lease expires it becomes claimable again
-		// (that is what `claimed_until < now` in ClaimNextPendingMessage is for). The cost is
-		// waiting a full lease (2 minutes) before retrying, which is acceptable: getting here means
-		// the previous attempt really failed, and an immediate retry would most likely fail too.
-		s.log().Warn("排队消息这次没发成，等租约过期后重试",
-			"run", runID, "message", m.ID, "error", err.Error())
-		return false
-	}
-
-	// Delete once sent. **No sent state is kept**: keeping it would only make the "how many are
-	// still queued on this session" query slower over time, and "this message was sent" is
-	// already recorded in run_events.
-	if err := s.store.DeletePendingMessage(ctx, m.ID); err != nil {
-		// Failing to delete is real trouble: this message would be sent again next turn. So log it as Warn instead of swallowing it.
-		s.log().Warn("排队消息已发出但删除失败，下一轮可能重复发送",
-			"run", runID, "message", m.ID, "error", err.Error())
-	}
-	s.log().Info("排队消息已发出", "run", runID, "message", m.ID)
-	return true
 }
 
 // drainAllowed decides whether this frame's "turn ended" is the kind after which **the next
