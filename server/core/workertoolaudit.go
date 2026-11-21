@@ -42,14 +42,13 @@ package core
 import (
 	"context"
 	"log/slog"
-	"time"
 
 	"github.com/volcengine/ark-runtime-go/arkruntime/selfhosted"
 )
 
 const (
 	// toolAuditListLimit is the page size when listing events for reconciliation, matching the SDK's reconcileOnce.
-	toolAuditListLimit = 1000
+	toolAuditListLimit = DefaultToolAuditListLimit
 	// toolAuditMaxPages is the hard upper bound on paging, to stop "the server cursor does not advance" from becoming an infinite loop.
 	//
 	// This runs in the work goroutine and **holds a concurrency slot**; an infinite loop shows up as
@@ -57,7 +56,7 @@ const (
 	//
 	// 1000 × 1000 = one million events, far beyond any real session (the production sample had 87),
 	// so the normal path never reaches it; reaching it means the server is misbehaving, and then filling in one less time is better.
-	toolAuditMaxPages = 1000
+	toolAuditMaxPages = DefaultToolAuditMaxPages
 	// toolAuditTimeout is the timeout for one whole reconciliation (list events + post results).
 	//
 	// The call site passes a ctx **without cancellation** (`context.WithoutCancel`) plus this timeout:
@@ -67,7 +66,7 @@ const (
 	// and the outer one is unaffected. See the comment at the call site.
 	//
 	// 30 seconds is enough to list a few pages of events and post a few results; longer would hold up the worker's exit.
-	toolAuditTimeout = 30 * time.Second
+	toolAuditTimeout = DefaultToolAuditTimeout
 
 	// eventTypeAgentToolResult and eventTypeAgentMCPToolResult are Ark server-side tool results
 	// (e.g. for `skill` or hosted MCP tools) emitted directly by the agent runtime.
