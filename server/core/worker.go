@@ -34,12 +34,9 @@ package core
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -1656,15 +1653,7 @@ const (
 // each other, and pseudo-random **easily collides on seeds** when several processes start at once
 // (rolling release). The math/rand used for jitter is in workerbackoff.go / workerlease.go.
 func arkWorkerID() string {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Sprintf("ama-worker-%d", time.Now().UnixNano())
-	}
-	suffix := hex.EncodeToString(b[:])
-	if host, err := os.Hostname(); err == nil && host != "" {
-		return "ama-worker-" + host + "-" + suffix
-	}
-	return "ama-worker-" + suffix
+	return ArkWorkerID()
 }
 
 // arkFatalStatus decides "retrying is useless": the 4xx codes other than timeout, conflict and rate
@@ -1745,9 +1734,4 @@ func (p *WorkerPool) shutdown() {
 }
 
 // sdkLogWriter forwards the standard library log output to slog.
-type sdkLogWriter struct{ log *slog.Logger }
-
-func (w sdkLogWriter) Write(b []byte) (int, error) {
-	w.log.Info(strings.TrimRight(string(b), "\n"), slog.String("from", "ark-sdk"))
-	return len(b), nil
-}
+type sdkLogWriter = SDKLogWriter
