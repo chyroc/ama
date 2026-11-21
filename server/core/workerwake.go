@@ -164,23 +164,7 @@ func (w *pollWaker) drain() {
 // ⚠️ **A failed subscription must not stop poll**: wakeups are a pure optimization, and when they fail it must fall back to "rely on the timer",
 // not "this environment stops polling". So it only logs one Warn and moves on.
 func (p *WorkerPool) watchWakeups(ctx context.Context, envID string, logger *slog.Logger) *pollWaker {
-	if p.cfg.Wakeups == nil {
-		return nil
-	}
-	waker := newPollWaker()
-	go func() {
-		// Consume normally only returns when ctx ends. An error midway (database unreachable) is degraded the same way:
-		// leave a log line, and this environment is left with just the timer.
-		err := p.cfg.Wakeups.WatchWakeups(ctx, envID, func(context.Context) error {
-			waker.signal()
-			return nil
-		})
-		if err != nil && ctx.Err() == nil {
-			logger.Warn("订阅唤醒信号失败，本环境退化成只靠退避定时器（响应会变慢，但不影响正确性）",
-				slog.Any("err", err))
-		}
-	}()
-	return waker
+	return WatchWorkerWakeups(ctx, p.cfg.Wakeups, envID, logger)
 }
 
 // wakeEnvForRun wakes the poll loop of "the environment this run is in".
