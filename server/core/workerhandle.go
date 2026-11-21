@@ -48,8 +48,8 @@ import (
 )
 
 const (
-	workerHeartbeatTTL      = 30 * time.Second
-	workerHeartbeatInterval = 15 * time.Second
+	workerHeartbeatTTL      = DefaultWorkerHeartbeatTTL
+	workerHeartbeatInterval = DefaultWorkerHeartbeatInterval
 )
 
 // workProcessor is the function signature for "run one claimed work item". pollLoop calls it
@@ -68,10 +68,10 @@ type workProcessor func(
 
 // Heartbeat cause strings, matching the SDK's heartbeatStopCause.
 const (
-	heartbeatCauseLeaseLost        = "lease_lost"
-	heartbeatCauseHeartbeatLost    = "heartbeat_lost"
-	heartbeatCausePermanentFailure = "permanent_failure"
-	heartbeatCauseStopRequested    = "stop_requested"
+	heartbeatCauseLeaseLost        = HeartbeatCauseLeaseLost
+	heartbeatCauseHeartbeatLost    = HeartbeatCauseHeartbeatLost
+	heartbeatCausePermanentFailure = HeartbeatCausePermanentFailure
+	heartbeatCauseStopRequested    = HeartbeatCauseStopRequested
 )
 
 // handleWorkItem handles one claimed work item. rootWorkdir/newTools/ledger/loggers are bound
@@ -209,77 +209,7 @@ func (p *WorkerPool) workerHeartbeat(
 	ctx context.Context, item selfhosted.WorkItem, api selfhosted.API,
 	cancel context.CancelFunc, markCause func(string),
 ) {
-	last := selfhosted.ExpectedLastHeartbeatNoHeartbeat
-	ttl := workerHeartbeatTTL
-	interval := workerHeartbeatInterval
-	lastSuccess := time.Now()
-
-	beat := func() bool {
-		beatCtx, beatCancel := context.WithTimeout(ctx, interval)
-		defer beatCancel()
-		resp, err := api.HeartbeatWork(beatCtx, selfhosted.HeartbeatWorkRequest{
-			EnvironmentID:         item.EnvironmentID,
-			WorkID:                item.ID,
-			ExpectedLastHeartbeat: last,
-			DesiredTTLSeconds:     int(ttl / time.Second),
-		})
-		if err != nil {
-			if selfhosted.IsStatus(err, 412) {
-				markCause(heartbeatCauseLeaseLost)
-				cancel()
-				return false
-			}
-			if ctx.Err() != nil {
-				return false
-			}
-			if isFatalWorker4xx(err) {
-				markCause(heartbeatCausePermanentFailure)
-				cancel()
-				return false
-			}
-			if time.Since(lastSuccess) > ttl {
-				markCause(heartbeatCauseHeartbeatLost)
-				cancel()
-				return false
-			}
-			return true
-		}
-		if resp == nil {
-			return true
-		}
-		lastSuccess = time.Now()
-		if resp.LastHeartbeat != "" {
-			last = resp.LastHeartbeat
-		}
-		if resp.TTLSeconds > 0 {
-			ttl = time.Duration(resp.TTLSeconds) * time.Second
-			if half := ttl / 2; half >= time.Second {
-				interval = half
-			}
-		}
-		if resp.State == selfhosted.WorkStateStopping || resp.State == selfhosted.WorkStateStopped {
-			markCause(heartbeatCauseStopRequested)
-			cancel()
-			return false
-		}
-		return true
-	}
-
-	if !beat() {
-		return
-	}
-	for {
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-		if !beat() {
-			return
-		}
-	}
+	RunWorkerHeartbeat(ctx, item, api, cancel, markCause)
 }
 
 // stopWorkForItem sends StopWork (force) during cleanup. 409/412 mean someone else already
@@ -300,15 +230,4 @@ func stopWorkForItem(ctx context.Context, api selfhosted.API, item selfhosted.Wo
 }
 
 // isFatalWorker4xx is the same as SDK isFatal4xx: 4xx and not 408/409/429/412.
-func isFatalWorker4xx(err error) bool {
-	var apiErr *selfhosted.APIError
-	if !errors.As(err, &apiErr) {
-		return false
-	}
-	switch apiErr.StatusCode {
-	case 408, 409, 429, 412:
-		return false
-	default:
-		return apiErr.StatusCode >= 400 && apiErr.StatusCode < 500
-	}
-}
+func isFatalWorker4xx(err error) bool { return IsFatalWorker4xx(err) }
