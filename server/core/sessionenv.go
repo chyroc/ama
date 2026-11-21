@@ -203,24 +203,7 @@ func (s *SessionEnvSource) SessionEnvs(
 	// with no more guessing. The write path (validation in core/agent.go) is the first gate, this is
 	// the second, and the shelltools merge order (platform wins last) is the third. With all three in
 	// place, missing one doesn't create a hole.
-	for _, e := range agent.Envs {
-		key := strings.TrimSpace(e.Key)
-		if key == "" {
-			continue
-		}
-		if shelltools.IsPlatformReservedEnv(key) {
-			// Log instead of dropping silently: silence would make the user think their setting took effect,
-			// and then spend a long time on "why isn't my token being used".
-			s.log.WarnContext(ctx, "自定义环境变量用了平台保留名，已忽略这一条",
-				"agent", agent.ID, "key", key)
-			continue
-		}
-		envs[key] = e.Value
-		if e.Secret {
-			// Ones marked sensitive must be scrubbed from command output; see shelltools/scrub.go.
-			secretKeys = append(secretKeys, key)
-		}
-	}
+	secretKeys = append(secretKeys, AppendUserEnvs(ctx, agent.ID, agent.Envs, envs, shelltools.IsPlatformReservedEnv, s.log)...)
 
 	// -- Two: Built-in skill server-managed configuration (CUA / Seedance MA / OpenViking) ---
 	if contains(agent.SkillIDs, BuiltinSkillIDCUA) && s.svc.cua.Enabled {
@@ -427,26 +410,13 @@ func (s *SessionEnvSource) personalCredentialSubject(
 func (s *Service) personalCredentialSubjectFor(
 	ctx context.Context, agent apimodel.Agent, workspaceID string, log *slog.Logger,
 ) (string, error) {
-	if creator := strings.TrimSpace(agent.CreatedBy); creator != "" {
-		return creator, nil
-	}
-	ws, err := s.store.GetWorkspace(ctx, workspaceID)
-	if err != nil {
-		return "", fmt.Errorf("空间不存在: %w", err)
-	}
-	owner := firstOwnerEmail(ws.Members)
-	if owner == "" {
-		return "", fmt.Errorf("%w: 空间没有 owner，取不到可用身份", ErrPrecondition)
-	}
-	// State that the fallback rule was used. **This log line can't be dropped**: it is the only
-	// traceable clue to "why this agent uses the owner's identity", and that is the first question to
-	// ask when investigating a concern about privilege overreach.
-	if log == nil {
-		log = slog.Default()
-	}
-	log.InfoContext(ctx, "agent 没有记录创建者，个人授权回落到空间 owner（存量行为）",
-		"agent", agent.ID, "workspace", workspaceID, "owner", owner)
-	return owner, nil
+	return PersonalCredentialSubject(ctx, agent, workspaceID, func(ctx context.Context, id string) (string, error) {
+		ws, err := s.store.GetWorkspace(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		return firstOwnerEmail(ws.Members), nil
+	}, ErrPrecondition, log)
 }
 
 // addLarkUserEnvs merges the two variables lark-cli recognizes into envs.
