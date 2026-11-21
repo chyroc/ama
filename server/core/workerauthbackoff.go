@@ -96,7 +96,6 @@ package core
 import (
 	"context"
 	"log/slog"
-	"sync"
 	"time"
 )
 
@@ -116,12 +115,7 @@ import (
 // someone fixes a wrong key, the worst case is waiting one backoff period to see recovery. In
 // practice a changed key is let through right away by its fingerprint (see the file header), so
 // the 5 minutes only applies when "nobody ever fixes it", and then being slower is what we want.
-var authBackoffLevels = []time.Duration{
-	30 * time.Second,
-	1 * time.Minute,
-	2 * time.Minute,
-	5 * time.Minute,
-}
+var authBackoffLevels = append([]time.Duration(nil), DefaultAuthBackoffLevels...)
 
 // authPauseAfter is "how long of consecutive auth failures before we treat this key as abandoned".
 //
@@ -133,7 +127,7 @@ var authBackoffLevels = []time.Duration{
 //
 // The start time must be stored in the DB (ark_auth_failures): production ships a release every
 // two or three days, so a counter in the process never reaches 3 days.
-const authPauseAfter = 72 * time.Hour
+const authPauseAfter = DefaultAuthPauseAfter
 
 // authPausedProbe is how often to try once paused.
 //
@@ -144,7 +138,7 @@ const authPauseAfter = 72 * time.Hour
 // day means recovery is at worst one day late.
 // A changed key still recovers right away (blocked lets it through by fingerprint), not affected
 // by this interval.
-const authPausedProbe = 24 * time.Hour
+const authPausedProbe = DefaultAuthPausedProbe
 
 // authBackoffEntry is the auth failure state of one environment.
 type authBackoffEntry struct {
@@ -164,112 +158,23 @@ type authBackoffEntry struct {
 // (runOne), the reader is the refresh goroutine (ensureWorker), and the two naturally run at the
 // same time. This differs from arkbackoff.Ladder, where each pollLoop owns its own copy, so no
 // lock is needed there.
-type authBackoff struct {
-	mu sync.Mutex
-	m  map[string]*authBackoffEntry
-}
+type authBackoff = AuthBackoff
 
-func newAuthBackoff() *authBackoff {
-	return &authBackoff{m: map[string]*authBackoffEntry{}}
-}
+func newAuthBackoff() *authBackoff { return NewAuthBackoff(authBackoffLevels, jitterAround) }
 
-// fail records one auth failure, and returns how long to wait this time and which failure
-// number this is.
-//
-// The returned wait already has ±20% jitter applied (jitterAround): several environments often
-// share the same bad key (several environments in one workspace share a credential). Without
-// jitter they would move in lockstep and all hit at the same moment, which is exactly what the
-// file header of workerbackoff.go keeps stressing.
-//
-// Safe with a nil receiver: WorkerPools built by older unit tests do not have this field.
 func (b *authBackoff) fail(envID, fingerprint string, now time.Time) (time.Duration, int) {
-	if b == nil {
-		return 0, 0
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	e := b.m[envID]
-	// A changed key starts counting from zero: it is a new key, whether it works is a separate
-	// question, and it should not inherit the previous key's failure count.
-	if e == nil || e.fingerprint != fingerprint {
-		e = &authBackoffEntry{fingerprint: fingerprint}
-		b.m[envID] = e
-	}
-	e.failures++
-
-	idx := e.failures - 1
-	if idx >= len(authBackoffLevels) {
-		idx = len(authBackoffLevels) - 1
-	}
-	wait := jitterAround(authBackoffLevels[idx])
-	e.until = now.Add(wait)
-	return wait, e.failures
+	return b.Fail(envID, fingerprint, now)
 }
 
-// holdUntil extends an environment's backoff to until (only extends, never shortens).
-//
-// Used by the "consecutive failures reached authPauseAfter" path: the ladder only goes up to 5
-// minutes, and a pause needs a longer interval. The fingerprint must match the one recorded at
-// fail time; a mismatch means the key changed in the meantime, and the new key must not be held
-// back too.
 func (b *authBackoff) holdUntil(envID, fingerprint string, until time.Time) {
-	if b == nil {
-		return
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	e := b.m[envID]
-	if e == nil || e.fingerprint != fingerprint {
-		return
-	}
-	if until.After(e.until) {
-		e.until = until
-	}
+	b.HoldUntil(envID, fingerprint, until)
 }
 
-// blocked decides whether this environment's worker should be skipped now, and how much longer
-// to wait.
-//
-// When fingerprint differs from the recorded one, **always let it through and clear the
-// record**: the user changed the key, and the new key must get a chance right away, otherwise
-// "I clearly changed the config, why is it still broken".
 func (b *authBackoff) blocked(envID, fingerprint string, now time.Time) (bool, time.Duration) {
-	if b == nil {
-		return false, 0
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	e := b.m[envID]
-	if e == nil {
-		return false, 0
-	}
-	if e.fingerprint != fingerprint {
-		delete(b.m, envID)
-		return false, 0
-	}
-	if now.Before(e.until) {
-		return true, e.until.Sub(now)
-	}
-	return false, 0
+	return b.Blocked(envID, fingerprint, now)
 }
 
-// clear removes an environment's auth failure record. **It must be called on every successful
-// PollWork.**
-//
-// ⚠️ Missing it is a silent bug, the same shape as the one around arkbackoff.Ladder.Reset: an
-// environment that occasionally hits a stray 401 would pile its count up to the 5 minute level and
-// then **never come back down**: every next failure after recovering would start from the top
-// level. `TestAuthBackoffResetsAfterSuccess` locks this in.
-func (b *authBackoff) clear(envID string) {
-	if b == nil {
-		return
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	delete(b.m, envID)
-}
+func (b *authBackoff) clear(envID string) { b.Clear(envID) }
 
 // arkAuthStatus decides "this error means the credential is invalid": 401 or 403.
 //

@@ -93,22 +93,21 @@ package core
 import (
 	"context"
 	"log/slog"
-	mrand "math/rand"
 	"time"
 )
 
 const (
 	// workerLeaseTTL is the lease duration of the poll right. **It must be much smaller than arkReclaimOlderThan**; see the file header.
-	workerLeaseTTL = 20 * time.Second
+	workerLeaseTTL = DefaultWorkerLeaseTTL
 	// workerLeaseRenew is the renewal interval. 1/4 of the TTL: the lock is only lost after three renewals fail in a row.
-	workerLeaseRenew = 5 * time.Second
+	workerLeaseRenew = DefaultWorkerLeaseRenew
 	// workerLeaseRetryGap is the retry interval when the lock can't be obtained.
 	//
 	// A fixed value instead of exponential backoff: not getting the lock is **the normal case** (N-1
 	// pods fail every round), and backoff would make "how long until someone takes over after the
 	// holder exits" unpredictable, while that value is part of the argument for the inequality chain
 	// in the file header.
-	workerLeaseRetryGap = 5 * time.Second
+	workerLeaseRetryGap = DefaultWorkerLeaseRetryGap
 	// workerLeaseSpread is the upper bound of the random delay before the **first** lock attempt.
 	//
 	// Without it, the first pod to start grabs the leases for all envs at once: leader election works,
@@ -126,7 +125,7 @@ const (
 	// exits. That is the inherent shape of lease-based leader election, not a bug, and not worth adding
 	// an "actively step down" mechanism for (stepping down would create extra takeover gaps during a
 	// deploy).
-	workerLeaseSpread = 5 * time.Second
+	workerLeaseSpread = DefaultWorkerLeaseSpread
 )
 
 // workerPollLeaseKey is the lock key for an environment's poll right.
@@ -139,9 +138,7 @@ const (
 //
 // The granularity doesn't match either: that one is **one per daemon**, this one is **one per env**;
 // a pod may hold the poll right for several environments at once, or for none.
-func workerPollLeaseKey(envID string) string {
-	return "ama:core:workerpoll:" + envID
-}
+func workerPollLeaseKey(envID string) string { return WorkerPollLeaseKey(envID) }
 
 // SetPollLeases installs the poll leader-election ability.
 //
@@ -168,12 +165,7 @@ func (p *WorkerPool) SetPollLeases(leases Leases) {
 }
 
 // leaseSpreadDelay returns a random delay in [0, workerLeaseSpread); see the comment on that constant.
-func (p *WorkerPool) leaseSpreadDelay() time.Duration {
-	if p.leaseSpread <= 0 {
-		return 0
-	}
-	return time.Duration(mrand.Int63n(int64(p.leaseSpread)))
-}
+func (p *WorkerPool) leaseSpreadDelay() time.Duration { return LeaseSpreadDelay(p.leaseSpread) }
 
 // acquirePollLease tries to take this environment's poll right.
 //
@@ -184,11 +176,7 @@ func (p *WorkerPool) leaseSpreadDelay() time.Duration {
 //	(nil,   false, nil)  the lock is held by another pod: **normal, not an error**
 //	(nil,   false, err)  Redis error; back off and retry
 func (p *WorkerPool) acquirePollLease(ctx context.Context, envID string) (Lease, bool, error) {
-	if p.cfg.Leases == nil {
-		// degrade-open: without leader election every pod polls. Correct, just uses more quota.
-		return nil, true, nil
-	}
-	return p.cfg.Leases.Acquire(ctx, workerPollLeaseKey(envID), p.leaseTTL)
+	return AcquirePollLease(ctx, p.cfg.Leases, envID, p.leaseTTL)
 }
 
 // keepPollLease renews the lease periodically, and cancels this round of polling if renewal fails.
@@ -203,30 +191,5 @@ func (p *WorkerPool) acquirePollLease(ctx context.Context, envID string) (Lease,
 func (p *WorkerPool) keepPollLease(
 	ctx context.Context, lease Lease, cancel context.CancelFunc, logger *slog.Logger,
 ) {
-	if lease == nil {
-		return
-	}
-	ticker := time.NewTicker(p.leaseRenew)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			ok, err := lease.Renew(ctx, p.leaseTTL)
-			if err != nil {
-				// One failed renewal is not fatal: the TTL is 4x the renewal interval, so there are two more chances.
-				// Warn rather than Error: Redis hiccups are common, and this layer is a pure optimization.
-				logger.Warn("poll 权续约失败，还会再试", slog.Any("err", err))
-				continue
-			}
-			if !ok {
-				// The lock is no longer ours (this machine stalled for a long time and another pod took it).
-				// Stop polling right away and let the new holder own it.
-				logger.Info("poll 权已被别的实例接管，本实例停止 poll 这个环境")
-				cancel()
-				return
-			}
-		}
-	}
+	KeepPollLease(ctx, lease, p.leaseTTL, p.leaseRenew, cancel, logger)
 }
