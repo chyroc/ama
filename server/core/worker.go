@@ -594,60 +594,12 @@ func (a reaperLeaseAdapter) Acquire(ctx context.Context, key string, ttl time.Du
 // It only adds, never removes: once an environment has had a conversation, work may keep coming,
 // and stopping its worker would hang those sessions. On process exit, shutdown collects them all.
 func (p *WorkerPool) refresh(ctx context.Context) {
-	// ⚠️ **Call the domain package directly, not the forwarding methods on core.** Step 14 deleted
-	// that batch of `func (s *Service) X() { return s.workspaces.X() }`. The reason they existed
-	// was "the orchestration layer is not connected to the domain packages yet", and the
-	// orchestration layer now holds the domain packages directly (see the file header of
-	// orchestrator/orchestrator.go). This is an **in-process** caller, which can already see
-	// s.workspaces; an extra forwarding layer only means "who really provides this method" takes
-	// one more hop to find.
-	spaces, err := p.svc.workspaces.ListWorkspaces(ctx)
-	if err != nil {
-		p.log.Warn("worker 池扫描空间失败，下个周期重试", slog.Any("err", err))
-		return
-	}
-
-	for _, ws := range spaces {
-		bindings, err := p.svc.store.ListArkBindings(ctx, ws.ID)
-		if err != nil {
-			// ⚠️ **A query error and "this workspace has no bindings" must be kept apart.**
-			//
-			// These two used to be written together as `if err != nil || len(bindings) == 0 {
-			// continue }`, so a database blip **silently skipped** this workspace: the worker would
-			// not start, and in that workspace every tool call hung at requires_action, with **zero
-			// logs the whole time**. Monitoring saw "the agent is not working", which does not
-			// point to the database at all.
-			//
-			// Warn rather than Error: the next cycle retries, and a single failure is not a fault.
-			// But it must be logged, otherwise this path leaves no trace when things go wrong. When
-			// that incident was debugged, the Warn from ListWorkspaces above was the only clue
-			// left.
-			p.log.Warn("列空间的方舟绑定失败，跳过该空间，下个周期重试",
-				slog.String("workspace", ws.ID), slog.Any("err", err))
-			continue
-		}
-		if len(bindings) == 0 {
-			continue
-		}
-		// One worker per environment: dedupe, then start them one by one.
-		//
-		// **Deduping by environment is enough; no need to also dedupe by key**: an Environment
-		// belongs to the project of exactly one key (ensureBinding guarantees this; see
-		// ArkBinding.KeyFingerprint), so "the same envID" always means "the same key".
-		//
-		// But agentID must come from **this binding itself**: with three-level credentials,
-		// different agents may use different keys, and ensureWorker below uses agentID to resolve
-		// credentials. Picking an arbitrary agent would resolve to another key, and that key is
-		// invalid for this environment.
-		seen := map[string]bool{}
-		for _, b := range bindings {
-			if b.ArkEnvironmentID == "" || seen[b.ArkEnvironmentID] {
-				continue
-			}
-			seen[b.ArkEnvironmentID] = true
-			p.ensureWorker(ctx, ws.ID, b.AgentID, b.ArkEnvironmentID)
-		}
-	}
+	RefreshWorkers(ctx, RefreshWorkersHooks{
+		ListWorkspaces: p.svc.workspaces.ListWorkspaces,
+		ListBindings:   p.svc.store.ListArkBindings,
+		Ensure:         p.ensureWorker,
+		Logger:         p.log,
+	})
 }
 
 // ensureWorker starts a worker for one "workspace + environment" (does nothing if it is already
