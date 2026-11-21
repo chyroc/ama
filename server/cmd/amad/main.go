@@ -153,7 +153,17 @@ func run(ctx context.Context, runtime *app.Runtime) error {
 	if err != nil {
 		return err
 	}
-	runtime.OnClose("stores", func(context.Context) error { st.close(); return nil })
+	if err := app.NewStoreModule(app.StoreModuleConfig{
+		Memory: cfg.Server.UseMemStore(), Logger: log,
+		OpenMemory: func(context.Context) (app.StoreSelection, error) {
+			return app.StoreSelection{Value: st.core, Close: st.close}, nil
+		},
+		OpenShared: func(context.Context) (app.StoreSelection, error) {
+			return app.StoreSelection{Value: st.core, DSN: st.pgDSN, Close: st.close}, nil
+		},
+	}).Setup(ctx, runtime); err != nil {
+		return err
+	}
 	coreStore, feishuStore, authStore := st.core, st.feishu, st.auth
 	termRelay, workerWakes, mqDB, pgDSN := st.termRelay, st.workerWakes, st.mqDB, st.pgDSN
 
