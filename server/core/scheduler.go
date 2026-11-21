@@ -598,18 +598,5 @@ func (s *Scheduler) rescheduleOnly(ctx context.Context, sch apimodel.Schedule) {
 // the agent schedules "check CI in 10 minutes" it has a whole round of context in mind (which PR,
 // what to do on failure), and the new session that wakes up knows none of it.
 func scheduleUserMessage(sch apimodel.Schedule, prompt string) (json.RawMessage, error) {
-	if summary := strings.TrimSpace(sch.ContextSummary); summary != "" {
-		prompt = "# 这条任务创建时的上下文\n\n" + summary +
-			"\n\n---\n\n# 本次要做的事\n\n" + prompt
-	}
-	raw, err := json.Marshal(map[string]any{
-		"type": "user.message",
-		"content": []map[string]any{
-			{"type": "text", "text": prompt},
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("拼指令失败: %w", err)
-	}
-	return raw, nil
+	return ScheduleUserMessage(sch, prompt)
 }
