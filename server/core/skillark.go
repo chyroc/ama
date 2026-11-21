@@ -96,39 +96,11 @@ const maxArkSkillsPerAgent = 20
 func (s *Service) arkSkillsFor(
 	ctx context.Context, key ArkBindingKey, agent apimodel.Agent,
 ) ([]persistmodel.ArkSkillRef, string, error) {
-	if len(agent.SkillIDs) == 0 {
-		return nil, "", nil
-	}
-	if len(agent.SkillIDs) > maxArkSkillsPerAgent {
-		// This one **returns an error** instead of truncating: truncating would make "the 21st
-		// skill does not work" a silent behavior; the user sees 21 bindings in the UI but only
-		// 20 take effect.
-		return nil, "", fmt.Errorf(
-			"%w: 这个 Agent 绑定了 %d 个技能，方舟侧最多 %d 个，请先解绑一些",
-			ErrPrecondition, len(agent.SkillIDs), maxArkSkillsPerAgent)
-	}
-
-	log := s.log().With(
-		slog.String("workspace", key.WorkspaceID), slog.String("agent", key.AgentID))
-
-	refs := make([]persistmodel.ArkSkillRef, 0, len(agent.SkillIDs))
-	perSkill := make(map[string]string, len(agent.SkillIDs))
-
-	for _, id := range agent.SkillIDs {
-		up, err := s.ensureArkSkill(ctx, key, id)
-		if err != nil {
-			// If a single skill cannot be synced, skip it. **Do not abort the batch**: the other
-			// skills should still work.
-			log.Warn("技能同步到方舟失败，这一轮模型不会知道它",
-				slog.String("skill", id), slog.Any("err", err))
-			continue
-		}
-		refs = append(refs, up.Ref())
-		// The fingerprint only includes the successful ones; see the part of the function
-		// comment about "computing over what should be there caches the failure forever".
-		perSkill[id] = up.ContentHash
-	}
-	return refs, SkillsFingerprint(perSkill), nil
+	return SyncArkSkillRefs(ctx, agent, ErrPrecondition, s.log().With(
+		slog.String("workspace", key.WorkspaceID), slog.String("agent", key.AgentID)),
+		func(ctx context.Context, id string) (persistmodel.ArkSkillUpload, error) {
+			return s.ensureArkSkill(ctx, key, id)
+		}, SkillsFingerprint)
 }
 
 // ensureArkSkill makes sure the **current content** of an AMA skill has a matching skill
