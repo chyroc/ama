@@ -62,7 +62,7 @@ func (r *toolRouter) ToolsFuncForSession(
 		if err != nil {
 			// A transient storage failure still falls back to the container (it should not stop all
 			// existing container conversations), but leave a trace.
-			r.log.Warn("查 run 失败，工具集按 Docker 容器分流",
+			r.log.Warn("查 run 失败，工具集按默认执行端分流",
 				slog.String("ark_session", arkSessionID), slog.Any("err", err))
 		} else if run.HostID != "" {
 			useHost = true
