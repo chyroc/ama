@@ -645,36 +645,7 @@ func (s *Scheduler) finish(
 //   - oneshot: there is no "period" to compare, and it is deleted after running, so the stuck
 //     window is only one round anyway.
 func (s *Scheduler) lostRoundBefore(sch apimodel.Schedule, now time.Time) (bool, time.Duration) {
-	if sch.LastRunAt == "" || sch.Spec.Kind == apimodel.ScheduleOneshot {
-		return false, 0
-	}
-	last, err := apimodel.ParseISO(sch.LastRunAt)
-	if err != nil {
-		return false, 0
-	}
-	since := now.Sub(last)
-
-	// One period: interval uses EveryMs directly; cron works back from "the next one after it last
-	// finished".
-	var period time.Duration
-	switch sch.Spec.Kind {
-	case apimodel.ScheduleInterval:
-		period = time.Duration(sch.Spec.EveryMs) * time.Millisecond
-	default:
-		nextISO, nerr := ComputeNextRun(sch.Spec, last)
-		if nerr != nil {
-			return false, 0
-		}
-		next, perr := apimodel.ParseISO(nextISO)
-		if perr != nil {
-			return false, 0
-		}
-		period = next.Sub(last)
-	}
-	if period <= 0 {
-		return false, 0
-	}
-	return since > period+claimLease, since
+	return LostScheduleRoundBefore(sch, now, claimLease)
 }
 
 // rescheduleOnly only schedules the next fire time back, without touching the counters.
@@ -696,45 +667,7 @@ func (s *Scheduler) lostRoundBefore(sch apimodel.Schedule, now time.Time) (bool,
 // finish, which does the same job, already logs this (at the re-read failure); two functions
 // doing the same thing where one logs and one does not shows this was an omission, not a design.
 func (s *Scheduler) rescheduleOnly(ctx context.Context, sch apimodel.Schedule) {
-	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancel()
-
-	cur, err := s.cfg.Service.store.GetSchedule(writeCtx, sch.ID)
-	if err != nil {
-		// A deleted task is normal (no need to schedule back); failing to read is a fault and must be
-		// reported. Copy the check from finish; do not let "the DB hiccupped" and "the task is gone"
-		// share one silent return.
-		if !errors.Is(err, ErrNotFound) {
-			s.log.Warn("排回下次触发前重读失败，这条任务的 next_run_at 会一直空着、不会再被触发",
-				slog.String("schedule", sch.ID), slog.Any("err", err))
-		}
-		return
-	}
-	if cur.Status != apimodel.ScheduleActive {
-		// The user paused/archived it, so it should not be scheduled: normal path, silent.
-		return
-	}
-	next, err := ComputeNextRun(cur.Spec, s.now().UTC())
-	if err != nil {
-		// The expression cannot compute the next time: this is a **fault**, with consequences as bad
-		// as the one above. Sharing one return with "the user paused it" would make it fully invisible.
-		s.log.Warn("算不出下次触发时刻，这条任务的 next_run_at 会一直空着、不会再被触发",
-			slog.String("schedule", cur.ID), slog.Any("err", err))
-		return
-	}
-	cur.NextRunAt = next
-	cur.UpdatedAt = apimodel.NowISO()
-	// ⚠️ **Deliberately do not touch UpdatedBy**: the scheduler is a machine path, `auth.ActorFrom` is
-	// always an empty string here, and writing it would only blank out "who changed it last" without
-	// any error. Same as finish and applyOriginUpdate.
-	if _, err := s.cfg.Service.store.SaveSchedule(writeCtx, cur); err != nil {
-		s.log.Warn("排回下次触发失败", slog.String("schedule", cur.ID), slog.Any("err", err))
-	}
-	// Same as finish: schedule the time back first, then release the lease; the reverse order would let
-	// another instance grab and run it right away.
-	if err := s.cfg.Service.store.ReleaseScheduleClaim(writeCtx, cur.ID); err != nil {
-		s.log.Warn("释放认领租约失败", slog.String("schedule", cur.ID), slog.Any("err", err))
-	}
+	RescheduleOnly(ctx, s.cfg.Service.store, sch.ID, s.now().UTC(), ErrNotFound, s.log)
 }
 
 // scheduleUserMessage builds the user.message sent to the agent when the time comes.
