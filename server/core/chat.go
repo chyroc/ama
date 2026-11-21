@@ -1552,14 +1552,7 @@ func (s *Service) closeRun(run *apimodel.Run) {
 // this problem: the numbers were always there, just all wrong, and wrong in a way that looks
 // like "these tasks really ran for a long time".
 func (s *Service) closeRunAt(run *apimodel.Run, at time.Time) {
-	run.EndedAt = apimodel.FormatISO(at)
-	if started, err := time.Parse("2006-01-02T15:04:05.000Z", run.StartedAt); err == nil {
-		ms := at.Sub(started).Milliseconds()
-		if ms < 0 {
-			ms = 0
-		}
-		run.DurationMs = &ms
-	}
+	CloseRunAt(run, at)
 }
 
 // touchThread maintains run.Threads from thread events.
@@ -1568,34 +1561,7 @@ func (s *Service) closeRunAt(run *apimodel.Run, at time.Time) {
 // the threads section of RunDetailPage. When the same thread appears again, its status is
 // updated rather than a new one added.
 func (s *Service) touchThread(run *apimodel.Run, ev apimodel.RunEvent) {
-	if ev.ThreadID == nil || *ev.ThreadID == "" {
-		return
-	}
-	status := "running"
-	switch ev.Type {
-	case "session.thread_status_idle":
-		status = "idle"
-	case "session.thread_status_terminated":
-		status = "terminated"
-	}
-
-	for i := range run.Threads {
-		if run.Threads[i].ID == *ev.ThreadID {
-			run.Threads[i].Status = status
-			if status != "running" && run.Threads[i].EndedAt == "" {
-				run.Threads[i].EndedAt = apimodel.NowISO()
-			}
-			return
-		}
-	}
-	run.Threads = append(run.Threads, apimodel.RunThread{
-		ID:        *ev.ThreadID,
-		AgentName: agentNameOf(ev.Raw, run.AgentName),
-		Status:    status,
-		// The main thread's parent is null: **the key must be present**, so it is a pointer without omitempty.
-		ParentThreadID: nil,
-		StartedAt:      apimodel.NowISO(),
-	})
+	TouchRunThread(run, ev, time.Now().UTC())
 }
 
 // arkKey gets a workspace's Ark credentials, and gives an actionable Chinese hint when they are not configured.
@@ -1973,12 +1939,7 @@ func firstUserText(raw []json.RawMessage) string {
 
 // isInterruptOnly reports whether this batch of upstream events is only interrupts (then the run should not be set back to running).
 func isInterruptOnly(raw []json.RawMessage) bool {
-	for _, item := range raw {
-		if arkframe.Type(item) != "user.interrupt" {
-			return false
-		}
-	}
-	return len(raw) > 0
+	return IsInterruptOnly(raw)
 }
 
 // truncateTitle uses the start of the message as the title, behaving the same as the frontend
@@ -1989,12 +1950,7 @@ func isInterruptOnly(raw []json.RawMessage) bool {
 // in the BMP, the rune count equals the number of UTF-16 code units, so both sides give the
 // same result.
 func truncateTitle(text string) string {
-	oneLine := strings.Join(strings.Fields(text), " ")
-	runes := []rune(oneLine)
-	if len(runes) > 30 {
-		return string(runes[:30]) + "…"
-	}
-	return oneLine
+	return TruncateTitle(text)
 }
 
 // hostOnRun returns the host machine (id, source) this run should snapshot: it has a value
