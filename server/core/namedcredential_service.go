@@ -44,7 +44,10 @@ type NamedCredentialHooks struct {
 	// its secret. It does not relax validation for newly created credentials.
 	LegacyEmptyName bool
 	UnknownReason   string
-	Logger          *slog.Logger
+	// PrepareNew applies provider-specific fields, such as a fixed site, before the
+	// first verification and single insert. It must not change ID, actor or public identity.
+	PrepareNew func(NamedCredentialRecord) NamedCredentialRecord
+	Logger     *slog.Logger
 }
 
 // NamedCredentialProvider implements collection CRUD and secret retrieval for downstream
@@ -209,6 +212,9 @@ func (p *NamedCredentialProvider) Add(
 		ID: p.hooks.NewID(), Actor: actor, Name: label, PublicID: publicID,
 		Secret: plaintextSecret, SecretMasked: secret.Mask(plaintextSecret, 4),
 		CreatedAt: now, UpdatedAt: now,
+	}
+	if p.hooks.PrepareNew != nil {
+		record = p.hooks.PrepareNew(record)
 	}
 	verification := p.verify(ctx, record)
 	if !verification.Valid && !verification.Unknown {

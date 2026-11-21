@@ -116,6 +116,29 @@ func TestNamedCredentialMutationChecksOwnership(t *testing.T) {
 	}
 }
 
+func TestNamedCredentialPrepareNewRunsBeforeFirstVerificationAndInsert(t *testing.T) {
+	store := &namedCredentialTestStore{}
+	provider := NewNamedCredentialProvider(NamedCredentialHooks{
+		Store: store, Provider: "example", NewID: func() string { return "credential_example" },
+		PrepareNew: func(record NamedCredentialRecord) NamedCredentialRecord {
+			record.Site = "example-site"
+			return record
+		},
+		Verify: func(_ context.Context, record NamedCredentialRecord) NamedCredentialVerification {
+			if record.Site != "example-site" {
+				t.Fatalf("verification happened before provider initialization: %#v", record)
+			}
+			return NamedCredentialVerification{Unknown: true}
+		},
+	})
+	if _, err := provider.Add(context.Background(), "owner@example.com", "named", "application_one", "secret_one"); err != nil {
+		t.Fatal(err)
+	}
+	if store.puts != 1 || store.records["credential_example"].Site != "example-site" {
+		t.Fatalf("new record was not initialized in one insert: puts=%d records=%#v", store.puts, store.records)
+	}
+}
+
 func TestNamedCredentialLimitedAndUnknownAreNotInvalid(t *testing.T) {
 	store := &namedCredentialTestStore{}
 	provider := newNamedCredentialTestProvider(store, func(context.Context, NamedCredentialRecord) NamedCredentialVerification {
