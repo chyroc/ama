@@ -20,6 +20,21 @@ import (
 	"time"
 )
 
+// ArkWorkState is the state returned by the work query used by rescue checks.
+type ArkWorkState = arkWorkState
+
+// ArkWorkGetTimeout bounds one work-state query.
+const ArkWorkGetTimeout = arkWorkGetTimeout
+
+// These values mirror Ark's documented work states.
+const (
+	ArkWorkStateQueued   = arkWorkStateQueued
+	ArkWorkStateStarting = arkWorkStateStarting
+	ArkWorkStateActive   = arkWorkStateActive
+	ArkWorkStateStopping = arkWorkStateStopping
+	ArkWorkStateStopped  = arkWorkStateStopped
+)
+
 // arkWorkState only takes the fields the sweep needs; everything else is ignored.
 type arkWorkState struct {
 	State string `json:"state"`
@@ -37,6 +52,17 @@ const (
 // arkWorkGetTimeout is the limit for a single lookup. It runs in the sweep's ticker
 // goroutine, so getting stuck only delays this round of rescue a little; 15 seconds is enough.
 const arkWorkGetTimeout = 15 * time.Second
+
+// FetchArkWorkState queries one work's state. 404 means not found and must not be
+// treated as stopped by rescue callers.
+func FetchArkWorkState(
+	ctx context.Context, baseURL, apiKey, environmentID, workID string,
+) (state string, found bool, err error) {
+	return fetchArkWorkState(ctx, baseURL, apiKey, environmentID, workID)
+}
+
+// TruncateForLog bounds upstream error text before writing it to logs.
+func TruncateForLog(s string, n int) string { return truncateForLog(s, n) }
 
 // fetchArkWorkState looks up the current state of a work item on the Ark side.
 //
