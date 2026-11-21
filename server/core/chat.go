@@ -1759,7 +1759,7 @@ func arkAgentName(a apimodel.Agent) string {
 
 // isDoneFrame reports whether this is Ark's stream end frame `[DONE]`. It is not JSON.
 func isDoneFrame(raw []byte) bool {
-	return strings.TrimSpace(string(raw)) == "[DONE]"
+	return IsDoneFrame(raw)
 }
 
 // isDeltaFrame reports whether this is an incremental preview frame.
@@ -1770,51 +1770,24 @@ func isDoneFrame(raw []byte) bool {
 //	{"type":"event_start","event":{"id":"sevt-...","type":"agent.message"}}
 //	{"type":"event_delta","event_id":"sevt-...","delta":{"type":"content_delta",...}}
 func isDeltaFrame(raw []byte) bool {
-	switch arkframe.Type(raw) {
-	case "event_start", "event_delta":
-		return true
-	}
-	return false
+	return IsDeltaFrame(raw)
 }
 
 // sessionErrorMessage gets the error message from a session.error event.
 func sessionErrorMessage(raw []byte) string {
-	var env struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return ""
-	}
-	return env.Error.Message
+	return SessionErrorMessage(raw)
 }
 
 // agentNameOf gets agent_name from a thread event, falling back to the name on the run when missing.
 func agentNameOf(raw []byte, fallback string) string {
-	var env struct {
-		AgentName string `json:"agent_name"`
-	}
-	if err := json.Unmarshal(raw, &env); err == nil && env.AgentName != "" {
-		return env.AgentName
-	}
-	return fallback
+	return AgentNameOf(raw, fallback)
 }
 
 // addUsage adds the model_usage of one span.model_request_end into the total.
 //
 // All four fields must be added: the frontend RunsPage adds them up, and missing one gives NaN.
 func addUsage(sum *apimodel.TokenUsage, raw []byte) {
-	var env struct {
-		ModelUsage *apimodel.TokenUsage `json:"model_usage"`
-	}
-	if err := json.Unmarshal(raw, &env); err != nil || env.ModelUsage == nil {
-		return
-	}
-	sum.InputTokens += env.ModelUsage.InputTokens
-	sum.OutputTokens += env.ModelUsage.OutputTokens
-	sum.CacheReadInputTokens += env.ModelUsage.CacheReadInputTokens
-	sum.CacheCreationInputTokens += env.ModelUsage.CacheCreationInputTokens
+	AddTokenUsage(sum, raw)
 }
 
 // TitleFromEvents computes the session title a batch of upstream events should fill in: take
