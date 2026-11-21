@@ -52,13 +52,10 @@ package core
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"time"
 
@@ -816,47 +813,7 @@ const arkSpecFingerprintVersion = "v1:"
 // SkillsFingerprint (there, returning an empty string for an empty set is correct: the
 // desired state it expresses, "no skills on the Ark side", was also true in the old version).
 func ArkSpecFingerprint(spec ArkAgentSpec) string {
-	h := sha256.New()
-	// Write each field with a **length prefix** instead of concatenating directly.
-	//
-	// Without lengths, ("ab","c") and ("a","bc") give the same fingerprint, so a change like
-	// "move the last sentence of the prompt to the start of the description" would not trigger a
-	// catch-up. Length prefixes are an existing practice in this repo (see SkillsFingerprint
-	// and skillContentFingerprint).
-	write := func(parts ...string) {
-		for _, p := range parts {
-			_, _ = fmt.Fprintf(h, "%d:%s", len(p), p)
-		}
-	}
-	write(spec.Name, spec.Description, spec.System, spec.Model, spec.Speed, spec.BaseAgent)
-	// Tools and CustomTools must be in the fingerprint too: they are also sent by
-	// UpdateAgentSpec (tools are replaced as a whole), and leaving them out would make "turn a
-	// built-in tool on/off for the agent" not take effect. For the worker-side datasource tools
-	// that means: enable a datasource, start a chat, and the existing Ark Agent gets the new
-	// declaration through syncBindingSpec instead of staying without it forever, with no error.
-	write(spec.Tools...)
-	for _, ct := range spec.CustomTools {
-		write(ct.Name, ct.Description)
-		// InputSchema is a map with random iteration order. **It must be sorted**, otherwise the same
-		// spec gives a different fingerprint each time, and every chat wastes one UpdateAgent call.
-		keys := make([]string, 0, len(ct.InputSchema))
-		for k := range ct.InputSchema {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			// Encode the value as JSON before adding it to the fingerprint: it is any, and %v output for maps is unstable too.
-			blob, err := json.Marshal(ct.InputSchema[k])
-			if err != nil {
-				// If it cannot be encoded, use only the key name. Such input is a programming error (see how
-				// ma.toolItems handles it: it skips that property), and should not make fingerprinting fail.
-				blob = nil
-			}
-			write(k, string(blob))
-		}
-		write(ct.Required...)
-	}
-	return arkSpecFingerprintVersion + hex.EncodeToString(h.Sum(nil))
+	return FingerprintArkSpec(spec, arkSpecFingerprintVersion, nil, spec.CustomTools)
 }
 
 // triggerManual is the trigger source of the chat path.
