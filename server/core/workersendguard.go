@@ -469,52 +469,10 @@ func (g *workSendGuard) permanentErr() error {
 func (p *WorkerPool) watchRunTerminated(
 	ctx context.Context, arkSessionID string, cancel context.CancelFunc, logger *slog.Logger,
 ) {
-	if p == nil || p.svc == nil || p.svc.store == nil || arkSessionID == "" || cancel == nil {
+	if p == nil || p.svc == nil || p.svc.store == nil {
 		return
 	}
-	ticker := time.NewTicker(workRunCheckInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-
-		run, err := p.svc.store.GetRun(ctx, arkSessionID)
-		if err != nil {
-			// Not found (probes, paths that do not store a Run) or a database blip: make no judgment.
-			// Look again next tick; treating either as a final state would kill normal work.
-			continue
-		}
-		abandoned := idleRunAbandoned(run, time.Now().UTC())
-		if run.Status != apimodel.RunTerminated && !abandoned {
-			continue
-		}
-
-		// Warn instead of Info: reaching here means a work is still running after its run was judged
-		// dead. That is **evidence of a failure** (either a tool is stuck or a result keeps failing to
-		// deliver), not everyday noise.
-		//
-		// The two match reasons must be reported separately: terminated is "the run was judged dead",
-		// abandoned is "the run finished normally but the work did not exit by itself". The latter
-		// points at the SDK's fallback polling path never exiting (see workIdleRunGrace). The
-		// debugging direction is completely different, and one combined message would send people
-		// the wrong way.
-		reason := "run 已是终态"
-		if abandoned {
-			reason = "run 早已答完一轮并结算，这条 work 却还没退出（疑似卡在 SDK 的轮询路径）"
-		}
-		logger.Warn("结束仍在跑的 work："+reason,
-			slog.String("ark_session", arkSessionID),
-			slog.String("run_status", string(run.Status)),
-			slog.String("ended_at", run.EndedAt),
-			slog.String("说明", "继续跑只会对一条已收尾的会话重试投递、白烧方舟 RPM 配额，"+
-				"见 core/workersendguard.go 文件头"))
-		cancel()
-		return
-	}
+	WatchRunTerminated(ctx, arkSessionID, cancel, p.svc.store.GetRun, workRunCheckInterval, logger)
 }
 
 // idleRunAbandoned decides "this run finished normally long ago, but the work is still
@@ -539,12 +497,5 @@ func (p *WorkerPool) watchRunTerminated(
 // alone": a wrong kill cuts off the user's conversation, a missed kill only burns quota a
 // bit longer, and those costs are not symmetric.
 func idleRunAbandoned(run apimodel.Run, now time.Time) bool {
-	if run.Status != apimodel.RunIdle || run.EndedAt == "" {
-		return false
-	}
-	ended, err := time.Parse("2006-01-02T15:04:05.000Z", run.EndedAt)
-	if err != nil {
-		return false
-	}
-	return now.Sub(ended) >= workIdleRunGrace
+	return IdleRunAbandoned(run, now)
 }
