@@ -560,25 +560,10 @@ func (s *Service) ListRunSandboxFiles(ctx context.Context, runID, path string) (
 // It is a separate pure function so the truncation branch can be tested directly; in a real
 // environment it takes 500 files to trigger.
 func buildSandboxListing(status, path string, entries []SandboxFSEntry) SandboxListing {
-	out := SandboxListing{Status: status, Path: path, Files: []SandboxFile{}}
-	if len(entries) > sandboxListMaxEntries {
-		entries = entries[:sandboxListMaxEntries]
-		out.Truncated = true
-	}
-	for _, e := range entries {
-		out.Files = append(out.Files, SandboxFile{
-			Name: e.Name,
-			Path: e.Path,
-			// Use the Type given by the executor as is, do not compute it from Mode bits;
-			// see the comment on SandboxFile.Type.
-			Type:          e.Type,
-			Size:          e.Size,
-			Permissions:   e.Permissions,
-			ModTime:       e.ModTime,
-			SymlinkTarget: e.SymlinkTarget,
-		})
-	}
-	return out
+	return BuildSandboxListing(status, path, entries, sandboxListMaxEntries, func(e SandboxFSEntry) apimodel.SandboxFile {
+		return apimodel.SandboxFile{Name: e.Name, Path: e.Path, Type: e.Type, Size: e.Size,
+			Permissions: e.Permissions, ModTime: e.ModTime, SymlinkTarget: e.SymlinkTarget}
+	})
 }
 
 // cleanSandboxPath normalizes the path given by the user and blocks escaping the root.
@@ -595,25 +580,7 @@ func buildSandboxListing(status, path string, entries []SandboxFSEntry) SandboxL
 // latter is handled by the container's own file permissions, and we can only see what the
 // agent can see anyway.
 func cleanSandboxPath(path string) (string, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		// If not given, start from the root. Use a default instead of an error: when the
-		// frontend first opens the panel it has no path to give.
-		return "/", nil
-	}
-	if !strings.HasPrefix(path, "/") {
-		return "", fmt.Errorf("%w: 路径必须以 / 开头", ErrInvalidArgument)
-	}
-	// path.Clean folds away ".." and extra "/". A path starting with / **cannot** go above the
-	// root after Clean ("/.." → "/"), so this step also guards against escaping.
-	clean := gopath.Clean(path)
-	if !strings.HasPrefix(clean, "/") {
-		// In theory we never get here (the code above ensures it starts with /). It stays
-		// because this is a security boundary: if Clean's behavior ever changes, we would
-		// rather error than let an out-of-bounds path through.
-		return "", fmt.Errorf("%w: 路径不合法", ErrInvalidArgument)
-	}
-	return clean, nil
+	return CleanSandboxPath(path, ErrInvalidArgument)
 }
 
 // ---------------------------------------------------------------------------
@@ -883,12 +850,7 @@ func (s *Service) ReadRunSandboxFile(ctx context.Context, runID, path string) (S
 // purpose: such rules would misjudge logs with lots of control characters as binary, and
 // those are among the things users most want to see.
 func isBinary(data []byte) bool {
-	for _, b := range data {
-		if b == 0 {
-			return true
-		}
-	}
-	return false
+	return IsBinaryContent(data)
 }
 
 // sandboxRawFileMaxBytes is the maximum file size served by StreamRunSandboxFileRaw (64 MiB).
