@@ -66,7 +66,7 @@ const (
 	// 15s: sparse enough not to add noticeable read load on Ark (4 ListEvents per minute per
 	// active work), yet dense enough that detection delay is decided mainly by the threshold
 	// below, not by the check interval.
-	workFailoverTick = 15 * time.Second
+	workFailoverTick = DefaultWorkFailoverTick
 
 	// workToolProgressBound is how long "the oldest tool call waiting for its result" may
 	// wait at most; past that we fail over.
@@ -80,12 +80,12 @@ const (
 	// 180s: leaves 30s of margin over the 150s worst normal path, and is still far below the
 	// 10-minute turn timeout on the feishu side and the 30-minute reapStaleRuns, so the user
 	// gets to "rerun on another worker and get a real answer" before those.
-	workToolProgressBound = 180 * time.Second
+	workToolProgressBound = DefaultWorkToolProgressBound
 
 	// workFailoverListTimeout is the timeout for one event fetch by the watcher. The watcher
 	// must not stall because its own event read is stuck. It reads the unwrapped raw api, and
 	// this adds a bounded timeout on top.
-	workFailoverListTimeout = 10 * time.Second
+	workFailoverListTimeout = DefaultWorkFailoverListTimeout
 )
 
 // errWorkAbandoned is a non-fatal error returned if a heartbeat request still slips through
@@ -167,89 +167,5 @@ func (p *WorkerPool) watchWorkToolProgressWith(
 	item selfhosted.WorkItem, cancelWork context.CancelFunc, logger *slog.Logger,
 	tick, bound time.Duration,
 ) {
-	sessionID := item.SessionIDValue()
-	// firstSeen records when each orphan call id (tool_use without tool_result) was first
-	// seen. It is rebuilt each round from the current orphan set: answered calls are
-	// removed from it automatically.
-	firstSeen := map[string]time.Time{}
-
-	ticker := time.NewTicker(tick)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case now := <-ticker.C:
-			if f.isAbandoned() {
-				return
-			}
-			listCtx, cancel := context.WithTimeout(ctx, workFailoverListTimeout)
-			orphans, used, answered, err := listOrphanToolCalls(listCtx, api, sessionID)
-			cancel()
-			if err != nil {
-				// If the watcher itself cannot read events it should neither misjudge nor
-				// stall: skip this round and try again next round.
-				logger.Debug("failover 监工拉事件失败，本轮跳过",
-					slog.String("work_id", item.ID), slog.Any("err", err))
-				continue
-			}
-
-			current := map[string]selfhosted.Event{}
-			for _, ev := range orphans {
-				current[toolCallID(ev)] = ev
-			}
-			// For calls that now have a result (no longer orphans), clear their first-seen time.
-			for id := range firstSeen {
-				if _, ok := current[id]; !ok {
-					delete(firstSeen, id)
-				}
-			}
-			// Newly appeared orphans start their timer from this round.
-			for id := range current {
-				if _, ok := firstSeen[id]; !ok {
-					firstSeen[id] = now
-				}
-			}
-			if len(current) == 0 {
-				// The model is still thinking and has not called a tool, or all tool
-				// results are back. That is normal; stay quiet.
-				continue
-			}
-
-			// Find the orphan that has waited the longest.
-			var oldestID string
-			var oldestAt time.Time
-			for id := range current {
-				ts := firstSeen[id]
-				if oldestID == "" || ts.Before(oldestAt) {
-					oldestID, oldestAt = id, ts
-				}
-			}
-			age := now.Sub(oldestAt).Round(time.Second)
-			if age < bound {
-				logger.Debug("工具结果待回传中，failover 监工继续等",
-					slog.String("work_id", item.ID),
-					slog.Int("待回传", len(current)),
-					slog.Duration("最老等待", age))
-				continue
-			}
-
-			// Judge the executor stuck: let go + stop. After stopping, the SDK's HandleItem
-			// cleanup reaches StopWork, but workFailover swallows it. So Ark gets no
-			// termination, only sees the heartbeat stop, and reclaim re-dispatches after
-			// 45s (it must be picked up within 90s, or the server stops it automatically).
-			logger.Warn("work 长时间没有工具结果，判定执行者卡死，交回方舟重派",
-				slog.String("work_id", item.ID),
-				slog.String("ark_session", sessionID),
-				slog.String("最老工具调用", oldestID+":"+current[oldestID].Name),
-				slog.Duration("已等待", age),
-				slog.Duration("判定阈值", bound),
-				slog.Int("发起", used),
-				slog.Int("已回传", answered),
-				slog.Int("待回传", len(current)))
-			f.abandon()
-			cancelWork()
-			return
-		}
-	}
+	WatchWorkToolProgress(ctx, f, api, item, cancelWork, logger, tick, bound)
 }
