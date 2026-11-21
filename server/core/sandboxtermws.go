@@ -169,7 +169,7 @@ func (s *Service) StreamRunSandboxTerminalWS(
 	//
 	// Same as the terminalId/runId pairing check in WriteRunSandboxTerminal: the same shape of
 	// privilege escalation.
-	if row.RunID != runID {
+	if !TerminalMatchesRun(row.RunID, runID) {
 		s.log().Warn("终端 WS 票据与运行不匹配（可能是越权尝试）",
 			slog.String("actor", row.Actor),
 			slog.String("ticket_run", row.RunID),

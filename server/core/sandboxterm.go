@@ -75,9 +75,7 @@ package core
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -615,14 +613,7 @@ func terminalTopic(terminalID string) string { return "term:" + terminalID }
 //
 // Same approach as arkWorkerID (core/worker.go): a random suffix guarantees no collision.
 func newTerminalID() string {
-	var b [12]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// If random bytes cannot be obtained, fall back to a timestamp. **Do not panic**: a terminal
-		// connection should not fail to open because of this, and in practice this path never happens
-		// (crypto/rand failing means the system already has big problems).
-		return fmt.Sprintf("term_%d", time.Now().UnixNano())
-	}
-	return "term_" + hex.EncodeToString(b[:])
+	return NewTerminalID()
 }
 
 // touchTerminal records "this Run's terminal was in use just now", pushing the pause back by
