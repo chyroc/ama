@@ -148,6 +148,7 @@ func roots() []any {
 		apimodel.IssueDraft{},
 		apimodel.LarkAppQuery{},
 		apimodel.MarketPackage{},
+		apimodel.SourceScanResult{},
 		apimodel.IntegrationCredentialView{},
 		apimodel.LarkUserApp{},
 		apimodel.PendingMessage{},
