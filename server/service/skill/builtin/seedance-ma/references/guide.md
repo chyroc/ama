@@ -21,7 +21,7 @@ python3 ./skills/seedance-ma/scripts/seedance_ma.py generate \
   --title "产品微距广告" \
   --ratio 16:9 \
   --duration 5 \
-  --wait-seconds 85
+  --wait-seconds 45
 ```
 
 常用参数：
@@ -31,7 +31,7 @@ python3 ./skills/seedance-ma/scripts/seedance_ma.py generate \
 - `--duration`（可选）：单段视频秒数，范围 `4`~`15`，默认 `5`
 - `--reference-images`（可选）：参考图 URL（多个用英文逗号分隔），可用于首帧图生视频或商品外观保持
 - `--multi-clip`（可选开关）：当用户明确要求多镜头拼接长视频时开启
-- `--wait-seconds`（可选）：单次工具调用最长轮询秒数，默认 `85`（上限 `95`）
+- `--wait-seconds`（可选）：单次工具调用最长轮询秒数，默认 `45`（上限 `45`）。低于 TAE 约 60 秒的 HTTP 超时，长任务继续用多次 `watch`。
 
 ### `watch` — 续接轮询正在渲染中的视频任务
 
@@ -40,7 +40,7 @@ python3 ./skills/seedance-ma/scripts/seedance_ma.py generate \
 ```bash
 python3 ./skills/seedance-ma/scripts/seedance_ma.py watch \
   --session-id <sesn-...> \
-  --wait-seconds 85
+  --wait-seconds 45
 ```
 
 通常调用 1~3 次 `watch` 即可拿到 `data.outcome == "completed"` 及可播放的 `data.video_url`。
@@ -54,7 +54,7 @@ python3 ./skills/seedance-ma/scripts/seedance_ma.py generate-images \
   --title "产品核心特性 4 张组图" \
   --ratio 16:9 \
   --count 4 \
-  --wait-seconds 85 \
+  --wait-seconds 45 \
   --prompt "制作一套 4 张统一黑金科技版式的组图海报，分别介绍第 1 张……第 4 张……"
 ```
 

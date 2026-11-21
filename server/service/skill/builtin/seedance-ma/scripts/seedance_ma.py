@@ -532,7 +532,7 @@ def poll_session(
     output_dir: pathlib.Path,
     action_name: str,
 ) -> Dict[str, Any]:
-    bounded_wait = max(5.0, min(float(wait_seconds), 95.0))
+    bounded_wait = max(5.0, min(float(wait_seconds), 45.0))
     start_ts = time.monotonic()
     deadline = start_ts + bounded_wait
     nudged = False
@@ -642,7 +642,7 @@ def poll_session(
     script_ref = sys.argv[0] or "./skills/seedance-ma/scripts/seedance_ma.py"
     next_cmd = (
         f"python3 {script_ref} watch "
-        f"--session-id {session_id} --wait-seconds 85 --output-dir {output_dir}"
+        f"--session-id {session_id} --wait-seconds 45 --output-dir {output_dir}"
     )
     video_model = (os.environ.get("ARK_SEEDANCE_VIDEO_MODEL") or load_config().get("video_model") or "").strip() or None
     return {
@@ -1166,7 +1166,7 @@ def poll_image_session(
     output_dir: pathlib.Path,
     action_name: str,
 ) -> Dict[str, Any]:
-    bounded_wait = max(5.0, min(float(wait_seconds), 240.0))
+    bounded_wait = max(5.0, min(float(wait_seconds), 45.0))
     start_ts = time.monotonic()
     deadline = start_ts + bounded_wait
     nudged_view = False
@@ -1314,7 +1314,7 @@ def poll_image_session(
     script_ref = sys.argv[0] or "./skills/seedance-ma/scripts/seedance_ma.py"
     next_cmd = (
         f"python3 {script_ref} watch-images "
-        f"--session-id {session_id} --count {expected_count} --wait-seconds 85 --output-dir {output_dir}"
+        f"--session-id {session_id} --count {expected_count} --wait-seconds 45 --output-dir {output_dir}"
     )
     image_model = (os.environ.get("ARK_SEEDANCE_IMAGE_MODEL") or load_config().get("image_model") or "").strip() or None
     return {
@@ -1453,8 +1453,8 @@ def build_parser() -> argparse.ArgumentParser:
     gen_p.add_argument(
         "--wait-seconds",
         type=float,
-        default=85.0,
-        help="Max seconds to poll in this call (default 85, max 95)",
+        default=45.0,
+        help="Max seconds to poll in this call (default 45, max 45)",
     )
     gen_p.add_argument(
         "--output-dir",
@@ -1467,8 +1467,8 @@ def build_parser() -> argparse.ArgumentParser:
     watch_p.add_argument(
         "--wait-seconds",
         type=float,
-        default=85.0,
-        help="Max seconds to poll in this call (default 85, max 95)",
+        default=45.0,
+        help="Max seconds to poll in this call (default 45, max 45)",
     )
     watch_p.add_argument(
         "--output-dir",
@@ -1490,8 +1490,8 @@ def build_parser() -> argparse.ArgumentParser:
     gen_img_p.add_argument(
         "--wait-seconds",
         type=float,
-        default=85.0,
-        help="Max seconds to poll in this call (default 85, max 240)",
+        default=45.0,
+        help="Max seconds to poll in this call (default 45, max 45)",
     )
     gen_img_p.add_argument(
         "--output-dir",
@@ -1505,8 +1505,8 @@ def build_parser() -> argparse.ArgumentParser:
     watch_img_p.add_argument(
         "--wait-seconds",
         type=float,
-        default=85.0,
-        help="Max seconds to poll in this call (default 85, max 240)",
+        default=45.0,
+        help="Max seconds to poll in this call (default 45, max 45)",
     )
     watch_img_p.add_argument(
         "--output-dir",
