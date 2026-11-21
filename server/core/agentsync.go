@@ -501,18 +501,7 @@ func (a *AgentSyncer) runOne(ctx context.Context, task persistmodel.AgentSyncTas
 func (a *AgentSyncer) requeueIfResyncWanted(
 	ctx context.Context, task persistmodel.AgentSyncTaskRow, log *slog.Logger,
 ) bool {
-	// Read it again: in the snapshot taken at claim time, resync_requested is always false
-	// (the flag is set after that). **Not rereading is the same as this field not existing.**
-	cur, err := a.svc.store.LatestAgentSyncTask(ctx, task.AgentID)
-	if err != nil || cur.ID != task.ID || !cur.ResyncRequested {
-		return false
-	}
-	log.Info("同步期间 agent 又被保存过，再跑一轮")
-	if err := a.svc.store.RequeueAgentSyncTask(ctx, task.ID, a.now().UTC()); err != nil {
-		log.Warn("重排同步任务失败，等租约过期后回收", slog.Any("err", err))
-		return false
-	}
-	return true
+	return RequeueAgentSyncIfRequested(ctx, a.svc.store, task, a.now().UTC(), log)
 }
 
 // syncAgentToArk really syncs an agent to Ark, and returns which step failed.
