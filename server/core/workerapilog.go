@@ -26,7 +26,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/volcengine/ark-runtime-go/arkruntime/selfhosted"
@@ -155,15 +154,4 @@ func (a *instrumentedWorkerAPI) OpenSkill(ctx context.Context, req selfhosted.Op
 
 // arkStatusOf gets the HTTP status code from an Ark error; returns 0 if there is none. Only used
 // for logs; it does not change what the error means.
-func arkStatusOf(err error) int {
-	var apiErr *selfhosted.APIError
-	if errors.As(err, &apiErr) {
-		return apiErr.StatusCode
-	}
-	// context cancel/timeout has no status code; use a readable placeholder so a 0 in the logs does
-	// not look like a failed lookup.
-	if errors.Is(err, context.DeadlineExceeded) {
-		return http.StatusRequestTimeout
-	}
-	return 0
-}
+func arkStatusOf(err error) int { return ArkStatusOf(err) }
