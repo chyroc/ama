@@ -32,11 +32,14 @@ import (
 func fakeArk(t *testing.T, status int, requestID, body string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v3/agents" {
-			t.Errorf("探针应只读 GET /api/v3/agents，实际 %s %s", r.Method, r.URL.Path)
-		}
-		if r.Method != http.MethodGet {
-			t.Errorf("探针必须是无副作用的 GET，实际 %s", r.Method)
+		// Local port-discovery scanners may open this listener and request /. That
+		// traffic is not an Ark probe. Keep the strict read-only assertion for the
+		// actual API call, and reject unrelated requests without confusing them with it.
+		if r.URL.Path != "/api/v3/agents" || r.Method != http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"code":"NotFound","message":"not the Ark probe endpoint"}}`))
+			return
 		}
 		if requestID != "" {
 			w.Header().Set("X-Request-Id", requestID)
