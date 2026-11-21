@@ -76,11 +76,7 @@ func (s *Service) arkConsoleRegion(ctx context.Context, workspaceID, agentID str
 	if err != nil {
 		return ""
 	}
-	if sec.Region == "" {
-		// Same fallback as arkKey, word for word (chat.go): older credential docs may lack this key.
-		return apimodel.RegionCNBeijing
-	}
-	return sec.Region
+	return ArkConsoleRegion(sec.Region)
 }
 
 // agentConsole connects the Ark lookup ability on the core side to service/agent (the console
