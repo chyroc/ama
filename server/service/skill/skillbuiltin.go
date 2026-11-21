@@ -319,7 +319,7 @@ func BuiltinSkills() []apimodel.Skill {
 			Description:   "调用火山方舟线上托管的 Seedance MA 智能体进行视频分镜策划、文生/图生视频、多镜头合成，以及单图与系列组图生成。",
 			Instructions:  builtinInstructionsSeedanceMA,
 			Source:        apimodel.SkillBuiltin,
-			LatestVersion: "1",
+			LatestVersion: "2",
 			Tags:          []string{"内置", "Seedance", "视频生成", "组图生成"},
 			Files:         cloneBuiltinSeedanceMAFileMeta(),
 			CreatedAt:     builtinSkillTime,
@@ -728,7 +728,7 @@ const builtinInstructionsSeedanceMA = `# seedance-ma：火山方舟 Seedance MA 
 
 ## 标准视频生成工作流（分段轮询防超时）
 
-渲染高清视频通常需要 **90~150 秒**，单次 Bash 工具调用有超时上限，因此脚本采用 **85 秒分段轮询（` + "`generate`" + ` → ` + "`watch`" + `）** 机制：
+渲染高清视频通常需要 **90~150 秒**，单次 Bash 工具调用有超时上限，因此脚本采用 **45 秒分段轮询（` + "`generate`" + ` → ` + "`watch`" + `）** 机制。TAE HTTP 客户端约 60 秒超时，不能把单次轮询设得更长。
 
 ### 第一步：发起视频创作任务（` + "`generate`" + `）
 
@@ -738,7 +738,7 @@ python3 ./skills/seedance-ma/scripts/seedance_ma.py generate \
   --title "产品微距广告" \
   --ratio 16:9 \
   --duration 5 \
-  --wait-seconds 85
+  --wait-seconds 45
 ` + "```" + `
 
 参数说明：
@@ -756,7 +756,7 @@ python3 ./skills/seedance-ma/scripts/seedance_ma.py generate \
 ` + "```bash" + `
 python3 ./skills/seedance-ma/scripts/seedance_ma.py watch \
   --session-id <sesn-...> \
-  --wait-seconds 85
+  --wait-seconds 45
 ` + "```" + `
 
 - 通常连续执行 1~2 次 ` + "`watch`" + ` 即可拿到 ` + "`data.outcome == \"completed\"`" + ` 和 ` + "`data.video_url`" + `。
@@ -778,7 +778,7 @@ python3 ./skills/seedance-ma/scripts/seedance_ma.py generate-images \
   --title "产品核心功能 4 张组图" \
   --ratio 16:9 \
   --count 4 \
-  --wait-seconds 85 \
+  --wait-seconds 45 \
   --prompt "详细描述整套组图的统一版式与第 1..N 张图的标题、画面和文案要点"
 ` + "```" + `
 
