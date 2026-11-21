@@ -1335,21 +1335,10 @@ func (c chatOrigins) OriginOf(
 	if !ok {
 		return apimodel.DeliveryTarget{}, false
 	}
-	target := apimodel.DeliveryTarget{
-		Kind:            apimodel.DeliveryFeishu,
-		FeishuAppID:     origin.FeishuAppID,
-		ChatID:          origin.ChatID,
-		AnchorMessageID: origin.AnchorMessageID,
-	}
-	// ThreadID cannot be given a real value here (the inflight record only has the boolean "was the reply in a thread back then"),
-	// but the delivery side only uses it to decide "reply_in_thread or not", so filling in a non-empty marker is enough.
-	//
-	// **Without it, self-wakeup results from a thread would be sent to the group** (instead of the original thread),
-	// which reports no error; it is just in the wrong place.
-	if origin.InThread {
-		target.ThreadID = origin.ChatID
-	}
-	return target, true
+	return channel.DeliveryTargetOf(channel.DeliveryOrigin{
+		FeishuAppID: origin.FeishuAppID, ChatID: origin.ChatID,
+		AnchorMessageID: origin.AnchorMessageID, InThread: origin.InThread,
+	}), true
 }
 
 // Scheduled delivery and card text are implemented in scheduledelivery.go.
