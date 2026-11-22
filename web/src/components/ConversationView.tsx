@@ -20,6 +20,7 @@ import { Chip, Disclosure } from "@heroui/react";
 import { ChainOfThought, ChatLoader, ChatMessage } from "@/components/ui/Chat";
 import { Icon } from "@iconify/react";
 import { MarkdownMessage } from "@/components/MarkdownMessage";
+import { SeedanceImagePreview } from "@/components/SeedanceImagePreview";
 import { CuaDesktopPanel } from "@/components/CuaDesktopPanel";
 import {
   extractCuaSessionsFromTimelineItems,
@@ -874,10 +875,10 @@ function SeedanceTaskCardItem({
   }, [primarySourceKey]);
 
   const activeVideoUrl = !videoLoadFailed ? (sources[sourceIdx] ?? sources[0]) : undefined;
-  const completedWithoutPlayableUrl =
-    task.outcome === "completed" && (!activeVideoUrl || videoLoadFailed);
-  const isCompleted = task.outcome === "completed" && Boolean(activeVideoUrl);
-  const isFailed = task.outcome === "failed" || completedWithoutPlayableUrl;
+  const isImage = task.kind === "image";
+  const isCompleted = task.outcome === "completed";
+  const isFailed = task.outcome === "failed";
+  const isPreviewUnavailable = isCompleted && !isImage && !activeVideoUrl;
   const isPortrait = task.ratio === "9:16" || task.ratio === "3:4";
   const storyboardText = task.storyboardPrompt || task.userPrompt || "";
 
@@ -888,9 +889,9 @@ function SeedanceTaskCardItem({
     >
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3.5 py-2.5">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <Icon icon="gravity-ui:play" className="size-4 shrink-0 text-accent" />
+          <Icon icon={isImage ? "gravity-ui:picture" : "gravity-ui:play"} className="size-4 shrink-0 text-accent" />
           <span className="text-xs font-semibold text-foreground">
-            {task.title || t("seedance.defaultTitle")}
+            {task.title || t(isImage ? "seedance.imageDefaultTitle" : "seedance.defaultTitle")}
           </span>
           <Chip
             size="sm"
@@ -899,14 +900,14 @@ function SeedanceTaskCardItem({
           >
             <Chip.Label>
               {isCompleted
-                ? t("seedance.statusCompleted")
+                ? t(isImage ? "seedance.imageStatusCompleted" : "seedance.statusCompleted")
                 : isFailed
                   ? t("seedance.statusFailed")
-                  : t("seedance.statusRendering")}
+                  : t(isImage ? "seedance.imageStatusRendering" : "seedance.statusRendering")}
             </Chip.Label>
           </Chip>
           <span className="r-chip bg-surface-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted">
-            {task.videoModel || t("seedance.modelLabel")}
+            {isImage ? (task.imageModel || t("seedance.imageModelLabel")) : (task.videoModel || t("seedance.modelLabel"))}
           </span>
           {task.ratio ? (
             <span className="r-chip bg-surface-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted">
@@ -964,7 +965,9 @@ function SeedanceTaskCardItem({
         </div>
       </div>
 
-      {activeVideoUrl ? (
+      {isImage && isCompleted ? (
+        <SeedanceImagePreview images={task.images || []} runId={runId} title={task.title || t("seedance.imageDefaultTitle")} />
+      ) : activeVideoUrl ? (
         <div className="flex items-center justify-center bg-black/95 p-2">
           <video
             src={activeVideoUrl}
@@ -985,6 +988,11 @@ function SeedanceTaskCardItem({
             }
             data-testid="chat-seedance-video"
           />
+        </div>
+      ) : isPreviewUnavailable ? (
+        <div className="flex items-center gap-2 px-3.5 py-3 text-xs text-muted">
+          <Icon icon="gravity-ui:picture" className="size-4 shrink-0" />
+          <span>{task.stageLabel || t("seedance.previewUnavailable")}</span>
         </div>
       ) : isFailed ? (
         <div className="flex items-center gap-2 bg-danger/5 px-3.5 py-3 text-xs text-danger">

@@ -9,7 +9,16 @@
 import { API_BASE } from "@/data/http";
 import type { TimelineItem } from "@/lib/timeline";
 
+export interface SeedanceImage {
+  index: number;
+  localPath?: string;
+  imageUrl?: string;
+  arkImageUrl?: string;
+}
+
 export interface SeedanceVideoTask {
+  /** Video tasks use a player; image tasks use a gallery and never invent a video failure. */
+  kind: "video" | "image";
   /** Seedance MA session ID (`sesn-...`) or temporary key while initial call is executing. */
   sessionId: string;
   /** Short video title. */
@@ -41,6 +50,8 @@ export interface SeedanceVideoTask {
   /** Container-local file path. */
   localPath?: string;
   /** Seedance MA's summary of the generated video. */
+  images?: SeedanceImage[];
+  imageModel?: string;
   summary?: string;
   /** Error message if `outcome === "failed"`. */
   errorMessage?: string;
@@ -137,6 +148,25 @@ function pickPlayableVideoUrl(
  * Prioritizes the AMA backend raw file endpoint (`/api/runs/{runId}/sandbox/file?raw=1&path=...`)
  * when a container-local file exists, falling back to direct remote video URLs.
  */
+export function rawMediaUrl(runId: string, localPath: string | undefined, download = false): string | undefined {
+  // Older skill versions emitted relative paths. Without the executor workdir we must not guess a root.
+  if (!runId.trim() || !localPath?.startsWith("/")) return undefined;
+  const params = new URLSearchParams({ raw: "1", path: localPath });
+  if (download) params.set("download", "1");
+  return `${API_BASE}/runs/${encodeURIComponent(runId.trim())}/sandbox/file?${params.toString()}`;
+}
+
+export function buildSeedanceImageUrls(image: SeedanceImage, runId?: string): string[] {
+  const urls: string[] = [];
+  const add = (url: string | undefined) => {
+    if (url && !urls.includes(url)) urls.push(url);
+  };
+  add(rawMediaUrl(runId || "", image.localPath));
+  if (image.imageUrl && isBrowserPlayableVideoUrl(image.imageUrl)) add(image.imageUrl);
+  if (image.arkImageUrl && isBrowserPlayableVideoUrl(image.arkImageUrl)) add(image.arkImageUrl);
+  return urls;
+}
+
 export function buildSeedancePlayableUrls(
   task: SeedanceVideoTask,
   runId?: string,
@@ -155,13 +185,10 @@ export function buildSeedancePlayableUrls(
   let sameOriginInlineUrl: string | undefined;
   let sameOriginDownloadUrl: string | undefined;
   const trimmedRunId = runId?.trim();
-  if (trimmedRunId && task.outcome === "completed" && task.localPath) {
-    const params = new URLSearchParams();
-    params.set("raw", "1");
-    params.set("path", task.localPath);
-    sameOriginInlineUrl = `${API_BASE}/runs/${encodeURIComponent(trimmedRunId)}/sandbox/file?${params.toString()}`;
-    sameOriginDownloadUrl = `${sameOriginInlineUrl}&download=1`;
-    addUnique(sameOriginInlineUrl);
+  if (trimmedRunId && task.outcome === "completed") {
+    sameOriginInlineUrl = rawMediaUrl(trimmedRunId, task.localPath);
+    sameOriginDownloadUrl = rawMediaUrl(trimmedRunId, task.localPath, true);
+    if (sameOriginInlineUrl) addUnique(sameOriginInlineUrl);
   }
 
   if (isBrowserPlayableVideoUrl(task.videoUrl)) {
@@ -222,6 +249,7 @@ export function extractSeedanceTasksFromTimelineItems(
 
     if (isSeedanceTool && /\bgenerate\b/.test(cmdText) && !item.result) {
       pendingGenerateTask = {
+        kind: /\bgenerate-images\b/.test(cmdText) ? "image" : "video",
         sessionId: `pending-${itemSeq}`,
         title: titleArg || (promptArg ? promptArg.slice(0, 28) : undefined),
         userPrompt: promptArg,
@@ -274,7 +302,22 @@ export function extractSeedanceTasksFromTimelineItems(
     const errorMessage =
       typeof errObj?.message === "string" ? errObj.message : prev?.errorMessage;
 
+    const rawImages = Array.isArray(data.images) ? data.images : [];
+    const images: SeedanceImage[] = rawImages.flatMap((value, index) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const image = value as Record<string, unknown>;
+      return [{
+        index: typeof image.index === "number" ? image.index : index + 1,
+        localPath: typeof image.local_path === "string" ? image.local_path : undefined,
+        imageUrl: typeof image.image_url === "string" ? image.image_url : undefined,
+        arkImageUrl: typeof image.ark_image_url === "string" ? image.ark_image_url : undefined,
+      }];
+    });
+
+    const isImageTask = images.length > 0 || Array.isArray(data.images) || prev?.kind === "image" || /\bgenerate-images\b/.test(cmdText);
+
     const merged: SeedanceVideoTask = {
+      kind: isImageTask ? "image" : "video",
       sessionId,
       title:
         (typeof data.title === "string" && data.title) ||
@@ -293,11 +336,13 @@ export function extractSeedanceTasksFromTimelineItems(
         prev?.ratio ||
         "16:9",
       duration:
-        typeof data.duration === "number"
-          ? data.duration
-          : durationArg
-            ? Number(durationArg)
-            : prev?.duration || 5,
+        isImageTask
+          ? undefined
+          : typeof data.duration === "number"
+            ? data.duration
+            : durationArg
+              ? Number(durationArg)
+              : prev?.duration || 5,
       videoModel: videoModel || prev?.videoModel,
       outcome,
       stage: (typeof data.stage === "string" && data.stage) || prev?.stage,
@@ -316,6 +361,8 @@ export function extractSeedanceTasksFromTimelineItems(
         prev?.arkVideoUrl,
       localPath:
         (typeof data.local_path === "string" && data.local_path) || prev?.localPath,
+      images: images.length > 0 ? images : prev?.images,
+      imageModel: (typeof data.image_model === "string" && data.image_model) || prev?.imageModel,
       summary: (typeof data.summary === "string" && data.summary) || prev?.summary,
       errorMessage,
       seq: itemSeq,
