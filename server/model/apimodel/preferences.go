@@ -19,6 +19,4 @@ type UserPreferences struct {
 	Language string `json:"language"`
 	// Appearance is the appearance, light / dark / system.
 	Appearance string `json:"appearance"`
-	// Theme is the visual theme, classic / azure. Empty means classic.
-	Theme string `json:"theme"`
 }

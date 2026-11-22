@@ -2875,9 +2875,6 @@ export type Language = "zh-CN" | "en-US";
 /** Appearance. system means following the system's prefers-color-scheme. */
 export type Appearance = "light" | "dark" | "system";
 
-/** Visual theme. classic preserves the original look; azure adds blue accents. */
-export type Theme = "classic" | "azure";
-
 /**
  * A person's preferences: language and appearance.
  *
@@ -2908,7 +2905,6 @@ export type Theme = "classic" | "azure";
 export interface UserPreferences {
   language: Language;
   appearance: Appearance;
-  theme: Theme;
 }
 
 /**
@@ -2922,7 +2918,6 @@ export interface UserPreferences {
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   language: "zh-CN",
   appearance: "system",
-  theme: "classic",
 };
 
 /**
@@ -2944,7 +2939,6 @@ export function normalizeUserPreferences(input: Partial<UserPreferences> | null)
       input?.appearance === "light" || input?.appearance === "dark"
         ? input.appearance
         : "system",
-    theme: input?.theme === "azure" ? "azure" : "classic",
   };
 }
 

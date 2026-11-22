@@ -7,7 +7,6 @@
 -- │ email       text                      not null
 -- │ language    text                      not null default 'zh-CN'::text
 -- │ appearance  text                      not null default 'system'::text
--- │ theme       text                      not null default 'classic'::text
 -- │ updated_at  timestamp with time zone  not null
 -- │
 -- │ primary key user_preferences_pkey
@@ -77,9 +76,6 @@ create table if not exists user_preferences (
     -- switch, and dark mode users would feel someone changed their settings.
     appearance text not null default 'system',
 
-    -- Visual theme: classic / azure. Empty legacy rows mean classic.
-    theme text not null default 'classic',
-
     -- When it last changed. For debugging ("when was this written").
     --
     -- The time is passed in from the Go side, not SQL's now(), consistent with the auth / feishu /
@@ -87,5 +83,3 @@ create table if not exists user_preferences (
     -- config, and tests must be able to inject it.
     updated_at timestamptz not null
 );
-
-alter table user_preferences add column if not exists theme text not null default 'classic';

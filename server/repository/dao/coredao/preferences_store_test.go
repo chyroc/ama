@@ -33,7 +33,7 @@ func testUserPreferencesRoundTrip(t *testing.T, newStore storeFactory) {
 
 	at := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	rec := persistmodel.UserPreferencesRecord{
-		Email: prefsAlice, Language: core.LanguageEnUS, Appearance: core.AppearanceDark, Theme: core.ThemeAzure, UpdatedAt: at,
+		Email: prefsAlice, Language: core.LanguageEnUS, Appearance: core.AppearanceDark, UpdatedAt: at,
 	}
 	if err := s.PutUserPreferences(ctx, rec); err != nil {
 		t.Fatalf("存失败：%v", err)
@@ -43,7 +43,7 @@ func testUserPreferencesRoundTrip(t *testing.T, newStore storeFactory) {
 	if err != nil {
 		t.Fatalf("读失败：%v", err)
 	}
-	if got.Language != core.LanguageEnUS || got.Appearance != core.AppearanceDark || got.Theme != core.ThemeAzure {
+	if got.Language != core.LanguageEnUS || got.Appearance != core.AppearanceDark {
 		t.Errorf("读回 %+v，与存进去的不一致", got)
 	}
 	if !got.UpdatedAt.Equal(at) {
@@ -69,7 +69,7 @@ func testUserPreferencesOverwrites(t *testing.T, newStore storeFactory) {
 
 	later := at.Add(time.Hour)
 	if err := s.PutUserPreferences(ctx, persistmodel.UserPreferencesRecord{
-		Email: prefsAlice, Language: core.LanguageZhCN, Appearance: core.AppearanceSystem, Theme: core.ThemeClassic, UpdatedAt: later,
+		Email: prefsAlice, Language: core.LanguageZhCN, Appearance: core.AppearanceSystem, UpdatedAt: later,
 	}); err != nil {
 		t.Fatalf("覆盖失败：%v", err)
 	}
@@ -78,8 +78,8 @@ func testUserPreferencesOverwrites(t *testing.T, newStore storeFactory) {
 	if err != nil {
 		t.Fatalf("读失败：%v", err)
 	}
-	if got.Language != core.LanguageZhCN || got.Appearance != core.AppearanceSystem || got.Theme != core.ThemeClassic {
-		t.Errorf("❌ 覆盖后读到 %+v，期望 {zh-CN system classic}——"+
+	if got.Language != core.LanguageZhCN || got.Appearance != core.AppearanceSystem {
+		t.Errorf("❌ 覆盖后读到 %+v，期望 {zh-CN system}——"+
 			"upsert 必须整行覆盖；带上 coalesce 会让「改回默认值」被丢掉", got)
 	}
 	if !got.UpdatedAt.Equal(later) {
