@@ -6,8 +6,9 @@ For an introduction to the project see [README.md](README.md), for deployment an
 ## Project intent
 
 AMA platform: Go backend, React (Vite) frontend, built on top of **Ark Managed Agents**.
-The agent's tools run in **our own execution environment** (an Ark `self_hosted` environment): by default one
-Docker container per session, or a machine the user registers with `ama daemon`.
+The agent's tools run in the environment selected when creating it: an Ark `self_hosted` environment
+(by default one Docker container per session, or a machine the user registers with `ama daemon`),
+or an Ark `cloud` environment whose tools run in Ark's managed sandbox.
 
 ## Working rules (always on)
 
@@ -240,13 +241,18 @@ bucket + key, **never any bytes**. With the PG store and no `s3.bucket` configur
 bring-your-own machines use `s3.publicEndpoint`, Docker session containers use `s3.sandboxEndpoint`, and amad's own reads and writes use `s3.endpoint`.
 The symptoms of signing for the wrong one don't point to config (browser download 403, only SKILL.md left of a skill inside the container); see `server/shared/infra/s3/README.md`.
 
-**Conversations run on self_hosted, and tools run in our own executor.** The three endpoints behind the chat page
-(create session / send event / SSE subscribe) drive Managed Agents with environment type `self_hosted`:
-Ark only does model inference and puts tool calls on the work queue; a long-running worker inside amad picks them up, sends
-them to the executor, then returns the result to Ark as a `user.tool_result` event.
+**Conversations run in the Ark environment chosen for each agent.** The three endpoints behind the chat page
+(create session / send event / SSE subscribe) drive Managed Agents. Creating an agent offers `self_hosted`
+and `cloud`, persisted in `agents.environment_type`; the choice cannot change after creation.
+`self_hosted` is the behavior of existing agents: Ark only does model inference and puts tool calls on the work queue;
+a long-running worker inside amad picks them up, sends them to the executor, then returns the result to Ark as a
+`user.tool_result` event. `cloud` runs tools in Ark's managed sandbox and never starts an amad worker for that environment.
 
-**Do not use the `cloud` environment.** With it, tools run in Ark's managed sandbox and the execution environment is out of our hands.
-`EnsureEnvironment` reads the environment back after creating it and checks its type; if it's not self_hosted it fails right away.
+**Never mix the two environment types when reusing sibling bindings or repairing a missing environment.**
+Each binding records its type in `ark_bindings.environment_type`; empty legacy values mean `self_hosted`.
+`EnsureEnvironment` reads the environment back after creating it and checks the type; `RefreshWorkers` skips cloud bindings.
+AMA's container / terminal / skill-file injection / datasource tools apply only to `self_hosted`.
+Codex always uses `cloud`.
 
 Code: `core/chat.go` (sessions) + `core/worker.go` (worker pool)
 + `shared/infra/dockertools/` (Docker executor) + `shared/infra/shelltools/` (the six tools)

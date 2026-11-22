@@ -4,21 +4,22 @@
 -- │    the DDL, run:
 -- │        python3 scripts/gen-schema-outline.py
 -- │
--- │ id             text     not null
--- │ workspace_id   text     not null
--- │ ord            bigint   not null (sequence)
--- │ doc            jsonb    not null
--- │ name           text
--- │ description    text
--- │ status         text
--- │ version        integer
--- │ created_at     text
--- │ updated_at     text
--- │ created_by     text
--- │ updated_by     text
--- │ executor_type  text
--- │ host_id        text
--- │ host_source    text
+-- │ id                text     not null
+-- │ workspace_id      text     not null
+-- │ ord               bigint   not null (sequence)
+-- │ doc               jsonb    not null
+-- │ name              text
+-- │ description       text
+-- │ status            text
+-- │ version           integer
+-- │ created_at        text
+-- │ updated_at        text
+-- │ created_by        text
+-- │ updated_by        text
+-- │ executor_type     text
+-- │ host_id           text
+-- │ host_source       text
+-- │ environment_type  text
 -- │
 -- │ primary key agents_pkey
 -- │      (id)
@@ -34,37 +35,41 @@
 -- │        cd server && go run ./cmd/gen-doc-outline -w
 -- │    Source of truth: model/apimodel/apimodel.go, type Agent
 -- │
--- │ id                 string
--- │ workspaceId        string
--- │ name               string
--- │ description        string
--- │ system             string
--- │ model              ModelConfig
--- │ baseAgent          string   ← omitempty, the key may be missing entirely
--- │ openVikingEnabled  bool   ← omitempty, the key may be missing entirely
--- │ version            int
--- │ builtin_tools      []string
--- │ skillIds           []string
--- │ feishuAppIds       []string
--- │ status             AgentStatus
--- │ integrationIds     []string
--- │ executorType       string   ← omitempty, the key may be missing entirely
--- │ hostId             string   ← omitempty, the key may be missing entirely
--- │ hostSource         string   ← omitempty, the key may be missing entirely
--- │ envs               []AgentEnv
--- │ envAliases         []AgentEnvAlias
--- │ followUp           FollowUpMode
--- │ progressDetail     ProgressDetail
--- │ createdAt          string
--- │ updatedAt          string
--- │ createdBy          string   ← omitempty, the key may be missing entirely
--- │ updatedBy          string   ← omitempty, the key may be missing entirely
+-- │ id                          string
+-- │ workspaceId                 string
+-- │ name                        string
+-- │ description                 string
+-- │ system                      string
+-- │ model                       ModelConfig
+-- │ baseAgent                   string   ← omitempty, the key may be missing entirely
+-- │ environmentType             string   ← omitempty, the key may be missing entirely
+-- │ openVikingEnabled           bool   ← omitempty, the key may be missing entirely
+-- │ version                     int
+-- │ builtin_tools               []string
+-- │ skillIds                    []string
+-- │ feishuAppIds                []string
+-- │ status                      AgentStatus
+-- │ integrationIds              []string
+-- │ codebaseAppCredentialId     string   ← omitempty, the key may be missing entirely
+-- │ serviceAccountCredentialId  string   ← omitempty, the key may be missing entirely
+-- │ executorType                string   ← omitempty, the key may be missing entirely
+-- │ hostId                      string   ← omitempty, the key may be missing entirely
+-- │ hostSource                  string   ← omitempty, the key may be missing entirely
+-- │ envs                        []AgentEnv
+-- │ envAliases                  []AgentEnvAlias
+-- │ followUp                    FollowUpMode
+-- │ progressDetail              ProgressDetail
+-- │ createdAt                   string
+-- │ updatedAt                   string
+-- │ createdBy                   string   ← omitempty, the key may be missing entirely
+-- │ updatedBy                   string   ← omitempty, the key may be missing entirely
 -- ┤──────────────────────────────────────────────────────────────────────────
 
 -- # Split between columns and doc
 --
 -- The eight scalars name / description / status / version / created_at / updated_at / created_by /
--- updated_by, plus the three executor columns, are real columns; doc only keeps structs and arrays
+-- updated_by, plus the three executor columns and environment_type, are real columns;
+-- doc only keeps structs and arrays
 -- (system / model / skillIds / feishuAppIds / envs / envAliases / followUp / progressDetail /
 -- integrationIds etc.).
 --
@@ -115,8 +120,13 @@ create table if not exists agents (
     --               directly to the agent, without going through the workspace.
     -- The gate is service/agent.ensureExecutorAllowed. NULL is always interpreted as workspace by
     -- apimodel.EffectiveHostSource; no decision may bypass that function and check for empty itself.
-    host_source   text
+    host_source   text,
+    -- Ark environment selected at creation: 'self_hosted' or 'cloud'. NULL is
+    -- the legacy self_hosted choice, not a reason to move an existing agent.
+    environment_type text
 );
+
+alter table agents add column if not exists environment_type text;
 
 create index if not exists agents_workspace_idx on agents (workspace_id, ord);
 

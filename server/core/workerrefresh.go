@@ -38,7 +38,9 @@ func RefreshWorkers(ctx context.Context, hooks RefreshWorkersHooks) {
 		}
 		seen := map[string]bool{}
 		for _, binding := range bindings {
-			if binding.ArkEnvironmentID == "" || seen[binding.ArkEnvironmentID] {
+			if binding.ArkEnvironmentID == "" || seen[binding.ArkEnvironmentID] ||
+				apimodel.EffectiveArkEnvironment("", binding.EnvironmentType) == apimodel.ArkEnvironmentCloud {
+				// Cloud tools run in Ark, so no AMA worker may poll this environment.
 				continue
 			}
 			seen[binding.ArkEnvironmentID] = true

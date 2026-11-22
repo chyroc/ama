@@ -65,6 +65,8 @@ type fakeRunner struct {
 	// succeeding after one retry and succeeding on the first try are **impossible to tell apart**,
 	// and that is exactly what is being checked here.
 	sendEventsCalls int
+	// environmentTypes records each environment created by the production interface.
+	environmentTypes []string
 	// spec records the config used when creating the Ark Agent.
 	spec ArkAgentSpec
 	// sessionID is the ID returned by CreateSession.
@@ -245,11 +247,12 @@ func (f *fakeRunner) CreateAgent(_ context.Context, _ ArkBindingKey, spec ArkAge
 	}, nil
 }
 
-func (f *fakeRunner) EnsureEnvironment(_ context.Context, _ ArkBindingKey, _ string) (string, error) {
+func (f *fakeRunner) EnsureEnvironment(_ context.Context, _ ArkBindingKey, _, environmentType string) (string, error) {
 	if f.envErr != nil {
 		return "", f.envErr
 	}
 	f.createdEnvs++
+	f.environmentTypes = append(f.environmentTypes, environmentType)
 	return fmt.Sprintf("env-fake-%d", f.createdEnvs), nil
 }
 

@@ -18,9 +18,10 @@ docker compose ps        # 等 postgres / redis / s3 healthy、amad 起来
    新账号由平台管理员调 `POST /api/admin/users` 建；要开放注册就在 `.env` 里设
    `AMA_AUTH_LOCAL_ALLOW_SIGNUP=true` 并 `docker compose up -d`。
 2. 在空间设置的「方舟凭证」里填方舟 API Key（也可以填一把账号级凭证，各空间沿用）。
-   self_hosted Environment 由 amad 第一次建会话时自动创建，不用手动建。
-3. 建一个 agent，开始对话。agent 第一次调用工具时，amad 才会经 Docker 起它的会话容器
-   （镜像 `ama-sandbox:latest`，compose 已用 `sandbox-image/Dockerfile` 构建好）。
+   创建 Agent 时选择 `self_hosted` 或 `cloud` 环境，amad 第一次建会话时自动创建对应 Environment，不用手动建。
+3. 建一个 agent，开始对话。选 `self_hosted` 的 agent 第一次调用工具时，amad 才会经 Docker 起它的会话容器
+   （镜像 `ama-sandbox:latest`，compose 已用 `sandbox-image/Dockerfile` 构建好）；
+   选 `cloud` 的 agent 由方舟托管沙箱执行工具，不创建这个容器，也不使用 AMA 的技能附件和终端。
 
 compose 起了五个服务：`postgres`（宿主机端口 15432）、`redis`（16379）、
 `s3`（RustFS，`${AMA_S3_PORT:-19000}`）、`sandbox-image`（只负责构建会话镜像，构建完即退出）、

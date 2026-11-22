@@ -28,6 +28,31 @@ test("创建 agent 并指定独立的提示词与模型", async ({ app }) => {
   await expect(app.getByText("GLM 5.2").first()).toBeVisible();
 });
 
+test("创建 agent 时可选 cloud 环境，并保留所选配置", async ({ app }) => {
+  await app.goto("/w/growth/agents/new");
+  await app.getByTestId("agent-name").fill("云端托管助手");
+  await app.getByTestId("agent-system").fill("在方舟托管环境回答问题并调用工具。");
+
+  await expect(app.getByTestId("environment-self-hosted")).toHaveAttribute(
+    "data-selected",
+    "true",
+  );
+  await expect(app.getByTestId("executor-docker")).toBeVisible();
+  await app.getByTestId("environment-cloud").click();
+  await expect(app.getByTestId("agent-environment-cloud-notice")).toBeVisible();
+  await expect(app.getByTestId("agent-executor")).toHaveCount(0);
+  await app.getByTestId("agent-submit").click();
+
+  await expect(app).toHaveURL(/\/agents\/agent_/);
+  await expect(app.getByTestId("cfg-environment-type")).toContainText("cloud（方舟托管）");
+  await expect(app.getByTestId("cfg-environment-type")).toContainText("创建后不可修改");
+  await expect(app.getByTestId("agent-executor")).toHaveCount(0);
+  await expect(app.getByTestId("agent-save")).toBeDisabled();
+
+  await app.reload();
+  await expect(app.getByTestId("cfg-environment-type")).toContainText("cloud（方舟托管）");
+});
+
 test("必填项缺失时不创建", async ({ app }) => {
   await app.goto("/w/growth/agents/new");
   await app.getByTestId("agent-submit").click();

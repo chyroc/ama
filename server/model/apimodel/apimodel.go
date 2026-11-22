@@ -1050,6 +1050,26 @@ func NormalizeProgressDetail(d ProgressDetail) ProgressDetail {
 	return ProgressDetailFull
 }
 
+// Ark environment types selectable for a general agent.
+//
+// Empty means self_hosted, so existing rows and old clients keep their behavior.
+// Codex is always cloud; EffectiveArkEnvironment is the only normalization point.
+const (
+	ArkEnvironmentSelfHosted = "self_hosted"
+	ArkEnvironmentCloud      = "cloud"
+)
+
+// EffectiveArkEnvironment returns the environment type this agent must run in.
+func EffectiveArkEnvironment(baseAgent, environmentType string) string {
+	if strings.TrimSpace(baseAgent) == BaseAgentCodex {
+		return ArkEnvironmentCloud
+	}
+	if strings.TrimSpace(environmentType) == ArkEnvironmentCloud {
+		return ArkEnvironmentCloud
+	}
+	return ArkEnvironmentSelfHosted
+}
+
 // Agent is the definition of an agent.
 type Agent struct {
 	ID          string `json:"id"`
@@ -1068,6 +1088,11 @@ type Agent struct {
 	// omitempty for the same reason as ExecutorType: an empty string means exactly "the field is
 	// not there" (the built-in loop), and old agents / old frontends do not carry the key.
 	BaseAgent string `json:"baseAgent,omitempty"`
+	// EnvironmentType selects the Ark runtime environment: self_hosted or cloud.
+	// It is chosen at creation and immutable on update. Empty means self_hosted;
+	// Codex always reads as cloud through EffectiveArkEnvironment. Stored in the
+	// nullable agents.environment_type column, never in agents.doc.
+	EnvironmentType string `json:"environmentType,omitempty"`
 	// OpenVikingEnabled decides whether this agent participates in platform long-term memory:
 	// recall (a <harness:openviking> block appended to every user.message) and capture (the
 	// finished turn is written back to the memory store).
@@ -1195,6 +1220,9 @@ type AgentDraft struct {
 	// BaseAgent is only honoured at creation: Ark's base_agent cannot be changed after the Agent
 	// is created, so UpdateAgent rejects a different value (see service/agent/agent.go).
 	BaseAgent string `json:"baseAgent,omitempty"`
+	// EnvironmentType selects cloud or self_hosted at creation. Update rejects a
+	// changed non-empty value; empty means the legacy self_hosted behavior.
+	EnvironmentType string `json:"environmentType,omitempty"`
 	// OpenVikingEnabled opts this agent into platform long-term memory; see Agent.OpenVikingEnabled.
 	OpenVikingEnabled bool        `json:"openVikingEnabled,omitempty"`
 	BuiltinTools      []string    `json:"builtin_tools"`

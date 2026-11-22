@@ -1368,17 +1368,19 @@ func (s *MemStore) DeleteArkBinding(_ context.Context, workspaceID, agentID stri
 // RepointArkEnvironment means the same as that PG method: a targeted repoint of bindings still pointing at the old environment,
 // returning how many rows changed. Under the lock only the matching rows change, and the order is unchanged.
 func (s *MemStore) RepointArkEnvironment(
-	_ context.Context, workspaceID, oldEnvID, newEnvID string,
+	_ context.Context, workspaceID, oldEnvID, newEnvID, environmentType string,
 ) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := 0
 	for _, key := range s.data.arkBindingOrder {
 		b, ok := s.data.arkBindings[key]
-		if !ok || b.WorkspaceID != workspaceID || b.ArkEnvironmentID != oldEnvID {
+		if !ok || b.WorkspaceID != workspaceID || b.ArkEnvironmentID != oldEnvID ||
+			apimodel.EffectiveArkEnvironment("", b.EnvironmentType) != environmentType {
 			continue
 		}
 		b.ArkEnvironmentID = newEnvID
+		b.EnvironmentType = environmentType
 		s.data.arkBindings[key] = b
 		n++
 	}

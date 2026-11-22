@@ -623,7 +623,8 @@ func TestSnapshotCoversEveryDraftField(t *testing.T) {
 			Model: apimodel.ModelConfig{ID: "m"},
 			// BaseAgent is immutable on Update, but Snapshot/rollback must still carry it so the
 			// initial creation snapshot remains complete.
-			BaseAgent: apimodel.BaseAgentCodex,
+			BaseAgent:       apimodel.BaseAgentCodex,
+			EnvironmentType: apimodel.ArkEnvironmentCloud,
 			// OpenVikingEnabled must also be rollbackable; set true so assertNoZeroField sees it.
 			OpenVikingEnabled:          true,
 			BuiltinTools:               []string{"bash"},

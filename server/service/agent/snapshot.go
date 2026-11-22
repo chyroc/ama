@@ -55,11 +55,12 @@ import (
 // core/revision_test.go are both outside this package. Same as schedulesvc.Snapshot.
 func Snapshot(a apimodel.Agent) apimodel.AgentDraft {
 	return apimodel.AgentDraft{
-		Name:        a.Name,
-		Description: a.Description,
-		System:      a.System,
-		Model:       a.Model,
-		BaseAgent:   a.BaseAgent,
+		Name:            a.Name,
+		Description:     a.Description,
+		System:          a.System,
+		Model:           a.Model,
+		BaseAgent:       a.BaseAgent,
+		EnvironmentType: apimodel.EffectiveArkEnvironment(a.BaseAgent, a.EnvironmentType),
 		// Memory opt-in is part of the configuration and must be rollbackable too.
 		OpenVikingEnabled:          a.OpenVikingEnabled,
 		BuiltinTools:               a.BuiltinTools,
@@ -90,6 +91,9 @@ func Snapshot(a apimodel.Agent) apimodel.AgentDraft {
 // before is the result of Snapshot(current entity) (already the normalized stored shape),
 // draft is the one from the request body.
 func sameAgentDraft(before, draft apimodel.AgentDraft) bool {
+	// Compare the fields after the same cloud normalization used by saves.
+	before = normalizedDraftExecutor(before)
+	draft = normalizedDraftExecutor(draft)
 	// Pass draft through the assignment logic of UpdateAgent to get "what it will look like once
 	// stored".
 	// ⚠️ Every line here must stay consistent with UpdateAgent; when adding a field change both
@@ -102,7 +106,8 @@ func sameAgentDraft(before, draft apimodel.AgentDraft) bool {
 		System:      draft.System,
 		Model:       draft.Model,
 		// BaseAgent is immutable after creation; carry before.BaseAgent so draft comparison stays symmetric.
-		BaseAgent: before.BaseAgent,
+		BaseAgent:       before.BaseAgent,
+		EnvironmentType: before.EnvironmentType,
 		// OpenVikingEnabled is mutable: include both sides so toggling memory records a revision.
 		OpenVikingEnabled:          draft.OpenVikingEnabled,
 		BuiltinTools:               nonNil(draft.BuiltinTools),
@@ -144,6 +149,7 @@ func sameAgentDraft(before, draft apimodel.AgentDraft) bool {
 		System:                     before.System,
 		Model:                      before.Model,
 		BaseAgent:                  before.BaseAgent,
+		EnvironmentType:            apimodel.EffectiveArkEnvironment(before.BaseAgent, before.EnvironmentType),
 		OpenVikingEnabled:          before.OpenVikingEnabled,
 		BuiltinTools:               nonNil(before.BuiltinTools),
 		SkillIDs:                   nonNil(before.SkillIDs),

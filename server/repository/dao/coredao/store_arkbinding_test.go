@@ -39,8 +39,23 @@ func testRepointArkEnvironment(t *testing.T, newStore storeFactory) {
 	must(s.PutArkBinding(ctx, mk("ws_tmp", "a2", "env-dead")))
 	must(s.PutArkBinding(ctx, mk("ws_tmp", "a3", "env-other")))  // other environment, untouched
 	must(s.PutArkBinding(ctx, mk("ws_other", "a4", "env-dead"))) // other workspace, untouched
+	cloud := mk("ws_tmp", "a5", "env-dead")
+	cloud.EnvironmentType = "cloud"
+	must(s.PutArkBinding(ctx, cloud))
+	gotCloud, err := s.GetArkBinding(ctx, "ws_tmp", "a5")
+	must(err)
+	if gotCloud.EnvironmentType != "cloud" {
+		t.Fatalf("环境类型应原样保存，实际 %q", gotCloud.EnvironmentType)
+	}
+	listed, err := s.ListArkBindings(ctx, "ws_tmp")
+	must(err)
+	for _, b := range listed {
+		if b.AgentID == "a5" && b.EnvironmentType != "cloud" {
+			t.Fatalf("列表读丢失环境类型：%q", b.EnvironmentType)
+		}
+	}
 
-	n, err := s.RepointArkEnvironment(ctx, "ws_tmp", "env-dead", "env-new")
+	n, err := s.RepointArkEnvironment(ctx, "ws_tmp", "env-dead", "env-new", "self_hosted")
 	must(err)
 	if n != 2 {
 		t.Fatalf("应改 2 行，实际 %d", n)
@@ -53,6 +68,7 @@ func testRepointArkEnvironment(t *testing.T, newStore storeFactory) {
 		{"ws_tmp", "a2", "env-new"},
 		{"ws_tmp", "a3", "env-other"},
 		{"ws_other", "a4", "env-dead"},
+		{"ws_tmp", "a5", "env-dead"},
 	} {
 		b, err := s.GetArkBinding(ctx, want.workspace, want.agent)
 		must(err)
@@ -70,7 +86,7 @@ func testRepointArkEnvironment(t *testing.T, newStore storeFactory) {
 	}
 
 	// CAS guard: the old environment is no longer referenced, so another repoint changes 0 rows.
-	n2, err := s.RepointArkEnvironment(ctx, "ws_tmp", "env-dead", "env-new2")
+	n2, err := s.RepointArkEnvironment(ctx, "ws_tmp", "env-dead", "env-new2", "self_hosted")
 	must(err)
 	if n2 != 0 {
 		t.Errorf("已无旧环境，应改 0 行，实际 %d", n2)

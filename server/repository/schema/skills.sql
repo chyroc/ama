@@ -34,6 +34,7 @@
 -- │ latestVersion  string
 -- │ tags           []string
 -- │ files          []SkillFile   ← omitempty, the key may be missing entirely
+-- │ origin         *SkillOrigin   ← omitempty, the key may be missing entirely
 -- │ createdAt      string
 -- │ updatedAt      string
 -- │ createdBy      string   ← omitempty, the key may be missing entirely

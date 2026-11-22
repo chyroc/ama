@@ -978,7 +978,7 @@ func (s *PGStore) DeleteWorkspace(ctx context.Context, id string) error {
 //
 // ⚠️ The order matches the scan arguments of scanAgentRow exactly; change one and you must change the other.
 const agentSelectColumns = `doc, name, description, status, version, ` +
-	`created_at, updated_at, created_by, updated_by, executor_type, host_id, host_source`
+	`created_at, updated_at, created_by, updated_by, executor_type, host_id, host_source, environment_type`
 
 // scanAgentRow first restores the whole Agent from doc, then overwrites the 11 pulled-out fields with the **columns**.
 //
@@ -1002,10 +1002,10 @@ const agentSelectColumns = `doc, name, description, status, version, ` +
 func scanAgentRow(scan func(dest ...any) error) (apimodel.Agent, error) {
 	var blob []byte
 	var name, description, status sql.NullString
-	var createdAt, updatedAt, createdBy, updatedBy, executorType, hostID, hostSource sql.NullString
+	var createdAt, updatedAt, createdBy, updatedBy, executorType, hostID, hostSource, environmentType sql.NullString
 	var version sql.NullInt64
 	if err := scan(&blob, &name, &description, &status, &version,
-		&createdAt, &updatedAt, &createdBy, &updatedBy, &executorType, &hostID, &hostSource); err != nil {
+		&createdAt, &updatedAt, &createdBy, &updatedBy, &executorType, &hostID, &hostSource, &environmentType); err != nil {
 		return apimodel.Agent{}, err
 	}
 
@@ -1028,6 +1028,7 @@ func scanAgentRow(scan func(dest ...any) error) (apimodel.Agent, error) {
 	// and normalizing in the storage layer would drift into two sets of rules. The meaning of an empty string is interpreted in one place, apimodel.EffectiveHostSource,
 	// at the business decision point (existing NULL = assigned by the workspace).
 	a.HostSource = hostSource.String
+	a.EnvironmentType = environmentType.String
 
 	// clone guarantees slice fields are non-nil (the contract requires [], nil encodes as null).
 	return persistmodel.CloneAgent(a), nil
@@ -1115,6 +1116,7 @@ func marshalAgentDoc(a apimodel.Agent) ([]byte, error) {
 	a.ExecutorType = ""
 	a.HostID = ""
 	a.HostSource = ""
+	a.EnvironmentType = ""
 	return marshalDoc(a)
 }
 
@@ -1155,6 +1157,7 @@ func agentColumnValues(a apimodel.Agent) []any {
 		// host_source is nullable (NULL for existing/Docker container rows); doc never stores this key at all (see
 		// marshalAgentDoc), so it has no "same encoding as the backfill" issue here, consistent with the two executor columns.
 		nullIfEmpty(a.HostSource),
+		nullIfEmpty(a.EnvironmentType),
 	}
 }
 
@@ -1174,8 +1177,8 @@ func (s *PGStore) CreateAgent(ctx context.Context, a apimodel.Agent) (apimodel.A
 		`insert into agents (id, workspace_id, doc,
 		                     name, description, status, version,
 		                     created_at, updated_at, created_by, updated_by,
-		                     executor_type, host_id, host_source)
-		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+		                     executor_type, host_id, host_source, environment_type)
+		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 		args...); err != nil {
 		return apimodel.Agent{}, fmt.Errorf("core: 建 agent 失败: %w", err)
 	}
@@ -1195,7 +1198,7 @@ func (s *PGStore) SaveAgent(ctx context.Context, a apimodel.Agent) (apimodel.Age
 		    set workspace_id = $2, doc = $3,
 		        name = $4, description = $5, status = $6, version = $7,
 		        created_at = $8, updated_at = $9, created_by = $10, updated_by = $11,
-		        executor_type = $12, host_id = $13, host_source = $14
+		        executor_type = $12, host_id = $13, host_source = $14, environment_type = $15
 		  where id = $1`,
 		args...)
 	if err != nil {
@@ -2001,11 +2004,28 @@ func nullText(s string) sql.NullString {
 //
 // See schema_pg.sql for why this table exists: Ark Environment names are globally unique,
 // and the mapping must survive process restarts, otherwise creating again with the same name after a restart gives 409.
+func scanArkBinding(row interface{ Scan(...any) error }) (persistmodel.ArkBinding, error) {
+	var b persistmodel.ArkBinding
+	var blob []byte
+	var envType sql.NullString
+	if err := row.Scan(&blob, &envType); err != nil {
+		return b, err
+	}
+	if err := scanDoc(blob, &b); err != nil {
+		return b, err
+	}
+	b.EnvironmentType = envType.String
+	return b, nil
+}
+
 func (s *PGStore) GetArkBinding(ctx context.Context, workspaceID, agentID string) (persistmodel.ArkBinding, error) {
-	return getDoc(ctx, s.client,
-		func(v persistmodel.ArkBinding) persistmodel.ArkBinding { return v },
-		`select doc from ark_bindings where workspace_id = $1 and agent_id = $2`,
-		workspaceID, agentID)
+	b, err := scanArkBinding(s.client.QueryRow(ctx,
+		`select doc, environment_type from ark_bindings where workspace_id = $1 and agent_id = $2`,
+		workspaceID, agentID))
+	if pg.IsNoRows(err) {
+		return b, persistmodel.ErrNotFound
+	}
+	return b, err
 }
 
 // PutArkBinding overwrites.
@@ -2018,22 +2038,35 @@ func (s *PGStore) PutArkBinding(ctx context.Context, b persistmodel.ArkBinding) 
 		return err
 	}
 	if _, err := s.client.Exec(ctx,
-		`insert into ark_bindings (workspace_id, agent_id, ark_agent_id, ark_environment_id, doc)
-		 values ($1, $2, $3, $4, $5)
+		`insert into ark_bindings (workspace_id, agent_id, ark_agent_id, ark_environment_id, doc, environment_type)
+		 values ($1, $2, $3, $4, $5, $6)
 		 on conflict (workspace_id, agent_id) do update
 		   set ark_agent_id = excluded.ark_agent_id,
 		       ark_environment_id = excluded.ark_environment_id,
+		       environment_type = excluded.environment_type,
 		       doc = excluded.doc`,
-		b.WorkspaceID, b.AgentID, b.ArkAgentID, b.ArkEnvironmentID, blob); err != nil {
+		b.WorkspaceID, b.AgentID, b.ArkAgentID, b.ArkEnvironmentID, blob, nullIfEmpty(b.EnvironmentType)); err != nil {
 		return fmt.Errorf("core: 存方舟资源绑定失败: %w", err)
 	}
 	return nil
 }
 
 func (s *PGStore) ListArkBindings(ctx context.Context, workspaceID string) ([]persistmodel.ArkBinding, error) {
-	return queryDocs(ctx, s.client,
-		func(v persistmodel.ArkBinding) persistmodel.ArkBinding { return v },
-		`select doc from ark_bindings where workspace_id = $1 order by ord`, workspaceID)
+	rows, err := s.client.Query(ctx,
+		`select doc, environment_type from ark_bindings where workspace_id = $1 order by ord`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]persistmodel.ArkBinding, 0)
+	for rows.Next() {
+		b, err := scanArkBinding(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
 }
 
 func (s *PGStore) DeleteArkBinding(ctx context.Context, workspaceID, agentID string) error {
@@ -2053,14 +2086,16 @@ func (s *PGStore) DeleteArkBinding(ctx context.Context, workspaceID, agentID str
 // sibling agents catching up skills/prompts also write this table, and read-modify-write would overwrite the fingerprint they just wrote.
 // ark_environment_id=$2 in the where is the CAS guard: rows already moved by someone else are left alone.
 func (s *PGStore) RepointArkEnvironment(
-	ctx context.Context, workspaceID, oldEnvID, newEnvID string,
+	ctx context.Context, workspaceID, oldEnvID, newEnvID, environmentType string,
 ) (int, error) {
 	tag, err := s.client.Exec(ctx,
 		`update ark_bindings
 		    set ark_environment_id = $3,
+		        environment_type = nullif($4, ''),
 		        doc = jsonb_set(doc, '{arkEnvironmentId}', to_jsonb($3::text))
-		  where workspace_id = $1 and ark_environment_id = $2`,
-		workspaceID, oldEnvID, newEnvID)
+		  where workspace_id = $1 and ark_environment_id = $2
+		    and coalesce(environment_type, 'self_hosted') = $4`,
+		workspaceID, oldEnvID, newEnvID, environmentType)
 	if err != nil {
 		return 0, fmt.Errorf("core: 批量改指方舟环境失败: %w", err)
 	}
@@ -2803,8 +2838,8 @@ func (s *PGStore) insertSeed(ctx context.Context, tx *sql.Tx, data persistmodel.
 			`insert into agents (id, workspace_id, doc,
 			                     name, description, status, version,
 			                     created_at, updated_at, created_by, updated_by,
-			                     executor_type, host_id, host_source)
-			 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+			                     executor_type, host_id, host_source, environment_type)
+			 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 			args...); err != nil {
 			return fmt.Errorf("装载 agent %s 失败: %w", a.ID, err)
 		}

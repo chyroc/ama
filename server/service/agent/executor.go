@@ -69,6 +69,20 @@ func normalizeExecutor(d apimodel.AgentDraft) (executorTriple, error) {
 	}
 }
 
+// normalizedDraftExecutor removes configuration that needs an AMA container.
+// Ark cloud runs tools in its own sandbox, so silently retaining host, skills,
+// credential injection or env would promise effects that can never happen.
+func normalizedDraftExecutor(d apimodel.AgentDraft) apimodel.AgentDraft {
+	if apimodel.EffectiveArkEnvironment(d.BaseAgent, d.EnvironmentType) == apimodel.ArkEnvironmentCloud {
+		d.ExecutorType, d.HostID, d.HostSource = "", "", ""
+		d.SkillIDs = []string{}
+		d.IntegrationIDs = []string{}
+		d.CodebaseAppCredentialID, d.ServiceAccountCredentialID = "", ""
+		d.Envs, d.EnvAliases = []apimodel.AgentEnv{}, []apimodel.AgentEnvAlias{}
+	}
+	return d
+}
+
 // ErrPersonalHostNeedsCreator is the on-screen text for "only the creator can change a personal
 // direct-connect machine".
 // Same three things as ErrPersonalIntegrationNeedsCreator: why, whom to ask (%s), and the
