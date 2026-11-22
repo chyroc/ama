@@ -38,7 +38,6 @@ import {
 } from "react";
 import { BrandMark } from "@/components/BrandMark";
 import { AppShellScope, ListSkeleton } from "@/components/Page";
-import { AppLayout } from "@/components/ui/AppLayout";
 import { api } from "@/data/api";
 import { useWorkspace } from "@/app/WorkspaceGate";
 import { preferencesPath } from "@/app/preferencesLink";
@@ -709,10 +708,8 @@ export function AppShell({ children }: { children?: ReactNode } = {}) {
       against "someone changing #root's height in the future"; then this is the last barrier.
       Do not assume it is useless just because "deleting it does not fail any test".
     */
-    <AppLayout
-      classic={
-        <AppShellLayoutContext.Provider value={layoutCtx}>
-          <AppShellScope>
+    <AppShellLayoutContext.Provider value={layoutCtx}>
+      <AppShellScope>
         <div className="flex h-dvh overflow-hidden">
           {/* Fixed sidebar on desktop */}
           {!navCollapsed ? <div className="hidden md:flex h-full">{sidebar}</div> : null}
@@ -840,9 +837,5 @@ export function AppShell({ children }: { children?: ReactNode } = {}) {
         </div>
       </AppShellScope>
     </AppShellLayoutContext.Provider>
-      }
-    >
-      {children}
-    </AppLayout>
   );
 }

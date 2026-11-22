@@ -51,7 +51,6 @@ export const zhCN = {
   "nav.workspaceSettings": "空间设置",
   "nav.switchWorkspace": "切换空间",
   "nav.manageWorkspaces": "管理所有空间",
-  "nav.filterNav": "筛选导航",
   "nav.preferences": "偏好设置",
   // The item in the sidebar "account" group. Keep the same name as the page title (prefs.title):
   // an entry and its destination named differently make people think they clicked the wrong thing.
@@ -318,9 +317,6 @@ export const zhCN = {
   // (change someone else's agent once and it shows up in my list forever), while what users ask is "which ones are mine".
   "agent.mineOnly": "我创建的",
   "agent.mineOnlyEmpty": "这个空间里没有你创建的 Agent",
-  "agent.searchPlaceholder": "搜索 Agent 或提示词",
-  "agent.activeSummary": "个启用",
-  "common.open": "打开",
   // ⚠️ Existing agents cannot get their creator filled in, and the UI must honestly say "unknown" instead of leaving it empty or erroring.
   "user.unknownActor": "未记录创建者",
 
@@ -2403,7 +2399,6 @@ export const enUS: Messages = {
   "nav.workspaceSettings": "Workspace Settings",
   "nav.switchWorkspace": "Switch Workspace",
   "nav.manageWorkspaces": "Manage all workspaces",
-  "nav.filterNav": "Filter navigation",
   "nav.preferences": "Preferences",
   "nav.globalSettings": "Global Settings",
   "nav.openNav": "Open navigation",
@@ -2606,9 +2601,6 @@ export const enUS: Messages = {
   "agent.createdBy": "Created by",
   "agent.mineOnly": "Created by me",
   "agent.mineOnlyEmpty": "You have not created any agent in this workspace",
-  "agent.searchPlaceholder": "Search agents or prompts",
-  "agent.activeSummary": "active",
-  "common.open": "Open",
   "user.unknownActor": "Creator not recorded",
 
   "skill.listDesc":

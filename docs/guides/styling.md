@@ -18,20 +18,6 @@
 （Button / Chip / SegmentedControl / StatusPill / LoadingState），它们在通用加载、
 空状态、错误重试、提示条、偏好分段控件与新建 Agent 按钮里真实渲染。
 `classic` 走原组件，`azure` 才渲染这套组件，不在同一个控件上混用两套实现。
-
-## AMA 组件契约：组件内部选择完整实现
-
-**页面外观不通过 `theme ===` 散落分支决定。** 业务页面调用语义组件，
-`ThemedComponent` 在内部选择 Classic 或 Azure 的**完整实现**：
-`Ui.AppLayout` 负责应用外壳，`pages/AgentsPage` 与 `pages/PreferencesPage`
-只负责选择 `ClassicAgentsPage` / `AzureAgentsPage`、`ClassicPreferencesPage` /
-`AzurePreferencesPage`。两个实现共享数据模型、接口与业务回调，不共享卡片、
-导航、筛选、排版或组件树，不能把“只换 token 与局部按钮”说成第二套 UI。
-
-Classic 的实现文件由原页面原样保留；Azure 的实现文件有自己的结构、信息层级
-和控件。后续页面沿用这个契约：先定义语义 props，再让组件内部选择完整实现，
-不要把 `if theme === "azure"` 扩散到各个业务页面。
-
 组件来源、修改点与 MIT 许可在该目录的 `README.md` 与 `LICENSE` 中，**不要把来源和许可删掉**。
 它使用自己的 `@theme inline` 色板映射（`components/azure/theme.css`），只给澄蓝主题提供
 实际值；不要引入付费图标包或把参考站点作为运行时依赖。
