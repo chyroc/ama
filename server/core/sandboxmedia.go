@@ -49,6 +49,21 @@ func ReadRawSandboxFile(
 	return ReadRawSandboxFileWithHeaders(ctx, name, limit, download, open)
 }
 
+// ReadRawSandboxFileWithResume optionally prepares a paused executor before opening a file.
+// The downstream implementation decides whether resume is needed; a nil hook preserves existing behavior.
+func ReadRawSandboxFileWithResume(
+	ctx context.Context, name string, limit int64, download bool,
+	prepare func(context.Context) error,
+	open func(context.Context) (io.ReadCloser, error),
+) (RawSandboxFile, error) {
+	if prepare != nil {
+		if err := prepare(ctx); err != nil {
+			return RawSandboxFile{}, err
+		}
+	}
+	return ReadRawSandboxFileWithHeaders(ctx, name, limit, download, open)
+}
+
 // ReadRawSandboxFileWithHeaders also returns Content-Length when the executor reports it.
 func ReadRawSandboxFileWithHeaders(
 	ctx context.Context, name string, limit int64, download bool,
