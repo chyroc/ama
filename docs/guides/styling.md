@@ -4,46 +4,9 @@
 
 ## 主题
 
-**在 `web/src/index.css`**（简墨：高对比、几乎无彩的浅色，accent 墨蓝近黑），
-另有深色变体挂在 `.dark` 上。只覆盖基础 token，其余值由组件样式用
-`color-mix` 推导，所以换肤不必碰组件。**覆盖块必须在组件样式之后**才盖得住。
-
-## 可选主题：简墨与澄蓝
-
-「偏好设置 → 外观」里可以在 **简墨（`classic`）** 与 **澄蓝（`azure`）** 之间切换。
-简墨就是原来的视觉样式，**它的 token 不要改来迁就另一套**。澄蓝只在
-`:root[data-theme="azure"]`（含 `.dark`）里覆盖 token 与局部圆角，采用更柔和的蓝色强调。
-主题写在 `<html data-theme>`，与浅深色的 `.dark` 是两个独立维度。
-「澄蓝」不仅覆盖 token：`web/src/components/azure/` 里还接入了复制源码的 React 组件
-（Button / Chip / SegmentedControl / StatusPill / LoadingState），它们在通用加载、
-空状态、错误重试、提示条、偏好分段控件与新建 Agent 按钮里真实渲染。
-`classic` 走原组件，`azure` 才渲染这套组件，不在同一个控件上混用两套实现。
-
-## AMA 组件契约：组件内部选择完整实现
-
-**页面外观不通过 `theme ===` 散落分支决定。** 业务页面调用语义组件，
-`ThemedComponent` 在内部选择 Classic 或 Azure 的**完整实现**：
-`Ui.AppLayout` 负责应用外壳，`pages/AgentsPage` 与 `pages/PreferencesPage`
-只负责选择 `ClassicAgentsPage` / `AzureAgentsPage`、`ClassicPreferencesPage` /
-`AzurePreferencesPage`。两个实现共享数据模型、接口与业务回调，不共享卡片、
-导航、筛选、排版或组件树，不能把“只换 token 与局部按钮”说成第二套 UI。
-
-Classic 的实现文件由原页面原样保留；Azure 的实现文件有自己的结构、信息层级
-和控件。后续页面沿用这个契约：先定义语义 props，再让组件内部选择完整实现，
-不要把 `if theme === "azure"` 扩散到各个业务页面。
-
-组件来源、修改点与 MIT 许可在该目录的 `README.md` 与 `LICENSE` 中，**不要把来源和许可删掉**。
-它使用自己的 `@theme inline` 色板映射（`components/azure/theme.css`），只给澄蓝主题提供
-实际值；不要引入付费图标包或把参考站点作为运行时依赖。
-
-
-用户选择存进 `user_preferences.theme` 独立列，前后端各自把未知值归回 `classic`；
-缺省与旧行都按简墨。`main.tsx` 在挂载前同时应用浅深色和主题，刷新不会先闪回简墨。
-UI 只展示「简墨 / 澄蓝」，不要把内部实现或参考网站的品牌名写进界面。
-
-新增主题或改配色时，要用浏览器验证：点击选择后根节点属性与 accent 真变了，
-刷新保持、回切原主题恢复，并看实际截图。`e2e/07-preferences.spec.ts` 的主题用例
-用 RGB 比较，别断言浏览器会把 OKLCH 原样输出（它可能输出百分比）。
+**在 `web/src/index.css`**（北欧：高对比、几乎无彩的浅色，accent 墨蓝近黑），
+另有深色变体挂在 `.dark` 上。只覆盖 HeroUI 的基础 token，其余值由 HeroUI 用
+`color-mix` 推导，所以换肤不必碰组件。**覆盖块必须在 `@heroui/styles` 之后**才盖得住。
 
 ## 深色不是把浅色明度反过来
 

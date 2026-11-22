@@ -1741,12 +1741,12 @@ func (s *PGStore) DeleteAgentArkSecret(ctx context.Context, agentID string) erro
 // Columns are scanned by hand instead of going through getDoc: this table has no doc jsonb, and all three scalars are real columns
 // (see schema_prefs_pg.sql for why).
 func (s *PGStore) GetUserPreferences(ctx context.Context, email string) (persistmodel.UserPreferencesRecord, error) {
-	var language, appearance, theme string
+	var language, appearance string
 	var updatedAt time.Time
 	err := s.client.QueryRow(ctx,
-		`select language, appearance, theme, updated_at
+		`select language, appearance, updated_at
 		   from user_preferences where email = $1`, email).
-		Scan(&language, &appearance, &theme, &updatedAt)
+		Scan(&language, &appearance, &updatedAt)
 	if err != nil {
 		if pg.IsNoRows(err) {
 			return persistmodel.UserPreferencesRecord{}, persistmodel.ErrNotFound
@@ -1757,7 +1757,6 @@ func (s *PGStore) GetUserPreferences(ctx context.Context, email string) (persist
 		Email:      email,
 		Language:   language,
 		Appearance: appearance,
-		Theme:      theme,
 		UpdatedAt:  updatedAt,
 	}, nil
 }
@@ -1781,14 +1780,13 @@ func (s *PGStore) GetUserPreferences(ctx context.Context, email string) (persist
 // The in-memory implementation also overwrites the whole row; the two must match (see MemStore.PutUserPreferences).
 func (s *PGStore) PutUserPreferences(ctx context.Context, rec persistmodel.UserPreferencesRecord) error {
 	if _, err := s.client.Exec(ctx,
-		`insert into user_preferences (email, language, appearance, theme, updated_at)
-		 values ($1, $2, $3, $4, $5)
+		`insert into user_preferences (email, language, appearance, updated_at)
+		 values ($1, $2, $3, $4)
 		 on conflict (email) do update
 		   set language   = excluded.language,
 		       appearance = excluded.appearance,
-		       theme      = excluded.theme,
 		       updated_at = excluded.updated_at`,
-		rec.Email, rec.Language, rec.Appearance, rec.Theme, rec.UpdatedAt); err != nil {
+		rec.Email, rec.Language, rec.Appearance, rec.UpdatedAt); err != nil {
 		return fmt.Errorf("core: 存用户偏好失败: %w", err)
 	}
 	return nil

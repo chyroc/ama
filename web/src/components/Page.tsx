@@ -12,10 +12,7 @@ import { FeedbackButton } from "@/components/FeedbackButton";
 import type { FeedbackContext } from "@/lib/feedback";
 import type { AsyncError } from "@/lib/useAsyncData";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
-import { usePrefs, useT } from "@/prefs/PrefsContext";
-import { AzureButton } from "@/components/azure/atoms/Button";
-import { AzureStatusPill } from "@/components/azure/atoms/StatusPill";
-import { AzureLoadingState } from "@/components/azure/primitives/LoadingState";
+import { useT } from "@/prefs/PrefsContext";
 
 interface PageHeaderProps {
   title: string;
@@ -121,15 +118,7 @@ export function PageBody({ children }: { children: ReactNode }) {
 /** When label is not given, use the current language's version of "loading"; the default must not be hard-coded Chinese. */
 export function LoadingBlock({ label }: { label?: string }) {
   const t = useT();
-  const { theme } = usePrefs();
   const text = label ?? t("common.loading");
-  if (theme === "azure") {
-    return (
-      <div className="flex items-center justify-center py-16">
-        <AzureLoadingState label={text} />
-      </div>
-    );
-  }
   return (
     <div
       className="flex items-center justify-center gap-3 py-16 text-muted"
@@ -217,21 +206,6 @@ interface EmptyProps {
 }
 
 export function Empty({ icon, title, description, action }: EmptyProps) {
-  const { theme } = usePrefs();
-  if (theme === "azure") {
-    return (
-      <div className="flex flex-col items-center gap-4 py-16 text-center" data-azure-component="empty-state">
-        <div className="flex size-12 items-center justify-center rounded-[10px] bg-inset shadow-hairline">
-          <Icon icon={icon} className="size-6 text-ink-3" />
-        </div>
-        <div className="flex flex-col gap-1">
-          <h2 className="text-base font-medium text-ink">{title}</h2>
-          {description ? <p className="max-w-md text-sm text-balance text-ink-2">{description}</p> : null}
-        </div>
-        {action}
-      </div>
-    );
-  }
   return (
     <EmptyState className="py-16">
       <div className="flex flex-col items-center gap-4 text-center">
@@ -253,7 +227,6 @@ export function Empty({ icon, title, description, action }: EmptyProps) {
 
 export function ErrorBlock({ message, onRetry }: { message: string; onRetry?: () => void }) {
   const t = useT();
-  const { theme } = usePrefs();
   return (
     <Empty
       icon="gravity-ui:triangle-exclamation"
@@ -261,15 +234,9 @@ export function ErrorBlock({ message, onRetry }: { message: string; onRetry?: ()
       description={message}
       action={
         onRetry ? (
-          theme === "azure" ? (
-            <AzureButton variant="accent" onClick={onRetry}>
-              {t("common.retry")}
-            </AzureButton>
-          ) : (
-            <Button variant="outline" onPress={onRetry}>
-              {t("common.retry")}
-            </Button>
-          )
+          <Button variant="outline" onPress={onRetry}>
+            {t("common.retry")}
+          </Button>
         ) : undefined
       }
     />
@@ -476,7 +443,6 @@ export function Notice({
     tone === "danger" ? "bg-danger/5" : tone === "info" ? "bg-surface-secondary" : "bg-warning/5";
   // The info icon uses muted: in a neutral tone, making the icon as heavy as the title would look like emphasis.
   const iconColor = tone === "info" ? "text-muted" : color;
-  const { theme } = usePrefs();
   return (
     <div className={`flex items-start gap-2 r-inset ${bg} px-3 py-2.5`} data-testid={testId}>
       <Icon icon={icon} className={`mt-0.5 size-4 shrink-0 ${iconColor}`} />
@@ -485,13 +451,6 @@ export function Notice({
         {hint ? <p className="text-xs text-muted">{hint}</p> : null}
         {action ? <div className="mt-1 flex flex-wrap items-center gap-2">{action}</div> : null}
       </div>
-      {theme === "azure" ? (
-        <AzureStatusPill
-          tone={tone === "danger" ? "red" : tone === "warning" ? "orange" : "accent"}
-          dot={true}
-          className="shrink-0"
-        />
-      ) : null}
     </div>
   );
 }

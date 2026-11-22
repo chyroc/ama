@@ -51,7 +51,6 @@ export const zhCN = {
   "nav.workspaceSettings": "空间设置",
   "nav.switchWorkspace": "切换空间",
   "nav.manageWorkspaces": "管理所有空间",
-  "nav.filterNav": "筛选导航",
   "nav.preferences": "偏好设置",
   // The item in the sidebar "account" group. Keep the same name as the page title (prefs.title):
   // an entry and its destination named differently make people think they clicked the wrong thing.
@@ -318,9 +317,6 @@ export const zhCN = {
   // (change someone else's agent once and it shows up in my list forever), while what users ask is "which ones are mine".
   "agent.mineOnly": "我创建的",
   "agent.mineOnlyEmpty": "这个空间里没有你创建的 Agent",
-  "agent.searchPlaceholder": "搜索 Agent 或提示词",
-  "agent.activeSummary": "个启用",
-  "common.open": "打开",
   // ⚠️ Existing agents cannot get their creator filled in, and the UI must honestly say "unknown" instead of leaving it empty or erroring.
   "user.unknownActor": "未记录创建者",
 
@@ -1722,12 +1718,6 @@ export const zhCN = {
   "prefs.appearanceDark": "深色",
   "prefs.appearanceSystem": "跟随系统",
   "prefs.appearanceSystemHint": "当前系统为{mode}",
-  "prefs.theme": "主题",
-  "prefs.themeDesc": "选择界面的配色与层次，立即生效并保存到账号",
-  "prefs.themeClassic": "简墨",
-  "prefs.themeClassicDesc": "克制、清晰，以中性色建立阅读层次。",
-  "prefs.themeAzure": "澄蓝",
-  "prefs.themeAzureDesc": "柔和的蓝色强调，配合更轻盈的卡片与留白。",
   "prefs.backToWorkspaces": "返回空间列表",
   // The back text when coming in from a workspace. **Include the workspace name**: this page looks the same in both contexts,
   // and the name is the only clue users have to judge "where clicking goes".
@@ -2403,7 +2393,6 @@ export const enUS: Messages = {
   "nav.workspaceSettings": "Workspace Settings",
   "nav.switchWorkspace": "Switch Workspace",
   "nav.manageWorkspaces": "Manage all workspaces",
-  "nav.filterNav": "Filter navigation",
   "nav.preferences": "Preferences",
   "nav.globalSettings": "Global Settings",
   "nav.openNav": "Open navigation",
@@ -2606,9 +2595,6 @@ export const enUS: Messages = {
   "agent.createdBy": "Created by",
   "agent.mineOnly": "Created by me",
   "agent.mineOnlyEmpty": "You have not created any agent in this workspace",
-  "agent.searchPlaceholder": "Search agents or prompts",
-  "agent.activeSummary": "active",
-  "common.open": "Open",
   "user.unknownActor": "Creator not recorded",
 
   "skill.listDesc":
@@ -3795,12 +3781,6 @@ export const enUS: Messages = {
   "prefs.appearanceDark": "Dark",
   "prefs.appearanceSystem": "Follow system",
   "prefs.appearanceSystemHint": "System is currently {mode}",
-  "prefs.theme": "Theme",
-  "prefs.themeDesc": "Choose the colors and surface style; applied immediately and saved to your account",
-  "prefs.themeClassic": "Ink",
-  "prefs.themeClassicDesc": "Restrained, crisp, and organized through neutral tones.",
-  "prefs.themeAzure": "Azure",
-  "prefs.themeAzureDesc": "Soft blue accents with lighter cards and generous spacing.",
   "prefs.backToWorkspaces": "Back to workspaces",
   "prefs.backToWorkspace": "Back to {name}",
 

@@ -37,7 +37,6 @@ import {
 import {
   applyAppearance,
   applyLanguage,
-  applyTheme,
   hasCachedPrefs,
   loadPrefs,
   resolveAppearance,
@@ -45,7 +44,6 @@ import {
   type Appearance,
   type Language,
   type Prefs,
-  type Theme,
 } from "@/prefs/storage";
 import { MESSAGES, type MessageKey } from "@/prefs/messages";
 import { api } from "@/data/api";
@@ -58,7 +56,6 @@ interface PrefsContextValue extends Prefs {
   resolvedAppearance: "light" | "dark";
   setLanguage: (lang: Language) => void;
   setAppearance: (appearance: Appearance) => void;
-  setTheme: (theme: Theme) => void;
   /**
    * Sync with the server once. **Called by AuthGate after login is confirmed**; see the file header.
    *
@@ -101,7 +98,6 @@ export function PrefsProvider({ children }: { children: ReactNode }) {
   // turning one read into a read plus a write. Storing in the database is started explicitly by setLanguage / setAppearance.
   useEffect(() => {
     applyAppearance(prefs.appearance);
-    applyTheme(prefs.theme);
     applyLanguage(prefs.language);
     setResolved(resolveAppearance(prefs.appearance));
     savePrefs(prefs);
@@ -144,10 +140,8 @@ export function PrefsProvider({ children }: { children: ReactNode }) {
     try {
       const remote = await api.getUserPreferences();
       const cached = loadPrefs();
-      const remoteIsDefault = remote.language === "zh-CN" && remote.appearance === "system" &&
-        remote.theme === "classic";
-      const cachedIsDefault = cached.language === "zh-CN" && cached.appearance === "system" &&
-        cached.theme === "classic";
+      const remoteIsDefault = remote.language === "zh-CN" && remote.appearance === "system";
+      const cachedIsDefault = cached.language === "zh-CN" && cached.appearance === "system";
 
       if (hasCachedPrefs() && remoteIsDefault && !cachedIsDefault) {
         // Migration: this machine's copy was set before the upgrade, and the server does not have it yet. Write it up; the UI does not change.
@@ -209,17 +203,6 @@ export function PrefsProvider({ children }: { children: ReactNode }) {
     [persist],
   );
 
-  const setTheme = useCallback(
-    (theme: Theme) => {
-      setPrefs((p) => {
-        const next = { ...p, theme };
-        persist(next);
-        return next;
-      });
-    },
-    [persist],
-  );
-
   const t = useCallback<TFunc>(
     (key, vars) => interpolate(MESSAGES[prefs.language][key] ?? key, vars),
     [prefs.language],
@@ -231,11 +214,10 @@ export function PrefsProvider({ children }: { children: ReactNode }) {
       resolvedAppearance: resolved,
       setLanguage,
       setAppearance,
-      setTheme,
       syncFromServer,
       t,
     }),
-    [prefs, resolved, setLanguage, setAppearance, setTheme, syncFromServer, t],
+    [prefs, resolved, setLanguage, setAppearance, syncFromServer, t],
   );
 
   return <PrefsContext.Provider value={value}>{children}</PrefsContext.Provider>;
