@@ -75,7 +75,7 @@ function SeedanceImagePreviewItem({
           <span>{t("seedance.previewUnavailable")}</span>
         </div>
       )}
-      {url && !failed ? (
+      {url ? (
         <figcaption className="flex justify-end border-t border-border px-2 py-1.5">
           <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground">
             <span>{t("seedance.openImage")}</span>
