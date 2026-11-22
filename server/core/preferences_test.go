@@ -153,6 +153,43 @@ func TestPreferencesNormalizesBadValues(t *testing.T) {
 	}
 }
 
+func TestPreferencesThemeRoundTripAndLegacyDefault(t *testing.T) {
+	svc, _ := newService(t)
+	ctx := prefsCtx(prefsAlice)
+
+	legacy, err := svc.SaveUserPreferences(ctx, UserPreferences{
+		Language: LanguageEnUS, Appearance: AppearanceDark,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Theme != ThemeClassic {
+		t.Fatalf("old preference payloads must preserve the classic theme: %+v", legacy)
+	}
+	saved, err := svc.SaveUserPreferences(ctx, UserPreferences{
+		Language: LanguageEnUS, Appearance: AppearanceDark, Theme: ThemeAzure,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Theme != ThemeAzure {
+		t.Fatalf("theme=%q, want azure", saved.Theme)
+	}
+	got, err := svc.GetUserPreferences(ctx)
+	if err != nil || got != saved {
+		t.Fatalf("round trip got %+v, err=%v", got, err)
+	}
+	unknown, err := svc.SaveUserPreferences(ctx, UserPreferences{
+		Language: LanguageEnUS, Appearance: AppearanceDark, Theme: "other",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unknown.Theme != ThemeClassic || unknown.Appearance != AppearanceDark {
+		t.Fatalf("bad theme must fall back alone, got %+v", unknown)
+	}
+}
+
 // TestPreferencesAreIsolatedPerAccount checks that A's preferences can be neither read nor
 // changed by B.
 //

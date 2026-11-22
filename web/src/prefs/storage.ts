@@ -31,10 +31,11 @@ import {
   normalizeUserPreferences,
   type Appearance,
   type Language,
+  type Theme,
   type UserPreferences,
 } from "@/types/domain";
 
-export type { Appearance, Language };
+export type { Appearance, Language, Theme };
 
 /** The shape of preferences. It is just UserPreferences; the local alias saves changing a pile of call sites. */
 export type Prefs = UserPreferences;
@@ -103,6 +104,10 @@ export function applyAppearance(appearance: Appearance): void {
   root.classList.toggle("dark", resolved === "dark");
   root.classList.toggle("light", resolved === "light");
   root.style.colorScheme = resolved;
+}
+
+export function applyTheme(theme: Theme): void {
+  document.documentElement.dataset.theme = theme;
 }
 
 export function applyLanguage(language: Language): void {
