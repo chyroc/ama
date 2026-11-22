@@ -76,12 +76,40 @@ import { HostsTab } from "@/pages/HostsTab";
 import { IntegrationsTab } from "@/pages/IntegrationsTab";
 import { SuggestionsTab } from "@/pages/SuggestionsTab";
 import { usePrefs } from "@/prefs/PrefsContext";
-import type { Appearance, Language } from "@/prefs/storage";
+import type { Appearance, Language, Theme } from "@/prefs/storage";
 
 const LANGUAGE_LABELS: Record<Language, string> = {
   "zh-CN": "简体中文",
   "en-US": "English",
 };
+
+/** Theme ids are internal; display names never name a component vendor. */
+function ThemePreview({ theme, label, description }: {
+  theme: Theme;
+  label: string;
+  description: string;
+}) {
+  return (
+    <span className={`theme-preview theme-preview--${theme}`} aria-hidden="true">
+      <span className="theme-preview__canvas">
+        <span className="theme-preview__side" />
+        <span className="theme-preview__content">
+          <span className="theme-preview__title" />
+          <span className="theme-preview__line" />
+          <span className="theme-preview__cards">
+            <span />
+            <span />
+          </span>
+          <span className="theme-preview__button" />
+        </span>
+      </span>
+      <span className="flex flex-col gap-1 text-left">
+        <span className="text-sm font-medium text-foreground">{label}</span>
+        <span className="max-w-3xs text-xs leading-5 text-muted">{description}</span>
+      </span>
+    </span>
+  );
+}
 
 /**
  * Tab definitions. Store translation keys, not text: when module-level constants are evaluated
@@ -131,7 +159,7 @@ type TabId = (typeof TABS)[number]["id"];
 
 /** Appearance and language. */
 function GeneralTab() {
-  const { language, appearance, resolvedAppearance, setLanguage, setAppearance, t } = usePrefs();
+  const { language, appearance, resolvedAppearance, setLanguage, setAppearance, theme, setTheme, t } = usePrefs();
   const onboarding = useOnboarding();
 
   const appearanceOptions: { id: Appearance; label: string; icon: string }[] = [
@@ -205,6 +233,37 @@ function GeneralTab() {
               </Chip>
             ) : null}
           </div>
+        </div>
+
+        <div className="flex flex-col gap-4" data-testid="prefs-theme-section">
+          <SectionTitle title={t("prefs.theme")} description={t("prefs.themeDesc")} />
+          <ToggleButtonGroup
+            isDetached
+            selectionMode="single"
+            disallowEmptySelection
+            selectedKeys={new Set([theme])}
+            onSelectionChange={(keys) => {
+              const next = [...keys][0];
+              if (next) setTheme(String(next) as Theme);
+            }}
+            className="grid w-full gap-3 sm:grid-cols-2"
+            aria-label={t("prefs.theme")}
+          >
+            {(["classic", "azure"] as const).map((id) => (
+              <ToggleButton
+                key={id}
+                id={id}
+                data-testid={`prefs-theme-${id}`}
+                className="h-auto justify-start border border-border p-3 data-[selected=true]:border-accent data-[selected=true]:bg-surface-secondary"
+              >
+                <ThemePreview
+                  theme={id}
+                  label={t(id === "classic" ? "prefs.themeClassic" : "prefs.themeAzure")}
+                  description={t(id === "classic" ? "prefs.themeClassicDesc" : "prefs.themeAzureDesc")}
+                />
+              </ToggleButton>
+            ))}
+          </ToggleButtonGroup>
         </div>
 
         {/*

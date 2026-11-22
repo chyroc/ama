@@ -55,6 +55,11 @@ const (
 	AppearanceDark = "dark"
 	// AppearanceSystem follows the system setting, the default.
 	AppearanceSystem = "system"
+
+	// ThemeClassic preserves the existing restrained visual style.
+	ThemeClassic = "classic"
+	// ThemeAzure adds a softer blue accent and more layered surfaces.
+	ThemeAzure = "azure"
 )
 
 // UserPreferencesRecord has moved to model/persistmodel (same as OnboardingRecord).
@@ -65,7 +70,7 @@ const (
 // who never set anything sees the UI jump between "first frame uses the localStorage
 // default" and "the API response arrives", and nobody did anything to cause that jump.
 func DefaultUserPreferences() UserPreferences {
-	return UserPreferences{Language: LanguageZhCN, Appearance: AppearanceSystem}
+	return UserPreferences{Language: LanguageZhCN, Appearance: AppearanceSystem, Theme: ThemeClassic}
 }
 
 // GetUserPreferences reads the preferences of the current logged-in user.
@@ -96,6 +101,7 @@ func (s *AccountService) GetUserPreferences(ctx context.Context) (UserPreference
 	return normalizeUserPreferences(UserPreferences{
 		Language:   rec.Language,
 		Appearance: rec.Appearance,
+		Theme:      rec.Theme,
 	}), nil
 }
 
@@ -126,6 +132,7 @@ func (s *AccountService) SaveUserPreferences(ctx context.Context, prefs UserPref
 		Email:      actor,
 		Language:   normalized.Language,
 		Appearance: normalized.Appearance,
+		Theme:      normalized.Theme,
 		UpdatedAt:  time.Now().UTC(),
 	}
 
@@ -186,6 +193,10 @@ func normalizeUserPreferences(p UserPreferences) UserPreferences {
 	switch p.Appearance {
 	case AppearanceLight, AppearanceDark, AppearanceSystem:
 		out.Appearance = p.Appearance
+	}
+	switch p.Theme {
+	case ThemeClassic, ThemeAzure:
+		out.Theme = p.Theme
 	}
 	return out
 }

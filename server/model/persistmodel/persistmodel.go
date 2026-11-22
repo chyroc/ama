@@ -152,6 +152,7 @@ type UserPreferencesRecord struct {
 	Email      string
 	Language   string
 	Appearance string
+	Theme      string
 	UpdatedAt  time.Time
 }
 

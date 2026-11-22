@@ -7,7 +7,7 @@ import { installConsoleCapture } from "@/lib/feedback";
 import { AuthGate } from "@/app/AuthGate";
 import { OnboardingProvider } from "@/app/OnboardingTour";
 import { PrefsProvider } from "@/prefs/PrefsContext";
-import { applyAppearance, applyLanguage, loadPrefs } from "@/prefs/storage";
+import { applyAppearance, applyLanguage, applyTheme, loadPrefs } from "@/prefs/storage";
 import "@/index.css";
 
 // Icons must be registered before rendering: after the first frame, @iconify/react has already sent
@@ -31,6 +31,7 @@ installConsoleCapture();
 // before switching to dark
 const initial = loadPrefs();
 applyAppearance(initial.appearance);
+applyTheme(initial.theme);
 applyLanguage(initial.language);
 
 // AuthGate wraps **outside** RouterProvider: so pages outside WorkspaceGate, such as /workspaces

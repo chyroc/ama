@@ -40,6 +40,48 @@ async function setPrefs(
   }, prefs);
 }
 
+test("主题可切换、跨页面保持，回切后仍是原有配色", async ({ app }) => {
+  await app.goto("/preferences");
+  const root = app.locator("html");
+  const rgb = (value: string) => app.evaluate((color) => {
+    const probe = document.createElement("span");
+    probe.style.color = color;
+    document.body.appendChild(probe);
+    const computed = getComputedStyle(probe).color;
+    probe.remove();
+    return computed;
+  }, value);
+  const classicRGB = await rgb("oklch(0.2432 0.0298 264.36)");
+  const azureRGB = await rgb("oklch(0.556 0.187 255.62)");
+  const accent = () => root.evaluate((el) => {
+    const probe = document.createElement("span");
+    probe.style.color = getComputedStyle(el).getPropertyValue("--accent").trim();
+    document.body.appendChild(probe);
+    const computed = getComputedStyle(probe).color;
+    probe.remove();
+    return computed;
+  });
+
+  await expect(root).toHaveAttribute("data-theme", "classic");
+  await expect.poll(accent).toBe(classicRGB);
+
+  await app.getByTestId("prefs-theme-azure").click();
+  await expect(root).toHaveAttribute("data-theme", "azure");
+  await expect.poll(accent).toBe(azureRGB);
+  await expect.poll(async () => (await readServerPrefs(app))?.theme).toBe("azure");
+
+  await app.goto("/w/growth/agents");
+  await expect(root).toHaveAttribute("data-theme", "azure");
+  await app.reload();
+  await expect(root).toHaveAttribute("data-theme", "azure");
+
+  await app.goto("/preferences");
+  await app.getByTestId("prefs-theme-classic").click();
+  await expect(root).toHaveAttribute("data-theme", "classic");
+  await expect.poll(accent).toBe(classicRGB);
+  await expect.poll(async () => (await readServerPrefs(app))?.theme).toBe("classic");
+});
+
 test("偏好设置页在 workspace 之外，无空间也能进", async ({ page }) => {
   await page.goto("/workspaces");
   await page.evaluate(() => window.__amaApi?.clear());
@@ -505,6 +547,7 @@ test("升级迁移：本机的旧设置不会丢，会被搬到服务端", async
   await expect.poll(async () => await readServerPrefs(app)).toEqual({
     language: "en-US",
     appearance: "dark",
+    theme: "classic",
   });
 });
 

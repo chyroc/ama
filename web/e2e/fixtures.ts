@@ -617,7 +617,7 @@ export async function restoreOnboardingMock(page: Page): Promise<void> {
  */
 export async function setServerPrefs(
   page: Page,
-  prefs: { language: string; appearance: string } | null,
+  prefs: { language: string; appearance: string; theme?: string } | null,
 ): Promise<void> {
   await page.evaluate((p) => window.__amaApi?.setServerPreferences?.(p), prefs);
 }
@@ -625,7 +625,7 @@ export async function setServerPrefs(
 /** Read "the server copy" of preferences, to assert whether migration really wrote it up. */
 export async function readServerPrefs(
   page: Page,
-): Promise<{ language: string; appearance: string } | null> {
+): Promise<{ language: string; appearance: string; theme?: string } | null> {
   return page.evaluate(() => window.__amaApi?.serverPreferences?.() ?? null);
 }
 
@@ -1062,10 +1062,10 @@ declare global {
        * cross-device assertions. Passing null means the server has no record (the precondition of the migration branch).
        */
       setServerPreferences?: (
-        prefs: { language: string; appearance: string } | null,
+        prefs: { language: string; appearance: string; theme?: string } | null,
       ) => void;
       /** Read "the server copy" of preferences; null means no record. Used to assert the migration result. */
-      serverPreferences?: () => { language: string; appearance: string } | null;
+      serverPreferences?: () => { language: string; appearance: string; theme?: string } | null;
       /**
        * Problem feedback the mock received. Only LocalApiClient has it.
        *
