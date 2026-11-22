@@ -126,6 +126,7 @@ export const USED = [
   "plus",
   "puzzle",
   "rocket",
+  "server",
   "shield-check",
   "smartphone",
   "sparkles",

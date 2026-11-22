@@ -75,6 +75,7 @@ func (s *Service) GetAgent(ctx context.Context, id string) (apimodel.Agent, erro
 
 // CreateAgent creates an agent. version starts from 1.
 func (s *Service) CreateAgent(ctx context.Context, workspaceID string, draft apimodel.AgentDraft) (apimodel.Agent, error) {
+	draft = normalizedDraftExecutor(draft)
 	if err := validateAgentDraft(draft); err != nil {
 		return apimodel.Agent{}, err
 	}
@@ -142,6 +143,8 @@ func (s *Service) CreateAgent(ctx context.Context, workspaceID string, draft api
 		// BaseAgent is written only here; UpdateAgent refuses to change it (Ark's base_agent is
 		// immutable after creation, and the Ark binding was created for one type).
 		BaseAgent: strings.TrimSpace(draft.BaseAgent),
+		EnvironmentType: apimodel.EffectiveArkEnvironment(
+			draft.BaseAgent, draft.EnvironmentType),
 		// Long-term memory is opt-in per agent; default false (see apimodel.Agent).
 		OpenVikingEnabled: draft.OpenVikingEnabled,
 		Version:           1,
@@ -198,7 +201,7 @@ func (s *Service) CreateAgent(ctx context.Context, workspaceID string, draft api
 	}
 	// Codex agents execute tools inside Ark's cloud sandbox rather than AMA's executor, so normalize
 	// executor fields to their default values to prevent a silent no-op host binding.
-	if a.BaseAgent == apimodel.BaseAgentCodex {
+	if apimodel.EffectiveArkEnvironment(a.BaseAgent, a.EnvironmentType) == apimodel.ArkEnvironmentCloud {
 		a.ExecutorType, a.HostID, a.HostSource = "", "", ""
 	}
 	created, err := s.store.CreateAgent(ctx, a)
@@ -258,6 +261,19 @@ func (s *Service) UpdateAgentWithReason(
 	if err != nil {
 		return apimodel.Agent{}, fmt.Errorf("%w: Agent 不存在", persistmodel.ErrNotFound)
 	}
+	// An old client may omit environmentType. Preserve the stored choice before
+	// deciding which fields need an AMA container; empty means self_hosted only
+	// for legacy rows, never an instruction to change an existing cloud agent.
+	if strings.TrimSpace(draft.EnvironmentType) != "" &&
+		apimodel.EffectiveArkEnvironment(a.BaseAgent, draft.EnvironmentType) !=
+			apimodel.EffectiveArkEnvironment(a.BaseAgent, a.EnvironmentType) {
+		return apimodel.Agent{}, fmt.Errorf(
+			"%w: 方舟运行环境创建后不能修改（当前 %s）",
+			persistmodel.ErrInvalidArgument,
+			apimodel.EffectiveArkEnvironment(a.BaseAgent, a.EnvironmentType))
+	}
+	draft.EnvironmentType = apimodel.EffectiveArkEnvironment(a.BaseAgent, a.EnvironmentType)
+	draft = normalizedDraftExecutor(draft)
 	// Feishu apps are 1:1 exclusive. **Exclude itself**: otherwise the most common save, "only rename,
 	// send the bindings back unchanged",
 	// would be blocked by its own existing binding, showing up as "this agent cannot be saved
@@ -361,7 +377,7 @@ func (s *Service) UpdateAgentWithReason(
 	a.HostID = tri.HostID
 	a.HostSource = tri.Source
 	// Codex agents do not use AMA's executor (tools run in Ark's cloud sandbox); reset on update too.
-	if a.BaseAgent == apimodel.BaseAgentCodex {
+	if apimodel.EffectiveArkEnvironment(a.BaseAgent, a.EnvironmentType) == apimodel.ArkEnvironmentCloud {
 		a.ExecutorType, a.HostID, a.HostSource = "", "", ""
 	}
 	// Ark increments version on every update; mirror that behavior here
@@ -771,6 +787,11 @@ func (s *Service) setAgentIntegrations(
 	if err != nil {
 		return apimodel.Agent{}, fmt.Errorf("%w: Agent 不存在", persistmodel.ErrNotFound)
 	}
+	if apimodel.EffectiveArkEnvironment(a.BaseAgent, a.EnvironmentType) == apimodel.ArkEnvironmentCloud &&
+		(len(ids) > 0 || len(creds) > 0) {
+		return apimodel.Agent{}, fmt.Errorf(
+			"%w: 方舟 cloud 环境没有 AMA 容器，不能注入平台凭据", persistmodel.ErrInvalidArgument)
+	}
 	// ⚠️⚠️ **This gate cannot be skipped here, even though Guard already checked ActionManage.**
 	//
 	// Guard checks "are you an admin of this workspace", while it cannot check the two new rules:
@@ -1052,12 +1073,13 @@ func validateAgentDraft(d apimodel.AgentDraft) error {
 	if base := strings.TrimSpace(d.BaseAgent); base != "" && base != apimodel.BaseAgentCodex {
 		return fmt.Errorf("%w: 基础 Agent 类型只支持 codex", persistmodel.ErrInvalidArgument)
 	}
-	// codex runs in Ark's cloud sandbox and executes its own tools; AMA's host executor would
-	// never see a tool call, so the combination is a silent no-op and is rejected instead.
-	if strings.TrimSpace(d.BaseAgent) == apimodel.BaseAgentCodex &&
-		strings.TrimSpace(d.ExecutorType) == "host" {
-		return fmt.Errorf(
-			"%w: Codex 类型的工具在方舟云端沙箱执行，不能绑定自建机器执行器", persistmodel.ErrInvalidArgument)
+	if envType := strings.TrimSpace(d.EnvironmentType); envType != "" &&
+		envType != apimodel.ArkEnvironmentCloud && envType != apimodel.ArkEnvironmentSelfHosted {
+		return fmt.Errorf("%w: 方舟运行环境只支持 cloud 或 self_hosted", persistmodel.ErrInvalidArgument)
+	}
+	// cloud and Codex both execute tools in Ark; a host binding would never run.
+	if _, err := normalizeExecutor(normalizedDraftExecutor(d)); err != nil {
+		return err
 	}
 	if err := validateAgentEnvs(d.Envs); err != nil {
 		return err

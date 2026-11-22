@@ -178,39 +178,16 @@ func (r *LiveRunner) CreateAgent(
 	return CreatedAgent{ID: ag.ID, SkillCount: len(ag.Skills)}, nil
 }
 
-// EnsureEnvironment creates a self_hosted environment.
-//
-// # Only self_hosted, never cloud
-//
-// With cloud, Ark runs the agent loop itself and tools execute in its managed sandbox; with
-// self_hosted, Ark only does model inference, and tool calls are put into the work queue, picked
-// up by our worker, and run in our Docker containers (see core/worker.go and
-// shared/infra/dockertools). This project needs the latter: the execution environment must be in
-// our hands.
-//
-// **self_hosted does not accept networking**: outbound network access is managed by the
-// self-hosted runtime itself, and passing it is rejected
-// (400 InvalidParameter: config.networking: not allowed when config.type is
-// "self_hosted"). Counter-intuitively, **reading it back after creation does include a networking
-// field**, so do not infer what the request should send from the response body. ma.EnvironmentSpec
-// already handles this difference (only EnvCloud fills Networking), so leave it empty here.
-//
-// # The name must be unique; no fixed names
-//
-// Environment names are unique within a project, and creating a duplicate returns 409. **This used
-// to use the fixed name `ama-{workspaceID}` and "claim" the same-named environment on 409, which was
-// a source of silent failure**: after changing the type from cloud to self_hosted, the 409 made the
-// code reuse the **old cloud environment**. The type never changed, while logs, UI and API
-// responses all looked normal; only tool execution quietly stayed on the Ark side.
-//
-// So now each creation gets a unique suffix, with no claiming by name. The cost is one extra
-// environment when "the binding table was cleared" (an orphan resource left on the Ark side); in
-// return, **the type always matches the code**.
-// Reuse still works, but goes through the binding table (see ensureBinding in chat.go: if another
-// agent in the same workspace already created one, its environment_id is reused), not by name.
+// EnsureEnvironment creates an environment of the type chosen for this agent.
+// cloud runs tools in Ark's managed sandbox. self_hosted hands them to AMA's worker.
+// The unique name never claims a same-named environment of another type.
 func (r *LiveRunner) EnsureEnvironment(
-	ctx context.Context, key BindingKey, name string,
+	ctx context.Context, key BindingKey, name, environmentType string,
 ) (string, error) {
+	if environmentType != apimodel.ArkEnvironmentCloud &&
+		environmentType != apimodel.ArkEnvironmentSelfHosted {
+		return "", fmt.Errorf("不支持的方舟环境类型 %q", environmentType)
+	}
 	ins, err := r.instance(key)
 	if err != nil {
 		return "", err
@@ -220,78 +197,23 @@ func (r *LiveRunner) EnsureEnvironment(
 	defer cancel()
 
 	env, err := ins.Environments().Create(callCtx, ma.EnvironmentSpec{
-		Name: name,
-		Type: ma.EnvSelfHosted,
-		// No Networking: self_hosted returns 400 if it is passed; see the comment above.
-		Description: "AMA 空间 " + key.WorkspaceID + " 的对话运行环境（self_hosted）",
-	})
-	if err != nil {
-		return "", fmt.Errorf("建方舟 self_hosted 运行环境失败: %w", err)
-	}
-
-	// Read it back once after creation to confirm the type really is self_hosted.
-	//
-	// **This step is not redundant.** An empty `ma.EnvironmentSpec.Type` defaults to cloud (see
-	// toRequest in shared/infra/ma/environments.go), so any change that leaves Type empty (a field
-	// missed in a refactor, a copy-paste somewhere that forgot it) silently falls back to cloud:
-	// chats still work (Ark runs the tools itself), only the execution environment is not in our
-	// hands, and **no error will tell you**. That is exactly how it slipped through last time: the
-	// type was cloud, the UI was all green, until someone looked at the environment details.
-	//
-	// A failed read-back is not fatal (the environment was already created), so only log and do not
-	// block; a wrong type must return an error.
-	if got, err := ins.Environments().Get(callCtx, env.ID); err == nil {
-		if cfg, ok := got.Config.Get(); ok {
-			if t := string(cfg.Type); t != ma.EnvSelfHosted {
-				return "", fmt.Errorf(
-					"方舟运行环境 %s 的类型是 %q，不是 self_hosted——"+
-						"工具会跑在方舟托管沙箱而不是我们的容器里，拒绝使用", env.ID, t)
-			}
-		}
-	}
-	return env.ID, nil
-}
-
-// EnsureCloudEnvironment creates an Ark **cloud** environment and returns its ID.
-//
-// # Why cloud, when EnsureEnvironment insists on self_hosted
-//
-// Third-party base agents (codex) run their own harness inside Ark's sandbox; Ark rejects
-// "codex + self_hosted" explicitly ("not implemented yet"). So the agent's tools execute on the
-// Ark side and AMA's worker is not involved. That is a product trade-off, not an implementation
-// choice: such an agent loses AMA's container view, terminal, skills and datasource tools.
-//
-// Everything else matches EnsureEnvironment: unique name, read back to confirm the type (an empty
-// Type in ma.EnvironmentSpec defaults to cloud, so the read-back is what guards "it really is the
-// type we asked for").
-func (r *LiveRunner) EnsureCloudEnvironment(
-	ctx context.Context, key BindingKey, name string,
-) (string, error) {
-	ins, err := r.instance(key)
-	if err != nil {
-		return "", err
-	}
-
-	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
-	defer cancel()
-
-	env, err := ins.Environments().Create(callCtx, ma.EnvironmentSpec{
-		Name: name,
-		Type: ma.EnvCloud,
-		// cloud accepts networking; unrestricted matches the execution model of AMA's own
-		// containers and keeps web access working for the harness.
+		Name:        name,
+		Type:        environmentType,
 		Networking:  ma.NetworkUnrestricted,
-		Description: "AMA 空间 " + key.WorkspaceID + " 的 Codex 类型运行环境（cloud）",
+		Description: "AMA 空间 " + key.WorkspaceID + " 的对话运行环境（" + environmentType + "）",
 	})
 	if err != nil {
-		return "", fmt.Errorf("建方舟 cloud 运行环境失败: %w", err)
+		return "", fmt.Errorf("建方舟 %s 运行环境失败: %w", environmentType, err)
 	}
+
+	// Read back the actual type. An empty type in the create request silently
+	// defaults to cloud, and no successful response would reveal that mismatch.
 	if got, err := ins.Environments().Get(callCtx, env.ID); err == nil {
 		if cfg, ok := got.Config.Get(); ok {
-			if t := string(cfg.Type); t != ma.EnvCloud {
+			if actual := string(cfg.Type); actual != environmentType {
 				return "", fmt.Errorf(
-					"方舟运行环境 %s 的类型是 %q，不是 cloud——Codex 类型必须跑在方舟云端沙箱",
-					env.ID, t)
+					"方舟运行环境 %s 的类型是 %q，不是选择的 %s，拒绝使用",
+					env.ID, actual, environmentType)
 			}
 		}
 	}

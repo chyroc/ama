@@ -49,6 +49,7 @@ import { api } from "@/data/api";
 import { useIntegrationAuthorize } from "@/lib/useIntegrationAuthorize";
 import { usePrefs, useT } from "@/prefs/PrefsContext";
 import {
+  arkEnvironmentOrDefault,
   ALIASABLE_ENV_SOURCES,
   ENV_LIMITS,
   isReservedEnvKey,
@@ -309,6 +310,58 @@ export function AgentIntegrationsSection({
           {t("agent.integrationRisk")}
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * The Ark runtime is separate from the machine used by self_hosted. Choosing
+ * cloud is an explicit decision to let Ark execute tools in its managed sandbox.
+ */
+export function AgentEnvironmentSection({
+  draft,
+  setDraft,
+}: {
+  draft: AgentDraft;
+  setDraft: (d: AgentDraft) => void;
+}) {
+  const t = useT();
+  const selected = arkEnvironmentOrDefault(draft.baseAgent, draft.environmentType);
+  return (
+    <div className="flex flex-col gap-4" data-testid="agent-environment">
+      <SectionTitle title={t("agent.environmentSection")} description={t("agent.environmentSectionDesc")} />
+      <RadioGroup
+        className="grid w-full gap-3 sm:grid-cols-2 **:data-[slot=radio]:mt-0"
+        aria-label={t("agent.environmentSection")}
+        value={selected}
+        onChange={(value) =>
+          setDraft({ ...draft, environmentType: value === "cloud" ? "cloud" : "self_hosted" })
+        }
+      >
+        <ExecutorCard
+          value="self_hosted"
+          icon="gravity-ui:server"
+          title={t("agent.environmentSelfHosted")}
+          desc={t("agent.environmentSelfHostedDesc")}
+          testId="environment-self-hosted"
+        />
+        <ExecutorCard
+          value="cloud"
+          icon="gravity-ui:cloud"
+          title={t("agent.environmentCloud")}
+          desc={t("agent.environmentCloudDesc")}
+          testId="environment-cloud"
+        />
+      </RadioGroup>
+      {selected === "cloud" ? (
+        <Notice
+          tone="info"
+          icon="gravity-ui:cloud"
+          title={t("agent.environmentCloudNotice")}
+          hint={t("agent.environmentCloudNoticeHint")}
+          data-testid="agent-environment-cloud-notice"
+        />
+      ) : null}
     </div>
   );
 }

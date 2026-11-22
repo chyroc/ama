@@ -10,6 +10,7 @@
 -- │ ark_environment_id  text    not null
 -- │ ord                 bigint  not null (sequence)
 -- │ doc                 jsonb   not null
+-- │ environment_type    text
 -- │
 -- │ primary key ark_bindings_pkey
 -- │      (workspace_id, agent_id)
@@ -54,8 +55,13 @@ create table if not exists ark_bindings (
     ark_environment_id text not null,
     ord  bigserial not null,
     doc  jsonb not null,
+    -- The runtime environment type. NULL means a legacy self_hosted binding.
+    -- Kept outside doc so type is a real stored value and can filter workers.
+    environment_type text,
     primary key (workspace_id, agent_id)
 );
+
+alter table ark_bindings add column if not exists environment_type text;
 
 -- ListArkBindings lists by workspace, to reuse environments. ord keeps the order stable (see the file
 -- header).

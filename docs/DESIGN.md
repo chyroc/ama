@@ -219,10 +219,17 @@ interface Agent {
   skillIds: string[];         // 绑定空间技能（引用 Skill.id）
   feishuAppIds: string[];     // 绑定飞书应用
   status: "active" | "disabled";   // 停用是真的会拦住，见下
+  environmentType?: "self_hosted" | "cloud"; // 创建时选择的方舟环境，创建后不可改
   createdAt: string;
   updatedAt: string;
 }
 ```
+
+**方舟运行环境由用户在创建 Agent 时选择**：`self_hosted` 的工具交给 AMA 的 Docker／宿主机，
+`cloud` 的工具交给方舟托管沙箱。选择存进 `agents.environment_type` 独立列，创建后不可修改；
+旧 Agent 缺这个字段仍按 `self_hosted`。两种环境可以存在同一空间，但不能相互复用；
+`cloud` 不显示 AMA 的 Docker／宿主机选项，也不注入 AMA 的技能附件和数据源工具。
+Codex 固定使用 `cloud`，不重复显示这个选择。
 
 **技能绑定是引用而非拷贝**：agent 存 `skillIds`，技能内容改了所有绑定它的 agent 立即生效。这是把技能设计成「空间级资产」的意义 —— 否则不如直接写进 system prompt。
 

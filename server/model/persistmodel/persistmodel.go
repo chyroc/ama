@@ -272,7 +272,10 @@ type ArkBinding struct {
 	AgentID          string `json:"agentId"`
 	ArkAgentID       string `json:"arkAgentId"`
 	ArkEnvironmentID string `json:"arkEnvironmentId"`
-	CreatedAt        string `json:"createdAt"`
+	// EnvironmentType is a real column in ark_bindings. It never enters doc.
+	// Empty means a legacy self_hosted binding; new rows store the explicit type.
+	EnvironmentType string `json:"-"`
+	CreatedAt       string `json:"createdAt"`
 
 	// SkillsFingerprint is the fingerprint of "which set of skills is currently attached to this
 	// Ark Agent".

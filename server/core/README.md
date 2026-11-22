@@ -95,11 +95,16 @@ AMA Run  ←→  方舟 Session          （run.id 就是 session id）
 RunEvent ←→  方舟 SessionEvent
 ```
 
-**用 `cloud` 环境，不用 `self_hosted`。** 这是实测结论：`self_hosted` 下方舟拒收
-agent 侧事件写入，worker 跑完 Session 一个字段都不会变，界面上永远出不来结果。
-证据见 [`cmd/ama-worker/README.md`](../cmd/ama-worker/README.md) 的「天花板」一节。
+**每个 Agent 创建时选择 `self_hosted` 或 `cloud` 环境，创建后不可修改。**
+`self_hosted` 把工具交给 amad 的 worker，在我们的 Docker 容器或自建宿主机执行；
+`cloud` 把工具交给方舟托管沙箱，不启动本地 worker。环境按「空间 + 方舟凭证 + 类型」复用，
+类型存在 `ark_bindings.environment_type` 独立列，NULL 是存量 `self_hosted` 绑定，不能按工作空间
+混用两种类型。Codex 固定选 `cloud`。
 
-代码分三处：`chat.go`（业务）、`arkrun.go`（打方舟）、`handler.go` 的三个 handler。
+`cloud` 不适用于 AMA 的容器／终端／技能附件／数据源工具，所以不会声明那些需要本地 worker
+执行的能力，也不会被 worker 池接管。创建与回读校验环境类型在 `service/arkrun/live.go`。
+
+代码分三处：`chat.go`（业务）、`service/arkrun/`（打方舟）、`handler.go` 的三个 handler。
 方舟资源的映射存在 `ark_bindings` 表里，见下面那条坑。
 
 ## 踩过的坑

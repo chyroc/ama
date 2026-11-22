@@ -48,6 +48,7 @@ import {
   AsyncErrorBlock,
   Empty,
   LoadingBlock,
+  Notice,
   PageBody,
   PageHeader,
   SectionTitle,
@@ -127,6 +128,7 @@ function ConfigTab({
   agentId,
   createdByEmail,
   baseAgent,
+  environmentType,
 }: {
   agentId: string;
   draft: AgentDraft;
@@ -139,11 +141,13 @@ function ConfigTab({
    * draft (see toAgentDraft), and this page only displays it.
    */
   baseAgent?: string;
+  environmentType?: "self_hosted" | "cloud";
 }) {
   const { t } = usePrefs();
   const wp = useWorkspacePath();
   // Saved value, not draft: see the comment on the prop. Everything "runtime" below branches on it.
   const codex = isCodexAgent(baseAgent);
+  const arkCloud = codex || environmentType === "cloud";
 
   /*
    * The authorization list is **its own hook, deliberately not merged into the page-level
@@ -264,6 +268,16 @@ function ConfigTab({
                 data-testid="cfg-desc"
               />
             </TextField>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2" data-testid="cfg-environment-type">
+            <span className="text-xs text-muted">{t("agent.environmentSection")}</span>
+            <Chip size="sm" variant="soft">
+              <Chip.Label>
+                {t(environmentType === "cloud" || codex ? "agent.environmentCloud" : "agent.environmentSelfHosted")}
+              </Chip.Label>
+            </Chip>
+            <span className="text-xs text-muted">{t("agent.environmentReadonly")}</span>
           </div>
 
           <Select
@@ -397,30 +411,35 @@ function ConfigTab({
       */}
       <Card>
         <Card.Content className="flex flex-col gap-6 pt-6">
-          {codex ? null : (
-            <AgentExecutorSection
-              draft={draft}
-              setDraft={setDraft}
-              workspaceId={workspace.id}
-              workspaceKey={workspace.key}
-              createdByEmail={createdByEmail}
+          {arkCloud ? (
+            <Notice
+              tone="info"
+              icon="gravity-ui:cloud"
+              title={t("agent.environmentCloudRuntimeNotice")}
+              data-testid="agent-environment-runtime-notice"
             />
+          ) : (
+            <>
+              <AgentExecutorSection
+                draft={draft}
+                setDraft={setDraft}
+                workspaceId={workspace.id}
+                workspaceKey={workspace.key}
+                createdByEmail={createdByEmail}
+              />
+              <AgentIntegrationsSection
+                draft={draft}
+                setDraft={setDraft}
+                providers={providers}
+                canManage={canManage}
+                onProviderRefreshed={replaceProvider}
+                workspaceId={workspace.id}
+                workspaceKey={workspace.key}
+              />
+              <AgentEnvSection draft={draft} setDraft={setDraft} />
+              <AgentEnvAliasSection draft={draft} setDraft={setDraft} canManage={canManage} />
+            </>
           )}
-          <AgentIntegrationsSection
-            draft={draft}
-            setDraft={setDraft}
-            providers={providers}
-            canManage={canManage}
-            onProviderRefreshed={replaceProvider}
-            // ⚠️ Pass the workspace: it decides "which Feishu app to authorize when starting
-            // authorization". Without it the account-level default
-            // is authorized, while the agent at runtime picks by its workspace; when the two
-            // differ it fails with zero errors.
-            workspaceId={workspace.id}
-            workspaceKey={workspace.key}
-          />
-          <AgentEnvSection draft={draft} setDraft={setDraft} />
-          <AgentEnvAliasSection draft={draft} setDraft={setDraft} canManage={canManage} />
         </Card.Content>
       </Card>
 
@@ -471,12 +490,14 @@ function SkillsTab({
   setDraft,
   skills,
   baseAgent,
+  environmentType,
 }: {
   draft: AgentDraft;
   setDraft: (d: AgentDraft) => void;
   skills: Skill[];
   /** The saved agent's baseAgent (read-only); a Codex agent has no skills at all. */
   baseAgent?: string;
+  environmentType?: "self_hosted" | "cloud";
 }) {
   const { t } = usePrefs();
   const wp = useWorkspacePath();
@@ -498,12 +519,12 @@ function SkillsTab({
    * ⚠️ Before the empty-workspace branch: "no skills in this workspace" is the wrong thing to say
    * here — it would send people off to create a skill that can never be used.
    */
-  if (isCodexAgent(baseAgent)) {
+  if (isCodexAgent(baseAgent) || environmentType === "cloud") {
     return (
       <Card>
         <Card.Content className="flex flex-col gap-4 pt-6">
-          <SectionTitle title={t("skill.bindTitle")} description={t("agent.skillsCodexHint")} />
-          <CodexAgentNotice />
+          <SectionTitle title={t("skill.bindTitle")} description={t("agent.skillsCloudHint")} />
+          {isCodexAgent(baseAgent) ? <CodexAgentNotice /> : null}
         </Card.Content>
       </Card>
     );
@@ -1710,6 +1731,7 @@ export function AgentDetailPage() {
           createdByEmail={agent.createdBy}
           /* Saved value, not draft: baseAgent is write-once (see toAgentDraft). */
           baseAgent={agent.baseAgent}
+          environmentType={agent.environmentType}
         />
       ) : null}
       {tab === "skills" ? (
@@ -1718,6 +1740,7 @@ export function AgentDetailPage() {
           setDraft={setDraft}
           skills={skills}
           baseAgent={agent.baseAgent}
+          environmentType={agent.environmentType}
         />
       ) : null}
       {tab === "feishu" ? (

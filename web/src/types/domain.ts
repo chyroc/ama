@@ -879,6 +879,16 @@ export const BASE_AGENT_CODEX = "codex";
  * side's executor (Docker/host), skills, datasource custom tools and the container/terminal/file
  * views do **not** apply. System prompt, model and the built-in tool switches still apply.
  */
+export type ArkEnvironmentType = "self_hosted" | "cloud";
+
+/** Missing means the legacy self_hosted choice; Codex always runs in cloud. */
+export function arkEnvironmentOrDefault(
+  baseAgent: string | null | undefined,
+  environmentType: string | null | undefined,
+): ArkEnvironmentType {
+  return isCodexAgent(baseAgent) || environmentType === "cloud" ? "cloud" : "self_hosted";
+}
+
 export function isCodexAgent(baseAgent: string | null | undefined): boolean {
   return baseAgent === BASE_AGENT_CODEX;
 }
@@ -912,6 +922,8 @@ export interface Agent {
    * check (a future value would silently look general, which is exactly what isCodexAgent is for).
    */
   baseAgent?: string;
+  /** Ark runtime selected at creation. Missing is the legacy self_hosted choice. */
+  environmentType?: ArkEnvironmentType;
   /**
    * Whether this agent participates in **platform long-term memory (OpenViking)**: recall (a
    * `<harness:openviking>` block appended to every outgoing user message) and capture (the finished
@@ -1343,6 +1355,8 @@ export interface AgentDraft {
    * the edit page shows it read-only, because an edit could never be saved.
    */
   baseAgent?: string;
+  /** Ark runtime selected at creation. Missing is the legacy self_hosted choice. */
+  environmentType?: ArkEnvironmentType;
   /**
    * Whether this agent opts into platform long-term memory (OpenViking); see the field of the same
    * name on Agent.
@@ -1462,6 +1476,7 @@ export function toAgentDraft(a: Agent): AgentDraft {
     // normalize to "" (the general agent). The edit page never changes it (read-only), so a save can
     // only ever send the current value back.
     baseAgent: a.baseAgent ?? "",
+    environmentType: arkEnvironmentOrDefault(a.baseAgent, a.environmentType),
     // **Always carried (`?? false`)**, or the user's opt-in for long-term memory is silently lost:
     // UpdateAgent assigns this field unconditionally, so a missing key reads as false and switches
     // memory off on the next save (even a rename). Existing agents/old rows have no key at all, which

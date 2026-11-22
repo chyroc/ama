@@ -33,6 +33,7 @@ import { ModelIcon } from "@/components/ModelIcon";
 import { formatRelative, truncate } from "@/lib/format";
 import { useAsyncData } from "@/lib/useAsyncData";
 import {
+  arkEnvironmentOrDefault,
   BUILTIN_TOOLS,
   MODEL_SPECS,
   isBuiltinSkill,
@@ -53,6 +54,7 @@ import {
   AgentEnvSection,
   AgentExecutorSection,
   AgentIntegrationsSection,
+  AgentEnvironmentSection,
   AgentMemorySection,
 } from "@/components/AgentRuntimeSections";
 import { useCanManage } from "@/lib/useCanManage";
@@ -183,6 +185,7 @@ export function emptyAgentDraft(): AgentDraft {
     // would send no key at all — the same thing to the server, but then the two "create" paths (a
     // plain agent and a Codex one) would differ in shape for no reason.
     baseAgent: "",
+    environmentType: "self_hosted",
     envs: [],
     envAliases: [],
     // Default Docker container (executorType empty string), no host attached. **Empty string, not
@@ -1071,6 +1074,7 @@ export function NewAgentPage() {
   }, [skills]);
 
   const codex = isCodexAgent(draft.baseAgent);
+  const arkCloud = arkEnvironmentOrDefault(draft.baseAgent, draft.environmentType) === "cloud";
 
   async function submit() {
     const e: Partial<Record<string, string>> = {};
@@ -1090,8 +1094,18 @@ export function NewAgentPage() {
      * hidden while Codex is selected, so nothing invisible is being "thrown away" from the user's
      * point of view.
      */
-    const payload: AgentDraft = codex
-      ? { ...draft, executorType: "", hostId: "", hostSource: "", skillIds: [] }
+    const payload: AgentDraft = arkCloud
+      ? {
+          ...draft,
+          environmentType: "cloud",
+          executorType: "",
+          hostId: "",
+          hostSource: "",
+          skillIds: [],
+          integrationIds: [],
+          envs: [],
+          envAliases: [],
+        }
       : draft;
 
     setSubmitting(true);
@@ -1182,6 +1196,10 @@ export function NewAgentPage() {
             {codex ? <CodexAgentNotice /> : null}
           </div>
 
+          {codex ? null : (
+            <AgentEnvironmentSection draft={draft} setDraft={setDraft} />
+          )}
+
           <TextField isRequired isInvalid={Boolean(errors.system)}>
             <Label>{t("agent.system")}</Label>
             <TextArea
@@ -1204,7 +1222,7 @@ export function NewAgentPage() {
             skills={skills}
             // Skills are injected into AMA's worker container, which a Codex agent never uses: the
             // whole skill area is hidden (the warning above says why), not drawn disabled.
-            hideSkills={codex}
+            hideSkills={arkCloud}
           />
 
           {/*
@@ -1222,7 +1240,7 @@ export function NewAgentPage() {
             Docker/host worker is not involved at all. Drawn disabled it would still read as "a
             choice that applies"; hidden, the warning above is the only thing said about it.
           */}
-          {codex ? null : (
+          {arkCloud ? null : (
             <AgentExecutorSection
               draft={draft}
               setDraft={setDraft}
@@ -1237,21 +1255,28 @@ export function NewAgentPage() {
             tools/skills. Both blocks **share one component** with the detail page, the same shape
             word for word.
           */}
-          <AgentIntegrationsSection
-            draft={draft}
-            setDraft={setDraft}
-            providers={providers}
-            canManage={canManage}
-            onProviderRefreshed={replaceProvider}
-            // ⚠️ Pass the workspace: it decides "which Feishu app to authorize when starting
-            // authorization". Without it the account-level default
-            // is authorized, while the agent at runtime picks by its workspace; when the two
-            // differ it fails with zero errors.
-            workspaceId={workspace.id}
-            workspaceKey={workspace.key}
-          />
-          <AgentEnvSection draft={draft} setDraft={setDraft} />
-          <AgentEnvAliasSection draft={draft} setDraft={setDraft} canManage={canManage} />
+          {arkCloud ? (
+            <Notice
+              tone="info"
+              icon="gravity-ui:cloud"
+              title={t("agent.environmentCloudRuntimeNotice")}
+              data-testid="agent-environment-runtime-notice"
+            />
+          ) : (
+            <>
+              <AgentIntegrationsSection
+                draft={draft}
+                setDraft={setDraft}
+                providers={providers}
+                canManage={canManage}
+                onProviderRefreshed={replaceProvider}
+                workspaceId={workspace.id}
+                workspaceKey={workspace.key}
+              />
+              <AgentEnvSection draft={draft} setDraft={setDraft} />
+              <AgentEnvAliasSection draft={draft} setDraft={setDraft} canManage={canManage} />
+            </>
+          )}
 
           <div className="flex justify-end gap-2">
             <Link to={wp("/agents")} className="no-underline">

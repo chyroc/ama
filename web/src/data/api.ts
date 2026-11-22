@@ -27,6 +27,7 @@ import {
   DEFAULT_USER_PREFERENCES,
   MIN_SCHEDULE_INTERVAL_MS,
   followUpOrDefault,
+  isCodexAgent,
   isReadOnlySkill,
   normalizeUserPreferences,
   progressDetailOrDefault,
@@ -4375,6 +4376,12 @@ class LocalApiClient implements ApiClient {
         new ApiError("基础 Agent 类型创建后不可修改", "invalid_argument", 400, mockLogID()),
       );
     }
+    if (patch.environmentType !== undefined &&
+      patch.environmentType !== (agent.environmentType ?? (isCodexAgent(agent.baseAgent) ? "cloud" : "self_hosted"))) {
+      return Promise.reject(
+        new ApiError("方舟运行环境创建后不可修改", "invalid_argument", 400, mockLogID()),
+      );
+    }
     if (patch.feishuAppIds) {
       // Exclude itself: otherwise the most common save, "only change the name, send the bindings
       // back unchanged", would be blocked by its own existing bindings. The frontend sends the full
@@ -4450,6 +4457,7 @@ class LocalApiClient implements ApiClient {
       // Missing it here would not corrupt anything today, but "the snapshot is the complete draft"
       // is the rule the fields above are here for.
       baseAgent: agent.baseAgent ?? "",
+      environmentType: agent.environmentType ?? "self_hosted",
       // The long-term-memory opt-in is editable, so it really does need rolling back. It is also
       // assigned unconditionally by the server on update, which makes "the snapshot must carry it"
       // a correctness rule rather than tidiness: a rollback with the key missing would silently

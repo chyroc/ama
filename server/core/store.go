@@ -385,7 +385,8 @@ type Store interface {
 	// Used to self-heal after the Ark-side resource is deleted: when a binding points at an Agent that
 	// no longer exists, delete it, and the next conversation recreates one.
 	DeleteArkBinding(ctx context.Context, workspaceID, agentID string) error
-	// RepointArkEnvironment **specifically** repoints bindings still pointing at oldEnvID to newEnvID
+	// The environment type is part of the update condition: a replacement for
+	// self_hosted must never move cloud siblings, or the reverse.
 	// (column and doc changed together), and returns how many rows were changed. The where clause
 	// carries oldEnvID as a CAS guard: rows already on a different environment are left alone.
 	//
@@ -397,7 +398,7 @@ type Store interface {
 	// ⚠️ **It must be a targeted UPDATE, not read the whole row and Put it back**: a sibling agent's own
 	// conversation may be catching up skills/prompts at the same time (which also calls
 	// PutArkBinding), and read-modify-write would overwrite each other.
-	RepointArkEnvironment(ctx context.Context, workspaceID, oldEnvID, newEnvID string) (int, error)
+	RepointArkEnvironment(ctx context.Context, workspaceID, oldEnvID, newEnvID, environmentType string) (int, error)
 
 	// -- Start of consecutive Ark credential failures ------------------------------
 

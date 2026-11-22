@@ -30,15 +30,6 @@ package core
 
 import "github.com/chyroc/ama/server/service/arkrun"
 
-// CloudEnvironmentEnsurer is the optional runner capability that creates an Ark cloud environment.
-//
-// Codex agents require it: the Codex harness runs only inside Ark's cloud sandbox, and Ark rejects
-// `codex` + `self_hosted` ("base_agent codex with environment config.type self_hosted is not
-// implemented yet"). Keeping it as an optional interface avoids breaking existing test doubles;
-// callers must return an explicit error when the assertion fails instead of falling back to
-// self_hosted.
-type CloudEnvironmentEnsurer = arkrun.CloudEnvironmentEnsurer
-
 // ArkRunner is all the external capability needed to "run one conversation on Ark".
 //
 // It is an interface so that Service tests need no network, for the same reason as ArkVerifier.

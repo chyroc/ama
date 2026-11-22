@@ -179,17 +179,6 @@ type CreatedAgent struct {
 // **Persisting bindings is not this layer's job.** This layer only "creates resources on the Ark
 // side"; remembering what was created is Service's job (through the Store). They are separate
 // because "remembering" must survive process restarts, while the runner is a stateless call wrapper.
-// CloudEnvironmentEnsurer is implemented by runners that can create an Ark **cloud** environment.
-//
-// Third-party base agents (codex) need one: their tools execute inside Ark's sandbox, so the
-// self_hosted worker AMA normally relies on never receives a tool call. It is a separate
-// interface instead of a Runner method so existing test doubles stay valid; callers type-assert
-// and fail loudly when it is missing — silently creating a self_hosted environment instead makes
-// Ark reject the session later with an English error.
-type CloudEnvironmentEnsurer interface {
-	EnsureCloudEnvironment(ctx context.Context, key BindingKey, name string) (string, error)
-}
-
 type Runner interface {
 	// CreateAgent creates an Agent on the Ark side.
 	//
@@ -197,14 +186,12 @@ type Runner interface {
 	// attached**; the caller uses it to decide whether it may write back the skill fingerprint. See
 	// the comment on CreatedAgent.
 	CreateAgent(ctx context.Context, key BindingKey, spec AgentSpec) (CreatedAgent, error)
-	// EnsureEnvironment creates a self_hosted runtime environment and returns its ID.
-	//
-	// **It can only be self_hosted**: tool execution must happen in our own containers (see
-	// core/worker.go). name is unique within a project, so the caller must make sure it has a unique
-	// suffix. **Do not use a fixed name**: after a fixed name hits 409, "claiming" the environment with
-	// the same name might pick up an old cloud environment, with the wrong type and no error anywhere
-	// along the chain.
-	EnsureEnvironment(ctx context.Context, key BindingKey, name string) (string, error)
+	// EnsureEnvironment creates an environment of the type chosen by the agent.
+	// self_hosted sends tool calls to AMA's worker; cloud runs them in Ark's
+	// managed sandbox. Names must be unique: claiming a same-named environment
+	// could silently reuse one of the other type. The implementation reads the
+	// created environment back and rejects a mismatched type.
+	EnsureEnvironment(ctx context.Context, key BindingKey, name, environmentType string) (string, error)
 	// CreateSession opens a session for the Agent in the given environment and returns the session id.
 	CreateSession(ctx context.Context, key BindingKey, b persistmodel.ArkBinding, title string) (string, error)
 	// SendEvents forwards events sent up by the client to Ark as-is, and returns Ark's receipt (the

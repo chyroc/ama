@@ -10,17 +10,12 @@
 //	AMA Run  ←→  Ark Session
 //	AMA RunEvent ←→ Ark SessionEvent
 //
-// # Use the cloud environment, not self_hosted
+// # Per-agent Ark environments
 //
-// **This is a tested result, not a preference.** In a self_hosted environment Ark rejects
-// agent-side event writes (`agent.message` / `session.status_idle` both return
-// InternalServiceError), and there is no worker receipt endpoint either: after the worker
-// finishes, not a single field of the Session changes, and the UI never shows a result. Full
-// evidence is in the "ceiling" section of cmd/ama-worker/README.md.
-//
-// In the cloud environment Ark runs the agent loop itself and the result lands on the
-// Session directly; this path works. When creating a cloud environment **networking is
-// required**; leaving it out returns MissingParameter.
+// A general agent chooses self_hosted (AMA executes its tools) or cloud (Ark
+// executes its tools) at creation. Bindings store that choice, so sibling
+// environments are only reused within one type and self_hosted workers never
+// claim cloud sessions. Codex always uses cloud.
 //
 // # Mapping and reuse of Ark resources
 //
@@ -343,11 +338,12 @@ func (s *Service) healMissingArkResource(
 
 		// Create the new environment first; if that fails, touch nothing: the binding still points at the old environment, and the next retry still has a chance.
 		envName := fmt.Sprintf("ama-%s-%d", key.WorkspaceID, time.Now().UnixNano())
-		newEnv, err := s.runner.EnsureEnvironment(ctx, key, envName)
+		envType := apimodel.EffectiveArkEnvironment(agent.BaseAgent, agent.EnvironmentType)
+		newEnv, err := s.runner.EnsureEnvironment(ctx, key, envName, envType)
 		if err != nil {
 			return binding, "", fmt.Errorf("替换已失效的方舟环境 %s 失败: %w", deadEnv, err)
 		}
-		n, err := s.store.RepointArkEnvironment(ctx, key.WorkspaceID, deadEnv, newEnv)
+		n, err := s.store.RepointArkEnvironment(ctx, key.WorkspaceID, deadEnv, newEnv, envType)
 		if err != nil {
 			return binding, "", fmt.Errorf("把兄弟绑定改指到新环境 %s 失败: %w", newEnv, err)
 		}
@@ -355,6 +351,7 @@ func (s *Service) healMissingArkResource(
 			slog.String("deadEnv", deadEnv), slog.String("newEnv", newEnv),
 			slog.Int("repointed_bindings", n))
 		binding.ArkEnvironmentID = newEnv
+		binding.EnvironmentType = envType
 
 		sessionID, err := s.runner.CreateSession(ctx, key, binding, "")
 		if err == nil {
@@ -469,15 +466,17 @@ func (s *Service) ensureBinding(
 	// means "using key2 to access key1's project". Ark's error says the credentials are wrong,
 	// while each of the two keys is fine. See the comment on ArkBinding.KeyFingerprint.
 	keyFP := ArkKeyFingerprint(key.APIKey)
+	envType := apimodel.EffectiveArkEnvironment(agent.BaseAgent, agent.EnvironmentType)
 	envID := ""
 	var envFromAgent string
 	if siblings, err := s.store.ListArkBindings(ctx, key.WorkspaceID); err == nil {
 		for _, b := range siblings {
-			// Codex agents cannot reuse workspace sibling environments: those are self_hosted, and Ark
-			// explicitly rejects codex + self_hosted ("not implemented yet"). Skip reuse here so a
-			// dedicated cloud environment is created below.
+			// The environment type is part of the identity: reusing a cloud
+			// environment for self_hosted would strand tools in Ark, while the
+			// opposite leaves AMA's worker with nothing to execute. Empty binding
+			// type means the legacy self_hosted environment.
 			if b.ArkEnvironmentID != "" && sameArkKey(b, keyFP) &&
-				agent.BaseAgent != apimodel.BaseAgentCodex {
+				apimodel.EffectiveArkEnvironment("", b.EnvironmentType) == envType {
 				envID = b.ArkEnvironmentID
 				envFromAgent = b.AgentID
 				break
@@ -506,25 +505,15 @@ func (s *Service) ensureBinding(
 		// The suffix is a timestamp, not an in-process counter: the latter starts over on restart,
 		// collides across restarts, and leads back to the 409 path.
 		envName := fmt.Sprintf("ama-%s-%d", key.WorkspaceID, time.Now().UnixNano())
-		if agent.BaseAgent == apimodel.BaseAgentCodex {
-			// Codex runs only in an Ark cloud environment: tools execute inside Ark's sandbox rather
-			// than AMA's worker.
-			cloud, ok := s.runner.(CloudEnvironmentEnsurer)
-			if !ok {
-				return persistmodel.ArkBinding{}, arkFailure("准备方舟运行环境失败",
-					errors.New("当前 ArkRunner 不支持 cloud 环境，Codex 类型无法运行"))
-			}
-			envID, err = cloud.EnsureCloudEnvironment(ctx, key, envName)
-		} else {
-			envID, err = s.runner.EnsureEnvironment(ctx, key, envName)
-		}
+		envID, err = s.runner.EnsureEnvironment(ctx, key, envName, envType)
 		if err != nil {
 			return persistmodel.ArkBinding{}, arkFailure("准备方舟运行环境失败", err)
 		}
 		s.log().Info("新建方舟运行环境",
 			slog.String("workspace", key.WorkspaceID),
 			slog.String("agent", key.AgentID),
-			slog.String("env", envID))
+			slog.String("env", envID),
+			slog.String("environment_type", envType))
 	}
 
 	// Sync skills to Ark first so they are included when the Agent is created: one round trip
@@ -537,7 +526,7 @@ func (s *Service) ensureBinding(
 	// which does not apply to cloud environments, and Ark rejects unsupported tool/skill shapes on codex.
 	var refs []persistmodel.ArkSkillRef
 	var fingerprint string
-	if agent.BaseAgent != apimodel.BaseAgentCodex {
+	if apimodel.EffectiveArkEnvironment(agent.BaseAgent, agent.EnvironmentType) == apimodel.ArkEnvironmentSelfHosted {
 		refs, fingerprint, err = s.arkSkillsFor(ctx, key, agent)
 		if err != nil {
 			// Only "too many bound, over the limit" gets here (that is ErrPrecondition, and the user
@@ -587,6 +576,7 @@ func (s *Service) ensureBinding(
 		AgentID:           key.AgentID,
 		ArkAgentID:        created.ID,
 		ArkEnvironmentID:  envID,
+		EnvironmentType:   envType,
 		CreatedAt:         apimodel.NowISO(),
 		SkillsFingerprint: fingerprintToStore,
 		ArkSkillIDs:       arkSkillIDs,
@@ -644,7 +634,7 @@ func (s *Service) syncBindingSkills(
 
 	// Codex agents do not attach skills; skip skill fingerprint checks so opening a chat does not
 	// send a redundant UpdateAgent call on every conversation.
-	if agent.BaseAgent == apimodel.BaseAgentCodex {
+	if apimodel.EffectiveArkEnvironment(agent.BaseAgent, agent.EnvironmentType) != apimodel.ArkEnvironmentSelfHosted {
 		return b
 	}
 
@@ -1701,9 +1691,13 @@ func arkSpecFor(a apimodel.Agent, customTools []ma.CustomToolSpec) ArkAgentSpec 
 		// BaseAgent selects the Ark runtime. See the codex branch below for what it changes.
 		BaseAgent: a.BaseAgent,
 	}
+	if apimodel.EffectiveArkEnvironment(a.BaseAgent, a.EnvironmentType) == apimodel.ArkEnvironmentCloud {
+		// Cloud has no AMA container into which these variables can be injected.
+		spec.System = a.System
+	}
 	// Codex agents: Ark accepts only ToolsetCodex (web_search / web_fetch), while bash /
-	// apply_patch come from the harness itself. Custom tools, skills, and credential injection
-	// rely on AMA's self_hosted worker and do not run in cloud environments, so leave them unset.
+	// apply_patch come from the harness itself. A general cloud agent still uses
+	// ToolsetDefault in Ark's sandbox, just with no AMA-side custom tools or skills.
 	if a.BaseAgent == apimodel.BaseAgentCodex {
 		if len(a.BuiltinTools) > 0 {
 			spec.Tools = []string{ma.ToolsetCodex}
@@ -1732,6 +1726,12 @@ func arkSpecFor(a apimodel.Agent, customTools []ma.CustomToolSpec) ArkAgentSpec 
 	// same as before this feature (an empty slice would be "clear the tools" on update, a
 	// different meaning).
 	spec.CustomTools = customTools
+	if apimodel.EffectiveArkEnvironment(a.BaseAgent, a.EnvironmentType) == apimodel.ArkEnvironmentCloud {
+		// AMA's skill packages and worker-side tool declarations are not
+		// interchangeable with Ark's cloud skill format. Do not attach them.
+		spec.Skills = nil
+		spec.CustomTools = nil
+	}
 	return spec
 }
 
@@ -1872,6 +1872,9 @@ func truncateTitle(text string) string {
 // source goes through EffectiveHostSource, and existing NULL rows are read as workspace
 // assignment.
 func hostOnRun(a apimodel.Agent) (string, string) {
+	if apimodel.EffectiveArkEnvironment(a.BaseAgent, a.EnvironmentType) == apimodel.ArkEnvironmentCloud {
+		return "", ""
+	}
 	if a.ExecutorType == "host" {
 		return a.HostID, apimodel.EffectiveHostSource(a.ExecutorType, a.HostSource)
 	}

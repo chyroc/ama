@@ -57,7 +57,7 @@ func TestAgentDoubleWriteFillsColumns(t *testing.T) {
 		CreatedBy: "c@example.com", UpdatedBy: "u@example.com",
 		// executor_type / host_id / host_source also take values different from each other and from the other fields,
 		// so swapped columns can be detected.
-		ExecutorType: "host", HostID: "hst_dw", HostSource: "personal",
+		ExecutorType: "host", HostID: "hst_dw", HostSource: "personal", EnvironmentType: "self_hosted",
 	}
 	if _, err := store.CreateAgent(ctx, persistmodel.CloneAgent(a)); err != nil {
 		t.Fatalf("建 agent 失败：%v", err)
@@ -105,16 +105,16 @@ func TestAgentDoubleWriteFillsColumns(t *testing.T) {
 func assertAgentColumns(t *testing.T, ctx context.Context, want apimodel.Agent, path string) {
 	t.Helper()
 	var name, description, status, createdAt, updatedAt, createdBy, updatedBy,
-		executorType, hostID, hostSource *string
+		executorType, hostID, hostSource, environmentType *string
 	var version *int
 	err := pgEnv.client.QueryRow(ctx,
 		`select name, description, status, version,
 		        created_at, updated_at, created_by, updated_by,
-		        executor_type, host_id, host_source
+		        executor_type, host_id, host_source, environment_type
 		   from agents where id = $1`, want.ID).
 		Scan(&name, &description, &status, &version,
 			&createdAt, &updatedAt, &createdBy, &updatedBy,
-			&executorType, &hostID, &hostSource)
+			&executorType, &hostID, &hostSource, &environmentType)
 	if err != nil {
 		t.Fatalf("%s：回读列失败：%v", path, err)
 	}
@@ -161,6 +161,7 @@ func assertAgentColumns(t *testing.T, ctx context.Context, want apimodel.Agent, 
 	nullable("executor_type", executorType, want.ExecutorType)
 	nullable("host_id", hostID, want.HostID)
 	nullable("host_source", hostSource, want.HostSource)
+	nullable("environment_type", environmentType, want.EnvironmentType)
 
 	if version == nil {
 		t.Errorf("%s 之后 version 列是 NULL，想要 %d——这条写路径漏了双写", path, want.Version)
@@ -200,7 +201,7 @@ func TestAgentReadPathUsesColumnsNotDoc(t *testing.T) {
 		CreatedAt: "2026-01-01T00:00:00.000Z", UpdatedAt: "2026-01-01T00:00:00.000Z",
 		CreatedBy: "doc@example.com", UpdatedBy: "doc@example.com",
 		// In doc this agent is bound to another machine; below only the columns are changed to check "columns override doc".
-		ExecutorType: "host", HostID: "hst_doc", HostSource: "personal",
+		ExecutorType: "host", HostID: "hst_doc", HostSource: "personal", EnvironmentType: "self_hosted",
 	}); err != nil {
 		t.Fatalf("建 agent 失败：%v", err)
 	}
@@ -212,7 +213,8 @@ func TestAgentReadPathUsesColumnsNotDoc(t *testing.T) {
 		       version = 42, created_at = '2026-09-09T09:09:09.999Z',
 		       updated_at = '2026-10-10T10:10:10.888Z',
 		       created_by = 'col@example.com', updated_by = 'col2@example.com',
-		       executor_type = 'host', host_id = 'hst_col', host_source = 'workspace'
+		       executor_type = 'host', host_id = 'hst_col', host_source = 'workspace',
+		       environment_type = 'cloud'
 		 where id = 'ag_skew'`); err != nil {
 		t.Fatalf("造偏差失败：%v", err)
 	}
@@ -234,6 +236,7 @@ func TestAgentReadPathUsesColumnsNotDoc(t *testing.T) {
 		{"executorType", got.ExecutorType, "host"},
 		{"hostId", got.HostID, "hst_col"},
 		{"hostSource", got.HostSource, "workspace"},
+		{"environmentType", got.EnvironmentType, "cloud"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s 读到 %q，想要 %q%s", c.col, c.got, c.want, hint)
@@ -372,7 +375,7 @@ func TestAgentWritePathStopsWritingDocKeys(t *testing.T) {
 		CreatedBy: "c@example.com", UpdatedBy: "u@example.com",
 		// Give the three executor columns non-empty values: then "marshalAgentDoc forgot to zero it" gets killed by the
 		// doc ? 'executorType' assertion above; with empty values the key would not be there anyway, and it could not be detected.
-		ExecutorType: "host", HostID: "hst_stop", HostSource: "personal",
+		ExecutorType: "host", HostID: "hst_stop", HostSource: "personal", EnvironmentType: "cloud",
 		// Fields not pulled out: must go into doc as usual.
 		System: "系统提示词还在", Model: apimodel.ModelConfig{ID: "doubao-seed-2-1-pro-260628"},
 		SkillIDs: []string{"sk-1"}, FeishuAppIDs: []string{"fs-1"},
@@ -409,18 +412,18 @@ func TestAgentWritePathStopsWritingDocKeys(t *testing.T) {
 // assertAgentDocStripped asserts that the keys pulled out into columns no longer carry information in doc, while the other fields are still there.
 func assertAgentDocStripped(t *testing.T, ctx context.Context, id, path string) {
 	t.Helper()
-	var hasCreatedBy, hasUpdatedBy, hasExecutorType, hasHostID, hasHostSource bool
+	var hasCreatedBy, hasUpdatedBy, hasExecutorType, hasHostID, hasHostSource, hasEnvironmentType bool
 	var name, description, status, createdAt, updatedAt *string
 	var version *int
 	var system *string
 	err := pgEnv.client.QueryRow(ctx, `
 		select doc ? 'createdBy', doc ? 'updatedBy',
-		       doc ? 'executorType', doc ? 'hostId', doc ? 'hostSource',
+		       doc ? 'executorType', doc ? 'hostId', doc ? 'hostSource', doc ? 'environmentType',
 		       doc ->> 'name', doc ->> 'description', doc ->> 'status',
 		       doc ->> 'createdAt', doc ->> 'updatedAt',
 		       (doc ->> 'version')::int, doc ->> 'system'
 		  from agents where id = $1`, id).
-		Scan(&hasCreatedBy, &hasUpdatedBy, &hasExecutorType, &hasHostID, &hasHostSource,
+		Scan(&hasCreatedBy, &hasUpdatedBy, &hasExecutorType, &hasHostID, &hasHostSource, &hasEnvironmentType,
 			&name, &description, &status,
 			&createdAt, &updatedAt, &version, &system)
 	if err != nil {
@@ -446,6 +449,9 @@ func assertAgentDocStripped(t *testing.T, ctx context.Context, id, path string) 
 	// matter either: after zeroing, the zero value still does not write the key). If it is still there, zeroing was missed.
 	if hasHostSource {
 		t.Errorf("%s 之后 doc 里还有 hostSource 键——marshalAgentDoc 漏置零？", path)
+	}
+	if hasEnvironmentType {
+		t.Errorf("%s 之后 doc 里还有 environmentType 键——该字段必须只存独立列", path)
 	}
 
 	// ---- The other 6: the key may exist, but must not carry a real value anymore ----
