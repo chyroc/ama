@@ -1,6 +1,5 @@
 @import "tailwindcss";
 @import "@heroui/styles";
-@import "./components/azure/theme.css";
 
 /* Import order matters: tailwindcss must come before @heroui/styles. */
 
@@ -280,45 +279,6 @@
     border-radius: 0.375rem;
   }
 }
-
-  /* Azure component kit: scoped utility tokens from the adapted source library. */
-  :root[data-theme="azure"] {
-    --canvas: var(--background);
-    --inset: var(--surface-secondary);
-    --ink: var(--foreground);
-    --ink-2: var(--muted);
-    --ink-3: oklch(0.695 0.009 264.51);
-    --accent-ink: var(--accent);
-    --accent-tint: oklch(0.96 0.019 252.88);
-    --line: var(--separator);
-    --line-strong: var(--border);
-    --hover: oklch(0.96 0.004 252.88);
-    --hover-2: oklch(0.94 0.006 252.88);
-    --green: oklch(0.59 0.13 156.24);
-    --green-tint: oklch(0.95 0.04 156.24);
-    --orange: oklch(0.65 0.17 55.32);
-    --orange-tint: oklch(0.96 0.04 74.32);
-    --red: var(--danger);
-    --red-tint: oklch(0.96 0.03 24.32);
-    --shadow-hairline: 0 0 0 1px var(--line);
-    --shadow-btn: 0 0 0 1px var(--line-strong), 0 1px 2px oklch(0.247 0.006 258.36 / 0.05);
-    --shadow-card: 0 0 0 1px var(--line), 0 1px 3px oklch(0.247 0.006 258.36 / 0.06);
-    --shadow-raised: 0 0 0 1px var(--line), 0 4px 12px oklch(0.247 0.006 258.36 / 0.08);
-    --shadow-overlay: 0 0 0 1px var(--line), 0 12px 32px oklch(0.247 0.006 258.36 / 0.1);
-  }
-
-  :root[data-theme="azure"].dark {
-    --ink-3: oklch(0.541 0.01 264.48);
-    --accent-ink: var(--accent);
-    --accent-tint: oklch(0.68 0.173 253.3 / 0.16);
-    --hover: oklch(0.293 0.006 271.22);
-    --hover-2: oklch(0.308 0.006 258.35);
-    --green: oklch(0.7243 0.1487 156.24);
-    --green-tint: oklch(0.42 0.07 156.24);
-    --orange: oklch(0.8021 0.1543 78.32);
-    --orange-tint: oklch(0.42 0.07 78.32);
-    --red-tint: oklch(0.42 0.07 22.18);
-  }
 
 @layer base {
   /*
@@ -627,13 +587,7 @@
   }
 }
 
-/* ChatLoader.Dots: three dots bounce up and down in turn. */
 @media (prefers-reduced-motion: reduce) {
-  :root[data-theme="azure"] .ama-shimmer,
-  :root[data-theme="azure"] [style*="pixel-on"],
-  :root[data-theme="azure"] [style*="shimmer-text"] {
-    animation: none !important;
-  }
   .ama-shimmer,
   .ama-dot {
     animation: none;

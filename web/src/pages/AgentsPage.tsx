@@ -62,7 +62,6 @@ import { SkillLibraryPicker } from "@/components/SkillLibraryPicker";
 import { UserAvatar } from "@/components/UserAvatar";
 import { useUserProfiles } from "@/lib/useUserProfiles";
 import { useAuth } from "@/app/AuthGate";
-import { AzureButton } from "@/components/azure/atoms/Button";
 
 const STATUS_COLOR: Record<AgentStatus, "default" | "success" | "warning"> = {
   active: "success",
@@ -339,7 +338,7 @@ export function ModelPicker({
 }
 
 export function AgentsPage() {
-  const { t, language, theme } = usePrefs();
+  const { t, language } = usePrefs();
   const { workspace } = useWorkspace();
   const wp = useWorkspacePath();
   const { user } = useAuth();
@@ -392,11 +391,7 @@ export function AgentsPage() {
         description={t("agent.listDesc")}
         actions={
           <Link to={wp("/agents/new")} className="no-underline">
-            {theme === "azure" ? (
-              <AzureButton variant="accent" data-testid="new-agent">{t("agent.new")}</AzureButton>
-            ) : (
-              <Button data-testid="new-agent">{t("agent.new")}</Button>
-            )}
+            <Button data-testid="new-agent">{t("agent.new")}</Button>
           </Link>
         }
       />

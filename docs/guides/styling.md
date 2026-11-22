@@ -14,14 +14,6 @@
 简墨就是原来的视觉样式，**它的 token 不要改来迁就另一套**。澄蓝只在
 `:root[data-theme="azure"]`（含 `.dark`）里覆盖 token 与局部圆角，采用更柔和的蓝色强调。
 主题写在 `<html data-theme>`，与浅深色的 `.dark` 是两个独立维度。
-「澄蓝」不仅覆盖 token：`web/src/components/azure/` 里还接入了复制源码的 React 组件
-（Button / Chip / SegmentedControl / StatusPill / LoadingState），它们在通用加载、
-空状态、错误重试、提示条、偏好分段控件与新建 Agent 按钮里真实渲染。
-`classic` 走原组件，`azure` 才渲染这套组件，不在同一个控件上混用两套实现。
-组件来源、修改点与 MIT 许可在该目录的 `README.md` 与 `LICENSE` 中，**不要把来源和许可删掉**。
-它使用自己的 `@theme inline` 色板映射（`components/azure/theme.css`），只给澄蓝主题提供
-实际值；不要引入付费图标包或把参考站点作为运行时依赖。
-
 
 用户选择存进 `user_preferences.theme` 独立列，前后端各自把未知值归回 `classic`；
 缺省与旧行都按简墨。`main.tsx` 在挂载前同时应用浅深色和主题，刷新不会先闪回简墨。

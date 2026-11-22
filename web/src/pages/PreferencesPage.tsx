@@ -77,9 +77,6 @@ import { IntegrationsTab } from "@/pages/IntegrationsTab";
 import { SuggestionsTab } from "@/pages/SuggestionsTab";
 import { usePrefs } from "@/prefs/PrefsContext";
 import type { Appearance, Language, Theme } from "@/prefs/storage";
-import { AzureSegmentedControl } from "@/components/azure/atoms/SegmentedControl";
-import { AzureChip } from "@/components/azure/atoms/Chip";
-import { AzureButton } from "@/components/azure/atoms/Button";
 
 const LANGUAGE_LABELS: Record<Language, string> = {
   "zh-CN": "简体中文",
@@ -170,16 +167,6 @@ function GeneralTab() {
     { id: "dark", label: t("prefs.appearanceDark"), icon: "gravity-ui:moon" },
     { id: "system", label: t("prefs.appearanceSystem"), icon: "gravity-ui:display" },
   ];
-  const azureAppearanceOptions = appearanceOptions.map((option) => ({
-    value: option.id,
-    label: (
-      <span className="inline-flex items-center gap-1.5">
-        <Icon icon={option.icon} className="size-3.5" />
-        {option.label}
-      </span>
-    ),
-    testId: `prefs-appearance-${option.id}`,
-  }));
 
   return (
     <Card>
@@ -213,15 +200,7 @@ function GeneralTab() {
           <SectionTitle title={t("prefs.appearance")} description={t("prefs.appearanceDesc")} />
           <div className="flex flex-wrap items-center gap-3">
             {/* A three-way mode uses a separated toggle group, lighter than a dropdown and shows all options at once */}
-            {theme === "azure" ? (
-              <AzureSegmentedControl
-                options={azureAppearanceOptions}
-                value={appearance}
-                onChange={setAppearance}
-                label={t("prefs.appearance")}
-              />
-            ) : (
-              <ToggleButtonGroup
+            <ToggleButtonGroup
               isDetached
               selectionMode="single"
               disallowEmptySelection
@@ -238,21 +217,11 @@ function GeneralTab() {
                   {opt.label}
                 </ToggleButton>
               ))}
-              </ToggleButtonGroup>
-            )}
+            </ToggleButtonGroup>
 
             {/* When following the system, say what it currently resolves to, otherwise users do not know which set is in effect */}
             {appearance === "system" ? (
-              theme === "azure" ? (
-                <AzureChip tone="accent">
-                  {t("prefs.appearanceSystemHint", {
-                    mode: resolvedAppearance === "dark"
-                      ? t("prefs.appearanceDark")
-                      : t("prefs.appearanceLight"),
-                  })}
-                </AzureChip>
-              ) : (
-                <Chip size="sm" variant="soft">
+              <Chip size="sm" variant="soft">
                 <Chip.Label>
                   {t("prefs.appearanceSystemHint", {
                     mode:
@@ -261,8 +230,7 @@ function GeneralTab() {
                         : t("prefs.appearanceLight"),
                   })}
                 </Chip.Label>
-                </Chip>
-              )
+              </Chip>
             ) : null}
           </div>
         </div>
@@ -314,17 +282,7 @@ function GeneralTab() {
         <div className="flex flex-col gap-4">
           <SectionTitle title={t("onboarding.replay")} description={t("onboarding.replayDesc")} />
           <div className="flex flex-wrap items-center gap-3">
-            {theme === "azure" ? (
-              <AzureButton
-                variant="accent"
-                onClick={() => onboarding?.restart()}
-                disabled={!onboarding}
-                data-testid="replay-onboarding"
-              >
-                {t("onboarding.replayAction")}
-              </AzureButton>
-            ) : (
-              <Button
+            <Button
               variant="outline"
               onPress={() => onboarding?.restart()}
               // Disable rather than hide when there is no context: if hidden, "where did this
@@ -336,8 +294,7 @@ function GeneralTab() {
               data-testid="replay-onboarding"
             >
               {t("onboarding.replayAction")}
-              </Button>
-            )}
+            </Button>
           </div>
         </div>
       </Card.Content>
